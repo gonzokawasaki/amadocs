@@ -1,0 +1,38 @@
+# --- Dependencies (restored via yarn/npm install) ---
+node_modules/
+**/node_modules/
+
+# --- Local AI models & runtime (huge; downloaded on first run) ---
+tooling/ollama-models/
+tooling/ollama/
+**/ollama-models/
+*.gguf
+*.bin
+*.onnx
+
+# --- Engine runtime state & user data ---
+anythingllm-upstream/server/storage/
+**/storage/
+**/vector-cache/
+*.db
+*.db.bak-*
+*.sqlite
+
+# --- Secrets / environment ---
+.env
+.env.*
+!.env.example
+secrets.json
+
+# --- Packaged binaries & build output ---
+amadocs-desktop/vendor/
+**/dist/
+**/out/
+*.AppImage
+*.dmg
+*.exe
+
+# --- Logs & temp ---
+tooling/logs/
+*.log
+.DS_Store
