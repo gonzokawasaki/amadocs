@@ -11,12 +11,14 @@ Think *"Obsidian, but it reads your files and you can talk to them"* — with no
 
 ---
 
-## Why it's different
+## What it is trying to do
 
-The space is crowded (AnythingLLM, GPT4All, Jan, Khoj). What's rare is the
+The space is crowded (AnythingLLM, GPT4All, Jan, Khoj). provide a local solution for AI document search and indexing.
 **grounded visual citation loop**: click a citation → jump to the actual page of the
-actual document and see the cited passage highlighted. And **zero configuration** — the
+actual document and see the cited passage highlighted. And hopefully essy configuration options — the
 user never sees the words "model," "embedder," or "vector database."
+
+Currently tsted on a Asus i5 with 16 GB ram and a GTX1650ti.
 
 ## Status
 
