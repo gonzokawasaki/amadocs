@@ -1,0 +1,2027 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>AMAdocs — Ask your documents anything</title>
+<style>
+  :root{
+    --bg:#f6f7fb; --panel:#ffffff; --ink:#1f2430; --muted:#6b7280;
+    --accent:#4f46e5; --accent-soft:#eef2ff; --border:#e6e8ef;
+    --user:#4f46e5; --ok:#16a34a; --shadow:0 1px 3px rgba(20,20,40,.06),0 8px 24px rgba(20,20,40,.06);
+    --radius:16px;
+  }
+  *{box-sizing:border-box}
+  html,body{height:100%}
+  body{
+    margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,Helvetica,Arial,sans-serif;
+    background:var(--bg);color:var(--ink);-webkit-font-smoothing:antialiased;
+  }
+  button{font-family:inherit;cursor:pointer}
+  /* ---------- App shell ---------- */
+  #app{display:flex;height:100vh;overflow:hidden}
+  /* Sidebar */
+  #sidebar{
+    width:300px;min-width:0;flex:none;background:var(--panel);border-right:1px solid var(--border);
+    display:flex;flex-direction:column;padding:18px 16px;gap:14px;
+  }
+  .brand{display:flex;align-items:center;gap:10px;padding:4px 6px}
+  .brand .mark{
+    width:34px;height:34px;border-radius:10px;background:linear-gradient(135deg,#6366f1,#22d3ee);
+    display:grid;place-items:center;color:#fff;font-weight:800;font-size:16px;letter-spacing:-.5px;
+  }
+  .brand .name{font-weight:800;font-size:18px;letter-spacing:-.3px}
+  .brand .name span{color:var(--accent)}
+  .addbtn{
+    display:flex;align-items:center;justify-content:center;gap:8px;width:100%;
+    padding:11px 14px;border:1px solid var(--border);background:var(--accent);color:#fff;
+    border-radius:12px;font-weight:600;font-size:14px;transition:.15s;
+  }
+  .addbtn:hover{filter:brightness(1.05)}
+  .syncbtn{
+    display:flex;align-items:center;justify-content:center;gap:8px;width:100%;margin-top:-6px;
+    padding:9px 14px;border:1px solid var(--border);background:var(--panel);color:var(--ink);
+    border-radius:12px;font-weight:600;font-size:13px;transition:.15s;
+  }
+  .syncbtn.hidden{display:none}
+  .syncbtn:hover{background:var(--accent-soft);border-color:var(--accent)}
+  /* ---------- sync-a-folder modal (reuses #dlModal card styling) ---------- */
+  #syncModal{position:fixed;inset:0;background:rgba(20,20,40,.45);backdrop-filter:blur(2px);z-index:140;display:flex;align-items:center;justify-content:center;padding:24px}
+  #syncModal.hidden{display:none!important}
+  .sync-folder{font-size:13px;color:var(--muted);margin:0 0 14px;word-break:break-all}
+  .sync-folder b{color:var(--ink)}
+  .sync-row{display:flex;flex-direction:column;gap:6px;margin-bottom:14px}
+  .sync-row label{font-size:12px;font-weight:700;color:var(--muted);text-transform:uppercase;letter-spacing:.4px}
+  .sync-row select,.sync-row input[type=text]{border:1px solid var(--border);border-radius:10px;padding:9px 11px;font-size:14px;background:#fff;color:var(--ink)}
+  .sync-banner{background:#fafbff;border:1px solid var(--border);border-radius:12px;padding:13px 15px;font-size:13.5px;line-height:1.5;margin-bottom:14px}
+  .sync-banner .warn{color:#92600c}
+  .sync-opt{display:flex;align-items:flex-start;gap:9px;font-size:12.5px;line-height:1.45;color:var(--muted);margin-bottom:8px}
+  .sync-opt input{margin-top:2px;flex:none;width:15px;height:15px;accent-color:var(--accent)}
+  .sync-go{width:100%;border:none;background:var(--accent);color:#fff;border-radius:12px;padding:13px;font-weight:700;font-size:15px}
+  .sync-go:hover{filter:brightness(1.05)}
+  .sync-go:disabled{opacity:.55;cursor:default;filter:none}
+  .doc-head{font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:.6px;color:var(--muted);padding:0 6px;display:flex;align-items:center;justify-content:space-between;gap:8px}
+  .clearbtn{border:none;background:transparent;color:var(--muted);font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.4px;padding:2px 4px;border-radius:6px}
+  .clearbtn:hover{color:#b91c1c;background:#fee2e2}
+  .libnote{font-size:11.5px;line-height:1.45;color:var(--muted);background:#fafbff;border:1px solid var(--border);border-radius:9px;padding:8px 10px;margin:0 2px}
+  #docList{list-style:none;margin:0;padding:0;overflow:auto;display:flex;flex-direction:column;gap:6px;flex:1}
+  .doc{
+    display:flex;align-items:center;gap:10px;padding:9px 10px;border-radius:10px;background:#fafbff;
+    border:1px solid var(--border);font-size:13px;
+  }
+  .doc .ic{width:26px;height:26px;border-radius:7px;background:var(--accent-soft);display:grid;place-items:center;font-size:14px;flex:none}
+  .doc .nm{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+  .doc .del{margin-left:auto;border:none;background:transparent;color:var(--muted);width:24px;height:24px;border-radius:6px;font-size:13px;display:grid;place-items:center;opacity:0;flex:none;transition:.12s}
+  .doc:hover .del{opacity:.65}
+  .doc .del:hover{opacity:1;background:#fee2e2;color:#b91c1c}
+  /* AMAdocs: "Deep search" pill on cataloged (summary-only) docs */
+  .doc .deep{margin-left:auto;border:1px solid var(--border);background:#fff;color:var(--accent);height:22px;padding:0 9px;border-radius:999px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:4px;flex:none;opacity:0;transition:.12s;white-space:nowrap}
+  .doc.cataloged:hover .deep{opacity:1}
+  .doc .deep:hover{background:var(--accent-soft);border-color:#a5b4fc}
+  .doc.cataloged .del{margin-left:6px}
+  .doc{cursor:pointer;transition:.12s}
+  .doc:hover{background:#eef2ff;border-color:#c7d2fe}
+  .doc.active{background:var(--accent-soft);border-color:#a5b4fc}
+  .doc.processing{opacity:.7;cursor:default}
+  .doc .spin{margin-left:auto;width:14px;height:14px;border:2px solid var(--border);border-top-color:var(--accent);border-radius:50%;animation:sp .7s linear infinite}
+  @keyframes sp{to{transform:rotate(360deg)}}
+  .foot{font-size:11px;color:var(--muted);text-align:center;padding-top:6px;border-top:1px solid var(--border)}
+  .foot b{color:var(--ok)}
+  /* Main */
+  #main{flex:1;display:flex;flex-direction:column;position:relative;min-width:0}
+  /* Empty/hero state */
+  #hero{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;text-align:center;padding:40px}
+  #hero h1{font-size:30px;margin:0 0 8px;letter-spacing:-.5px}
+  #hero p{color:var(--muted);font-size:16px;margin:0 0 28px}
+  .dropzone{
+    width:min(560px,90%);background:var(--panel);border:2.5px dashed #cdd3e6;border-radius:24px;
+    padding:48px 32px;transition:.18s;box-shadow:var(--shadow);
+  }
+  .dropzone .big{font-size:46px;margin-bottom:10px}
+  .dropzone h2{margin:0 0 6px;font-size:20px}
+  .dropzone .sub{color:var(--muted);font-size:14px;margin-bottom:20px}
+  .browse{padding:12px 22px;border:none;background:var(--accent);color:#fff;border-radius:12px;font-weight:600;font-size:15px}
+  .hint{margin-top:22px;color:var(--muted);font-size:13px}
+  /* Chat */
+  #chat{flex:1;display:flex;flex-direction:column;min-height:0}
+  #topbar{padding:16px 24px;border-bottom:1px solid var(--border);background:var(--panel);font-weight:700;display:flex;align-items:center;gap:12px}
+  #topbar .tb-title{flex:1;min-width:0}
+  #topbar small{display:block;font-weight:500;color:var(--muted);font-size:12px;margin-top:2px}
+  /* ---------- AI model picker (swap which local model answers) ---------- */
+  .modelbtn{display:flex;align-items:center;gap:7px;border:1px solid var(--border);background:#fafbff;color:var(--ink);
+    font-weight:600;font-size:13px;padding:7px 12px;border-radius:999px;flex:none;white-space:nowrap;transition:.12s}
+  .modelbtn:hover{background:var(--accent-soft);border-color:#c7d2fe}
+  .modelbtn .nm{color:var(--accent)}
+  .modelbtn .caret{color:var(--muted);font-size:11px}
+  .modelmenu{min-width:288px;max-width:344px}
+  .modelmenu .mm-head{font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.5px;color:var(--muted);padding:6px 10px 4px}
+  .mm-item{display:flex;align-items:flex-start;gap:9px;width:100%;border:none;background:transparent;padding:9px 10px;border-radius:8px;text-align:left}
+  .mm-item:hover{background:var(--accent-soft)}
+  .mm-item .mm-ic{font-size:15px;line-height:1.35;flex:none}
+  .mm-item .mm-tx{flex:1;min-width:0}
+  .mm-item .mm-nm{font-size:13px;font-weight:600;color:var(--ink)}
+  .mm-item .mm-ds{font-size:11.5px;color:var(--muted);margin-top:1px;line-height:1.4}
+  .mm-item .mm-ck{color:var(--ok);font-weight:800;flex:none;opacity:0;font-size:13px}
+  .mm-item.cur .mm-ck{opacity:1}
+  .mm-item.cur .mm-nm{color:var(--accent)}
+  .modelmenu .mm-foot{font-size:11px;color:var(--muted);padding:8px 10px 4px;border-top:1px solid var(--border);margin-top:4px;line-height:1.45}
+  /* ---------- download-a-model modal ---------- */
+  #dlModal{position:fixed;inset:0;background:rgba(20,20,40,.45);backdrop-filter:blur(2px);z-index:130;display:flex;align-items:center;justify-content:center;padding:24px}
+  #dlModal.hidden{display:none!important}
+  .dlcard{background:var(--panel);border-radius:18px;box-shadow:var(--shadow);width:min(520px,100%);max-height:86vh;display:flex;flex-direction:column;overflow:hidden}
+  .dlhead{padding:18px 22px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px}
+  .dlhead h3{margin:0;font-size:17px;flex:1}
+  .dlhead .x{border:none;background:transparent;font-size:17px;color:var(--muted);width:30px;height:30px;border-radius:8px;flex:none}
+  .dlhead .x:hover{background:var(--accent-soft);color:var(--ink)}
+  .dlbody{padding:14px 18px;overflow:auto;display:flex;flex-direction:column;gap:10px}
+  .dlrow{border:1px solid var(--border);border-radius:12px;padding:12px 14px;background:#fafbff}
+  .dlrow .top{display:flex;align-items:center;gap:10px}
+  .dlrow .nm{font-weight:700;font-size:14px}
+  .dlrow .meta{font-size:11.5px;color:var(--muted);margin-top:2px}
+  .dlrow .desc{font-size:12.5px;color:var(--muted);margin-top:6px;line-height:1.45}
+  .dlbtn{margin-left:auto;flex:none;border:1px solid var(--border);background:var(--accent);color:#fff;border-radius:10px;padding:7px 14px;font-weight:600;font-size:13px;white-space:nowrap}
+  .dlbtn:hover{filter:brightness(1.05)}
+  .dlbtn:disabled{opacity:.55;cursor:default;filter:none}
+  .installed{margin-left:auto;flex:none;font-size:12px;color:var(--ok);font-weight:700}
+  .prog{margin-top:11px;display:none}
+  .prog.show{display:block}
+  .bar{height:8px;background:var(--border);border-radius:999px;overflow:hidden}
+  .bar > i{display:block;height:100%;width:0;background:linear-gradient(90deg,#6366f1,#22d3ee);transition:width .3s}
+  .prog .lbl{font-size:11.5px;color:var(--muted);margin-top:6px}
+  .dlfoot{padding:12px 18px 16px;border-top:1px solid var(--border);font-size:11.5px;color:var(--muted);line-height:1.5}
+  /* ---------- First-run setup overlay (proactive "downloading your AI") ---------- */
+  #firstRun{position:fixed;inset:0;background:var(--bg);z-index:200;display:flex;align-items:center;justify-content:center;padding:24px}
+  #firstRun.hidden{display:none!important}
+  .fr-card{width:min(560px,100%);background:var(--panel);border:1px solid var(--border);border-radius:var(--radius);box-shadow:var(--shadow);padding:40px 38px;text-align:center}
+  .fr-mark{width:64px;height:64px;border-radius:18px;background:linear-gradient(135deg,#6366f1,#22d3ee);display:grid;place-items:center;font-size:32px;margin:0 auto 20px}
+  .fr-card h2{margin:0 0 10px;font-size:24px}
+  .fr-sub{color:var(--muted);font-size:15px;line-height:1.55;margin:0 0 26px}
+  .fr-opt{display:flex;align-items:flex-start;gap:10px;text-align:left;background:#fafbff;border:1px solid var(--border);border-radius:12px;padding:12px 14px;margin:0 0 20px;font-size:13.5px;line-height:1.45}
+  .fr-opt input{margin-top:2px;flex:none;width:16px;height:16px;accent-color:var(--accent)}
+  .fr-opt .fr-opt-ds{color:var(--muted);font-size:12px;margin-top:2px}
+  .fr-go{width:100%;border:none;background:var(--accent);color:#fff;border-radius:12px;padding:14px;font-weight:700;font-size:16px}
+  .fr-go:hover{filter:brightness(1.05)}
+  .fr-go:disabled{opacity:.6;cursor:default;filter:none}
+  .fr-skip{margin-top:16px;color:var(--muted);font-size:13px;background:none;border:none;text-decoration:underline}
+  .fr-prog{margin-top:24px;display:none}
+  .fr-prog.show{display:block}
+  .fr-prog .lbl{font-size:12.5px;color:var(--muted);margin-top:8px}
+  .fr-err{color:#b91c1c;font-size:13px;margin-top:14px;display:none}
+  .fr-err.show{display:block}
+  .fr-foot{margin-top:24px;font-size:12px;color:var(--muted);line-height:1.5}
+  #messages{flex:1;overflow:auto;padding:26px 0;display:flex;flex-direction:column;gap:20px}
+  .row{width:min(760px,92%);margin:0 auto;display:flex;gap:12px}
+  .row.user{flex-direction:row-reverse}
+  .av{width:30px;height:30px;border-radius:9px;flex:none;display:grid;place-items:center;font-size:11px;font-weight:700;letter-spacing:.5px;color:#fff}
+  .av.ai{background:linear-gradient(135deg,#6366f1,#22d3ee)}
+  .av.me{background:#1f2430}
+  .bub{padding:12px 16px;border-radius:14px;font-size:15px;line-height:1.55;max-width:100%}
+  .user .bub{background:var(--user);color:#fff;border-bottom-right-radius:4px}
+  .ai .bub{background:var(--panel);border:1px solid var(--border);border-bottom-left-radius:4px;box-shadow:var(--shadow)}
+  .ai .bub p{margin:0 0 8px}.ai .bub p:last-child{margin:0}
+  .ai .bub strong{font-weight:700}
+  .sources{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+  .src{font-size:12px;background:var(--accent-soft);color:var(--accent);padding:4px 9px;border-radius:999px;font-weight:600;display:flex;gap:5px;align-items:center}
+  .typing{display:inline-flex;gap:4px;align-items:center}
+  .typing i{width:7px;height:7px;border-radius:50%;background:var(--muted);animation:bl 1.2s infinite}
+  .typing i:nth-child(2){animation-delay:.2s}.typing i:nth-child(3){animation-delay:.4s}
+  @keyframes bl{0%,60%,100%{opacity:.25}30%{opacity:1}}
+  .warm{font-size:13px;color:var(--muted)}
+  /* Input bar */
+  #inputbar{padding:14px 0 22px;background:linear-gradient(180deg,transparent,var(--bg) 30%)}
+  .inwrap{width:min(760px,92%);margin:0 auto;display:flex;gap:10px;background:var(--panel);border:1px solid var(--border);border-radius:16px;padding:8px 8px 8px 16px;box-shadow:var(--shadow)}
+  #q{flex:1;border:none;outline:none;font-size:15px;resize:none;background:transparent;color:var(--ink);max-height:140px;padding:8px 0}
+  #send{border:none;background:var(--accent);color:#fff;border-radius:12px;width:44px;height:44px;font-size:18px;flex:none;display:grid;place-items:center}
+  #send:disabled{opacity:.4;cursor:default}
+  #send.stop{background:#dc2626}
+  #send.stop:hover{background:#b91c1c}
+  .stopnote{margin-top:8px;font-size:12px;color:var(--muted);font-style:italic}
+  .modelmiss{font-size:13.5px;line-height:1.55}
+  .modelmiss .dlbtn{display:inline-block;margin:12px 0 0;cursor:pointer}
+  /* Drag overlay */
+  #overlay{position:absolute;inset:0;background:rgba(79,70,229,.10);backdrop-filter:blur(2px);border:3px dashed var(--accent);
+    display:none;align-items:center;justify-content:center;z-index:20;border-radius:0}
+  #overlay.show{display:flex}
+  #overlay .card{background:#fff;padding:26px 38px;border-radius:18px;font-size:18px;font-weight:700;box-shadow:var(--shadow)}
+  /* Split: document viewer + chat side by side */
+  #split{flex:1;display:flex;min-height:0}
+  #viewer{flex:1.05;display:flex;flex-direction:column;min-width:0;border-right:1px solid var(--border);background:var(--panel)}
+  .vhead{display:flex;align-items:center;gap:10px;padding:12px 16px;border-bottom:1px solid var(--border);background:#fafbff}
+  .vtitle{font-weight:700;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1}
+  .vtag{font-size:11px;color:var(--muted);font-weight:600;background:var(--accent-soft);color:var(--accent);padding:3px 8px;border-radius:999px;flex:none}
+  .vclose{border:none;background:transparent;color:var(--muted);font-size:16px;width:28px;height:28px;border-radius:8px;flex:none}
+  .vclose:hover{background:#eef2ff;color:var(--ink)}
+  .vbody{flex:1;overflow:auto;padding:26px 30px;font-size:14.5px;line-height:1.7;color:#2b3240}
+  .vbody h1,.vbody h2,.vbody h3{line-height:1.3;margin:18px 0 8px}
+  .vbody h1{font-size:21px}.vbody h2{font-size:18px}.vbody h3{font-size:16px}
+  .vbody p{margin:0 0 12px;white-space:pre-wrap;word-wrap:break-word}
+  .vbody .vnote{font-size:12px;color:var(--muted);background:#f6f7fb;border:1px solid var(--border);border-radius:8px;padding:8px 12px;margin-bottom:18px}
+  /* ---------- pretty viewer: original document rendering ---------- */
+  .vtoggle{border:1px solid var(--border);background:#fff;color:var(--accent);font-size:11px;font-weight:600;padding:4px 10px;border-radius:999px;flex:none;white-space:nowrap}
+  .vtoggle:hover{background:var(--accent-soft)}
+  .vimg{max-width:100%;height:auto;display:block;margin:0 auto;border:1px solid var(--border);border-radius:8px}
+  /* AMAdocs: caption/OCR panel shown beneath a photo in the image viewer */
+  .vmeta{margin:18px auto 0;max-width:720px;display:flex;flex-direction:column;gap:12px}
+  .vmeta section{background:#f6f7fb;border:1px solid var(--border);border-radius:8px;padding:10px 14px}
+  .vmeta h4{margin:0 0 5px;font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--muted)}
+  .vmeta p{margin:0;font-size:13px;line-height:1.5;white-space:pre-wrap;color:var(--ink)}
+  .vpdf{display:flex;flex-direction:column;align-items:center;gap:14px}
+  .vpage{max-width:100%;box-shadow:var(--shadow);border:1px solid var(--border);border-radius:4px;background:#fff}
+  .vdoc{font-size:14.5px;line-height:1.7;color:#2b3240}
+  .vdoc img{max-width:100%;height:auto}
+  .vdoc h1,.vdoc h2,.vdoc h3{line-height:1.3;margin:16px 0 8px}
+  .vdoc table{border-collapse:collapse;margin:10px 0}
+  .vdoc td,.vdoc th{border:1px solid var(--border);padding:4px 8px}
+  .vsheet{overflow:auto;font-size:13px}
+  .vsheet table{border-collapse:collapse;margin-bottom:18px}
+  .vsheet td,.vsheet th{border:1px solid var(--border);padding:4px 8px;white-space:nowrap}
+  .vsheet-name{font-weight:700;margin:14px 0 6px;color:var(--accent)}
+  #chat{flex:1}
+  .hidden{display:none!important}
+  /* connection banner */
+  #conn{position:fixed;top:0;left:0;right:0;background:#b91c1c;color:#fff;font-size:13px;text-align:center;padding:8px;z-index:50;display:none}
+  /* ---------- draggable resize gutters ---------- */
+  .gutter{flex:none;width:7px;cursor:col-resize;background:transparent;position:relative;z-index:6;touch-action:none}
+  .gutter::after{content:"";position:absolute;left:50%;top:0;bottom:0;width:1px;background:var(--border);transform:translateX(-50%);transition:.12s}
+  .gutter:hover::after,.gutter.active::after{background:var(--accent);width:2px}
+  .gutter.gutter-split{margin-left:-1px}
+  /* ---------- right-click document menu ---------- */
+  .ctxmenu{position:fixed;z-index:100;background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:var(--shadow);padding:6px;min-width:210px}
+  .ctxmenu button{display:flex;align-items:center;gap:9px;width:100%;border:none;background:transparent;padding:9px 10px;border-radius:7px;font-size:13px;color:var(--ink);text-align:left}
+  .ctxmenu button:hover{background:var(--accent-soft);color:var(--accent)}
+  .ctxmenu button.danger:hover{background:#fee2e2;color:#b91c1c}
+  .ctxmenu button.done{color:var(--muted);cursor:default}
+  .ctxmenu button.done:hover{background:transparent;color:var(--muted)}
+  /* ---------- citation links + clickable source chips ---------- */
+  .src{cursor:pointer}
+  .src:hover{text-decoration:underline}
+  .src .pg{margin-left:5px;background:var(--accent);color:#fff;border-radius:999px;padding:1px 7px;font-size:11px;font-weight:700}
+  /* page briefly highlighted when a citation jumps to it */
+  @keyframes pageflash{0%{box-shadow:0 0 0 3px var(--accent),var(--shadow)}100%{box-shadow:0 0 0 0 rgba(79,70,229,0),var(--shadow)}}
+  .vpage.flash{animation:pageflash 1.8s ease-out}
+  /* PDF text layer (used to highlight the exact cited passage over the canvas) */
+  .vpage-wrap{position:relative;line-height:0}
+  .textLayer{position:absolute;left:0;top:0;overflow:hidden;line-height:1;opacity:1;z-index:2;pointer-events:none}
+  .textLayer span{position:absolute;white-space:pre;transform-origin:0% 0%;color:transparent}
+  .textLayer span.hl{background:rgba(255,213,0,.42);box-shadow:0 0 0 1px rgba(214,158,0,.5);border-radius:2px}
+  .srcline{margin-top:9px;font-size:12.5px;color:var(--muted);line-height:1.5}
+  .srcline a{color:var(--accent);font-weight:600;text-decoration:none;border-bottom:1px dotted var(--accent);cursor:pointer}
+  .srcline a:hover{border-bottom-style:solid}
+  /* ---------- toast ---------- */
+  #toast{position:fixed;bottom:22px;left:50%;transform:translateX(-50%) translateY(18px);background:#1f2430;color:#fff;
+    padding:11px 18px;border-radius:12px;font-size:13px;box-shadow:var(--shadow);opacity:0;pointer-events:none;
+    transition:.22s;z-index:120;max-width:440px;text-align:center}
+  #toast.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  /* ---------- in-chat status bubble (indexing progress + other app status) ----------
+     A distinct, centered message in the conversation flow — the app's single,
+     direct place to speak up: "reading your documents", ✓ done, ⚠ error. */
+  .row.sys{justify-content:center}
+  .sysbub{display:inline-flex;align-items:center;gap:9px;max-width:92%;
+    background:var(--accent-soft);border:1px solid #dbe1f6;color:var(--ink);
+    font-size:13px;font-weight:500;padding:8px 15px;border-radius:999px;transition:opacity .4s}
+  .sysbub.gone{opacity:0}
+  .sysbub .dial{width:16px;height:16px;flex:none;border-radius:50%;
+    background:conic-gradient(var(--accent) 0 25%,rgba(79,70,229,.16) 0 100%);
+    -webkit-mask:radial-gradient(closest-side,transparent 58%,#000 60%);
+            mask:radial-gradient(closest-side,transparent 58%,#000 60%);
+    animation:sp .8s linear infinite}
+  .sysbub .sysic{font-size:14px;flex:none}
+  .sysbub .systx{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .sysbub .systime{font-variant-numeric:tabular-nums;font-weight:700;color:var(--accent);opacity:.85;flex:none}
+  .sysbub.ok{background:#f0fdf4;border-color:#bbf7d0;color:#166534}
+  .sysbub.ok .systime{color:#166534}
+  .sysbub.err{background:#fef2f2;border-color:#fecaca;color:#b91c1c}
+  .sysbub .sysstop{flex:none;border:none;background:#dc2626;color:#fff;font-size:11.5px;font-weight:700;
+    padding:3px 10px;border-radius:999px;margin-left:2px}
+  .sysbub .sysstop:hover{background:#b91c1c}
+  .sysbub .syscont{flex:none;border:1px solid var(--accent);background:transparent;color:var(--accent);
+    font-size:11.5px;font-weight:700;padding:3px 10px;border-radius:999px;margin-left:2px}
+  .sysbub .syscont:hover{background:var(--accent-soft)}
+  /* elapsed-time chip beside the "thinking / warming up" note in a streaming answer */
+  .warm-t{font-variant-numeric:tabular-nums;font-weight:700;color:var(--accent);margin-left:6px}
+</style>
+</head>
+<body>
+<div id="conn">⚠️ Can’t reach the AMAdocs engine. Make sure it’s running, then refresh.</div>
+<div id="app">
+  <!-- Sidebar -->
+  <aside id="sidebar">
+    <div class="brand"><div class="mark">A</div><div class="name">AMA<span>docs</span></div></div>
+    <button class="addbtn" id="addBtn">＋ Add documents</button>
+    <button class="syncbtn hidden" id="syncBtn" title="Index a whole folder on your computer by reading what your system has already catalogued">📂 Sync a folder</button>
+    <div class="doc-head"><span>Library</span><button class="clearbtn hidden" id="clearBtn" title="Remove all documents from your Library">Clear all</button></div>
+    <div class="libnote">📁 Your <b>Library</b> is AMAdocs’ own private copy of each file. Your original files stay where they are — nothing is moved or changed. <a href="#" id="showStorage">Show these files on your computer →</a></div>
+    <ul id="docList"></ul>
+    <div class="foot">🔒 Everything stays on <b>this computer</b></div>
+  </aside>
+
+  <!-- Drag to resize the sidebar -->
+  <div class="gutter" id="gutterSide" title="Drag to resize"></div>
+
+  <!-- Main -->
+  <section id="main">
+    <div id="overlay"><div class="card">📂 Drop to add to AMAdocs</div></div>
+
+    <!-- Hero / empty state -->
+    <div id="hero">
+      <h1>Ask your documents anything</h1>
+      <p>Drop in your files and chat with them — completely private, all on your computer.</p>
+      <div class="dropzone" id="dropzone">
+        <div class="big">📥</div>
+        <h2>Drop your documents here</h2>
+        <div class="sub">PDF, Word, Excel, PowerPoint, text, images & more</div>
+        <button class="browse" id="browseBtn">Choose files</button>
+        <div class="hint">or drag them anywhere on this window<br>AMAdocs keeps a private copy — your original files aren’t moved or changed</div>
+      </div>
+    </div>
+
+    <!-- Chat + optional document viewer (Obsidian-style split) -->
+    <div id="split" class="hidden">
+    <div id="viewer" class="hidden">
+      <div class="vhead">
+        <span class="vtitle" id="vtitle">Document</span>
+        <button class="vtoggle hidden" id="vtoggle" title="Switch between the original document and the text the AI reads"></button>
+        <button class="vtoggle hidden" id="vexport" title="Export this photo together with its AI description, text and EXIF info">⬇️ Export with info</button>
+        <button class="vclose" id="vclose" title="Close document">✕</button>
+      </div>
+      <div class="vbody" id="vbody"></div>
+    </div>
+    <!-- Drag to resize the reading pane vs. chat -->
+    <div class="gutter gutter-split hidden" id="gutterSplit" title="Drag to resize"></div>
+    <div id="chat">
+      <div id="topbar">
+        <div class="tb-title">Chat with your documents<small id="topsub"></small></div>
+        <button id="modelBtn" class="modelbtn hidden" title="Choose which local AI model answers your questions">🧠 <span class="nm" id="modelName">AI model</span> <span class="caret">▾</span></button>
+      </div>
+      <div id="messages"></div>
+      <div id="inputbar">
+        <div class="inwrap">
+          <textarea id="q" rows="1" placeholder="Ask anything about your documents…"></textarea>
+          <button id="send">➤</button>
+        </div>
+      </div>
+    </div>
+    </div><!-- /#split -->
+  </section>
+</div>
+
+<input type="file" id="fileInput" multiple class="hidden"
+  accept=".pdf,.docx,.pptx,.odt,.odp,.xlsx,.csv,.txt,.md,.html,.json,.epub,.mbox,.png,.jpg,.jpeg,.webp" />
+
+<!-- Bundled locally for offline use: PDF.js, mammoth (docx), SheetJS (xlsx) -->
+<script src="vendor/pdf.min.js"></script>
+<script src="vendor/mammoth.browser.min.js"></script>
+<script src="vendor/xlsx.full.min.js"></script>
+<script>
+  if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
+</script>
+<script>
+const API = "http://localhost:3001/api";
+
+// AMAdocs: API auth. The packaged app hands the renderer a per-boot secret via
+// the preload bridge (window.amadocs.apiToken); we attach it to every engine
+// call so the open-localhost port rejects any other page or app. Empty in the
+// browser dev stack (no preload) — there the engine gate is off too, so a bare
+// request still works. The shim only touches ${API} URLs; everything else (PDF
+// worker, vendor libs) passes through untouched.
+const API_TOKEN = (window.amadocs && window.amadocs.apiToken) || "";
+if (API_TOKEN) {
+  const _fetch = window.fetch.bind(window);
+  window.fetch = (url, opts = {}) => {
+    if (typeof url === "string" && url.startsWith(API)) {
+      opts = { ...opts, headers: { ...(opts.headers || {}), Authorization: `Bearer ${API_TOKEN}` } };
+    }
+    return _fetch(url, opts);
+  };
+}
+// Append the token to an engine URL used by a plain navigation (download anchor)
+// that can't carry an Authorization header. No-op without a token.
+function apiUrl(u) {
+  return API_TOKEN ? u + (u.includes("?") ? "&" : "?") + "token=" + encodeURIComponent(API_TOKEN) : u;
+}
+// AMAdocs: the active collection (workspace). Mutable so "Sync a folder" can
+// switch the app to the collection it just filled, making synced docs visible
+// and chattable immediately. Defaults to "My Documents" (created on first run).
+// AMAdocs (DEMO 2026-06-17, REVERT BEFORE SHIP): pointed at the "teaching" collection
+// (100 IGCSE docs) so the browser dev stack demos Granite-4 grounded answers out of the
+// box (the browser has no collection switcher). Restore to "My Documents"/"my-documents".
+let WS_NAME = "teaching";
+let WS_SLUG = "teaching";
+// AMAdocs: a fresh chat session per app launch. Held in memory (NOT localStorage)
+// so a relaunch always starts a new session — the engine scopes chat history to
+// this id, so earlier sittings never leak into a new one.
+const SESSION_ID = (crypto?.randomUUID?.() || `s-${Date.now()}-${Math.random().toString(36).slice(2)}`);
+let busy = false;
+let firstQuery = true;
+// AMAdocs: maps a citation's display name -> its docpath, and caches doc-view
+// (extracted text + per-page char ranges) so a citation can jump to its page.
+let docpathByName = {};
+let docModeByPath = {};   // AMAdocs: docpath -> "summary" (cataloged) | "deep" (full-text searchable)
+let docViewCache = {};
+
+const $ = s => document.querySelector(s);
+const heroEl=$("#hero"), chatEl=$("#chat"), splitEl=$("#split"), docListEl=$("#docList"),
+      messagesEl=$("#messages"), qEl=$("#q"), sendEl=$("#send"),
+      fileInput=$("#fileInput"), overlay=$("#overlay"), connEl=$("#conn"),
+      topsub=$("#topsub"), viewerEl=$("#viewer"), vbodyEl=$("#vbody"), vtitleEl=$("#vtitle");
+
+/* ---------- engine bootstrap ---------- */
+async function ensureWorkspace(){
+  try{
+    const r = await fetch(`${API}/workspaces`);
+    if(!r.ok) throw 0;
+    const {workspaces=[]} = await r.json();
+    let ws = workspaces.find(w=>w.slug===WS_SLUG);
+    if(!ws){
+      const c = await fetch(`${API}/workspace/new`,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({name:WS_NAME})});
+      ws = (await c.json()).workspace;
+    }
+    // force docs-only answering (no hallucination) — invisible to the user
+    await fetch(`${API}/workspace/${WS_SLUG}/update`,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({chatMode:"query"})});
+    connEl.style.display="none";
+    return ws;
+  }catch(e){ connEl.style.display="block"; return null; }
+}
+
+function iconFor(name){
+  const e=(name.split('.').pop()||'').toLowerCase();
+  if(['pdf'].includes(e))return'📄';
+  if(['doc','docx','odt'].includes(e))return'📝';
+  if(['xls','xlsx','csv'].includes(e))return'📊';
+  if(['ppt','pptx','odp'].includes(e))return'📑';
+  if(['png','jpg','jpeg','webp'].includes(e))return'🖼️';
+  return'📄';
+}
+
+async function loadDocuments(){
+  try{
+    const r = await fetch(`${API}/workspace/${WS_SLUG}`);
+    const data = await r.json();
+    const ws = data.workspace || (data.workspaces&&data.workspaces[0]) || data;
+    const docs = (ws && ws.documents) || [];
+    docListEl.innerHTML="";
+    docpathByName={}; docModeByPath={}; docViewCache={};
+    docs.forEach(d=>{
+      let title=d.filename||"Document";
+      // AMAdocs: search mode — "summary" = cataloged (gist only), "deep" = full-text.
+      // Documents added before the librarian reframe have no flag and were fully
+      // embedded, so they default to "deep".
+      let mode="deep";
+      try{const m=JSON.parse(d.metadata||"{}");title=m.title||title;mode=m.amadocsSearchMode||"deep";}catch(_){}
+      // key by both the display title and the raw filename so a citation
+      // (which may use either) can resolve back to this document's docpath.
+      if(d.docpath){ docpathByName[title]=d.docpath; if(d.filename) docpathByName[d.filename]=d.docpath; docModeByPath[d.docpath]=mode; }
+      addDocRow(title,false,d.docpath,mode);
+    });
+    updateState(docs.length);
+    topsub.textContent = docs.length===1?"1 document loaded":`${docs.length} documents loaded`;
+  }catch(e){ updateState(0); }
+}
+
+/* ---------- citation -> page mapping (the "jump to the cited page" loop) ----------
+   A chat source carries the exact chunk text that was retrieved. We locate that
+   chunk inside the document's extracted text, then map its character offset onto
+   the per-page ranges (`pages`) the collector recorded for PDFs. No re-embedding
+   needed — everything is derivable from data the engine already returns. */
+function sourceName(s){
+  try{ return s.title || JSON.parse(s.metadata||"{}").title || s.filename || null; }
+  catch(_){ return s.title || s.filename || null; }
+}
+function docpathFor(name,s){
+  if(s && s.docpath) return s.docpath;
+  return (name && docpathByName[name]) || null;
+}
+// Fetch (and cache) a document's extracted text + page ranges.
+async function getDocView(docpath){
+  if(docpath in docViewCache) return docViewCache[docpath];
+  try{
+    const r=await fetch(`${API}/workspace/${WS_SLUG}/doc-view?path=${encodeURIComponent(docpath)}`);
+    if(!r.ok) throw 0;
+    const d=await r.json();
+    docViewCache[docpath]={pageContent:d.pageContent||"",pages:Array.isArray(d.pages)?d.pages:[]};
+  }catch(_){ docViewCache[docpath]=null; }
+  return docViewCache[docpath];
+}
+// The collector prepends a <document_metadata> header to each embedded chunk;
+// strip it so what remains is verbatim text from the document body.
+function stripChunkHeader(t){
+  return String(t||"").replace(/^\s*<document_metadata>[\s\S]*?<\/document_metadata>\s*/i,"");
+}
+// Find which page a chunk fell on. We match a verbatim slice of the chunk body
+// against the joined page content, whose offsets line up 1:1 with `pages`.
+// Documents like exam papers repeat header/instruction blocks across pages, so
+// indexOf alone can land on the wrong (earlier) page; we therefore prefer a
+// slice that occurs exactly once, and only fall back to the first hit otherwise.
+function matchPage(chunkText,pageContent,pages){
+  const body=stripChunkHeader(chunkText).trim();
+  if(!body||!pageContent||!pages||!pages.length) return null;
+  const pageAt=idx=>{ const h=pages.find(p=>idx>=p.start&&idx<p.end); return h?h.page:null; };
+  const needles=[body.slice(0,240),body.slice(40,260),body.slice(8,150),body.slice(0,60)];
+  let fallback=null;
+  for(let n of needles){
+    n=n.trim(); if(n.length<12) continue;
+    const first=pageContent.indexOf(n); if(first<0) continue;
+    if(fallback===null) fallback=pageAt(first);
+    if(pageContent.indexOf(n,first+1)<0){      // unique slice -> trust it
+      const pg=pageAt(first); if(pg) return pg;
+    }
+  }
+  return fallback;
+}
+// Turn raw chat sources into de-duped citations, each resolved to a page when possible.
+async function resolveCitations(sources){
+  const seen=new Set(), out=[];
+  for(const s of sources){
+    const name=sourceName(s); if(!name) continue;
+    const docpath=docpathFor(name,s);
+    let page=null;
+    if(docpath){
+      const dv=await getDocView(docpath);
+      if(dv) page=matchPage(s.text||"",dv.pageContent,dv.pages);
+    }
+    const key=name+"|"+(page||"");
+    if(seen.has(key)) continue;
+    seen.add(key);
+    out.push({name,docpath,page,text:s.text||""});
+  }
+  return out;
+}
+// Citations carry their (sometimes ~1KB) chunk text; keep it out of the DOM in a
+// small registry and reference it from the chip by index (avoids attribute-escaping
+// pitfalls). Used to highlight the exact passage when the citation is clicked.
+const CITES=[];
+// Render the citation chips (jump-to-page) + the "open in file explorer" line.
+function sourcesHtml(cites){
+  if(!cites||!cites.length) return "";
+  const chips=cites.map(c=>{
+    const pg=c.page?`<span class="pg">p.${c.page}</span>`:"";
+    const cid=c.docpath?(CITES.push(c)-1):-1;
+    const jump=c.docpath?` data-docpath="${escAttr(c.docpath)}" data-page="${c.page||""}" data-name="${escAttr(c.name)}" data-cite="${cid}"`:"";
+    const title=c.docpath?(c.page?`Jump to the cited passage on page ${c.page}`:"Open this document"):"Open file";
+    return `<span class="src"${jump} data-reveal="${escAttr(c.name)}" title="${title}">📄 ${esc(c.name)}${pg}</span>`;
+  }).join("");
+  const names=[...new Set(cites.map(c=>c.name))];
+  const srcline=`<div class="srcline">📂 From your files: `+
+    names.map(n=>`<a href="#" data-reveal="${escAttr(n)}">${esc(n)}</a>`).join(", ")+
+    ` — click a name to open it in your file explorer.</div>`;
+  return `<div class="sources">${chips}</div>${srcline}`;
+}
+// AMAdocs: this is a search tool, not a chatbot — hard-cap answers at ~a paragraph.
+// The engine already caps generation (Ollama num_predict ~200 tok); this trims the
+// displayed answer to <=120 words, ending on the last full sentence so a token-level
+// cut never shows mid-word. Belt-and-braces with the server cap + concise prompt.
+// AMAdocs: small models (phi3.5) sometimes continue past the real answer with
+// hallucinated prompt-scaffolding — a fabricated "## Instruction:" follow-up, the
+// internal CONTEXT chunk labels, fake chat turns. None of that ever belongs in a
+// grounded answer, so cut at the first such marker. Defense-in-depth with the strict
+// system prompt + server-side num_predict cap (a short leak can fit inside the word cap).
+function stripScaffolding(text){
+  if(!text) return text;
+  const markers=[
+    /\n?\s*#{1,6}\s*(instruction|task|additional)\b/i, // fake section header
+    /\bcontext\s*\d/i,                                  // internal chunk label leak
+    /\bin your response:/i,
+    /\badditional constraints\b/i,
+    /\(increased difficulty\)/i,
+    /\n\s*(system|user|assistant)\s*:/i,                // fake chat turn
+  ];
+  let cut=text.length;
+  for(const re of markers){ const m=text.match(re); if(m && m.index<cut) cut=m.index; }
+  let out=text.slice(0,cut).trim();
+  // If we actually cut scaffolding mid-stream, end on the last full sentence so the
+  // answer doesn't dangle ("...can be found in").
+  if(cut<text.length){
+    const stop=Math.max(out.lastIndexOf("."),out.lastIndexOf("!"),out.lastIndexOf("?"));
+    if(stop>0) out=out.slice(0,stop+1);
+  }
+  return out.trim();
+}
+function capAnswer(text){
+  if(!text) return text;
+  text=stripScaffolding(text);
+  const WORD_CAP=120;
+  const words=text.trim().split(/\s+/);
+  if(words.length<=WORD_CAP) return text.trim();
+  let capped=words.slice(0,WORD_CAP).join(" ");
+  const cut=Math.max(capped.lastIndexOf("."),capped.lastIndexOf("!"),capped.lastIndexOf("?"));
+  if(cut>capped.length*0.4) capped=capped.slice(0,cut+1); // back up to last full sentence
+  return capped.trim();
+}
+// Open a citation's document and scroll to the cited page (PDF "pretty" view).
+function jumpToCitation(docpath,name,page,text){
+  if(!docpath){ revealFile(name); return; }
+  const li=[...docListEl.querySelectorAll(".doc")].find(x=>x.dataset.docpath===docpath);
+  if(curDoc && curDoc.docpath===docpath){
+    if(curDoc.mode!=="pretty"){ curDoc.mode="pretty"; curDoc.targetPage=page; curDoc.targetText=text||""; renderViewer(); }
+    else if(text){ curDoc.targetPage=page; curDoc.targetText=text; renderViewer(); }
+    else scrollViewerToPage(page);
+  } else {
+    openDoc(docpath,name,li,page,text);
+  }
+}
+function flashPage(el){ if(!el) return; el.classList.remove("flash"); void el.offsetWidth; el.classList.add("flash"); }
+function scrollViewerToPage(page){
+  if(!page) return;
+  const cont=document.getElementById("vpdf");
+  if(cont && cont.children[page-1]){
+    cont.children[page-1].scrollIntoView({block:"start"});
+    flashPage(cont.children[page-1].querySelector("canvas")||cont.children[page-1]);
+  } else if(curDoc){
+    curDoc.mode="pretty"; curDoc.targetPage=page; renderViewer();
+  }
+}
+
+/* ---------- removing documents from the Library ---------- */
+async function removeDocs(docpaths){
+  const r=await fetch(`${API}/workspace/${WS_SLUG}/update-embeddings`,{
+    method:"POST",headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({deletes:docpaths})});
+  if(!r.ok) throw new Error("remove failed");
+}
+async function deleteDoc(docpath,name){
+  if(!docpath) return;
+  if(!confirm(`Remove “${name}” from your Library?\n\nThis deletes AMAdocs’ copy only. Your original file is not affected.`)) return;
+  try{
+    await removeDocs([docpath]);
+    forgetPath(name);
+    closeDoc();
+    await loadDocuments();
+    toast(`Removed “${name}” from your Library.`);
+  }catch(e){ toast("Couldn’t remove that document."); }
+}
+async function clearLibrary(){
+  const paths=[...docListEl.querySelectorAll(".doc")].map(li=>li.dataset.docpath).filter(Boolean);
+  if(!paths.length) return;
+  if(!confirm(`Clear your whole Library?\n\nThis removes all ${paths.length} document${paths.length>1?"s":""} from AMAdocs. Your original files are not affected.`)) return;
+  try{
+    await removeDocs(paths);
+    filePaths={}; try{localStorage.setItem(PATHS_KEY,JSON.stringify(filePaths));}catch(_){}
+    closeDoc();
+    await loadDocuments();
+    toast("Your Library is now empty.");
+  }catch(e){ toast("Couldn’t clear the Library."); }
+}
+
+function addDocRow(name,processing=false,docpath=null,mode="deep"){
+  const li=document.createElement("li");
+  // AMAdocs: a "cataloged" file has only its summary embedded — show a Deep search
+  // pill to upgrade it to full-text search.
+  const cataloged = !processing && !!docpath && mode==="summary";
+  li.className="doc"+(processing?" processing":"")+(cataloged?" cataloged":"");
+  if(docpath){ li.dataset.docpath=docpath; li.dataset.mode=mode; }
+  li.innerHTML=`<div class="ic">${iconFor(name)}</div><div class="nm" title="${escAttr(name)}">${esc(name)}</div>`+
+               (processing?`<div class="spin"></div>`
+                          :(docpath?(cataloged?`<button class="deep" title="Make this file’s full contents searchable">🔍 Deep search</button>`:``)
+                                    +`<button class="del" title="Remove from Library">🗑️</button>`:``));
+  if(docpath && !processing){
+    li.addEventListener("click",()=>openDoc(docpath,name,li));
+    const del=li.querySelector(".del");
+    if(del) del.addEventListener("click",e=>{ e.stopPropagation(); deleteDoc(docpath,name); });
+    const deep=li.querySelector(".deep");
+    if(deep) deep.addEventListener("click",e=>{ e.stopPropagation(); deepSearchDoc(name,docpath); });
+    li.addEventListener("contextmenu",e=>{ e.preventDefault(); showDocMenu(e.clientX,e.clientY,name,docpath); });
+  }
+  docListEl.appendChild(li);
+  return li;
+}
+
+function updateState(count){
+  const cb=$("#clearBtn"); if(cb) cb.classList.toggle("hidden",count===0);
+  if(count>0){ heroEl.classList.add("hidden"); splitEl.classList.remove("hidden"); qEl.focus(); }
+  else { heroEl.classList.remove("hidden"); splitEl.classList.add("hidden"); closeDoc(); }
+}
+
+/* ---------- document viewer pane ---------- */
+function renderDoc(text){
+  const esc=s=>s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const blocks=text.split(/\n\n+/).map(b=>{
+    const t=b.trim(); if(!t) return "";
+    const h=t.match(/^(#{1,3})\s+(.*)$/);
+    if(h) return `<h${h[1].length}>${esc(h[2])}</h${h[1].length}>`;
+    return `<p>${esc(t)}</p>`;
+  });
+  return blocks.join("");
+}
+let curDoc=null;            // {docpath,name,mode:'pretty'|'text',hasOriginal,isImage,targetPage,targetText}
+const vtoggleEl=$("#vtoggle");
+const vexportEl=$("#vexport");
+
+// AMAdocs: download this photo + its AMAdocs metadata (AI description, OCR text,
+// original EXIF, source info) as a zip. The server sets Content-Disposition:attachment,
+// so a plain navigation triggers the download; the original is never modified.
+function exportPhoto(){
+  if(!curDoc) return;
+  const a=document.createElement("a");
+  a.href=apiUrl(`${API}/workspace/${WS_SLUG}/doc-export?path=${encodeURIComponent(curDoc.docpath)}`);
+  a.rel="noopener"; document.body.appendChild(a); a.click(); a.remove();
+  toast("Exporting photo with its info…");
+}
+function showExport(on){
+  if(!vexportEl) return;
+  vexportEl.classList.toggle("hidden", !on);
+}
+
+function openDoc(docpath,name,li,targetPage=null,targetText=""){
+  document.querySelectorAll(".doc.active").forEach(x=>x.classList.remove("active"));
+  if(li) li.classList.add("active");
+  viewerEl.classList.remove("hidden");
+  gutterSplit.classList.remove("hidden");
+  restoreViewerWidth();
+  curDoc={docpath,name,mode:"pretty",hasOriginal:undefined,isImage:false,targetPage,targetText};
+  vtitleEl.textContent=name;
+  showExport(false);
+  renderViewer();
+}
+function closeDoc(){
+  curDoc=null;
+  viewerEl.classList.add("hidden");
+  gutterSplit.classList.add("hidden");
+  if(vtoggleEl) vtoggleEl.classList.add("hidden");
+  showExport(false);
+  document.querySelectorAll(".doc.active").forEach(x=>x.classList.remove("active"));
+}
+
+function updateToggle(){
+  if(!vtoggleEl) return;
+  if(curDoc && curDoc.hasOriginal){
+    vtoggleEl.classList.remove("hidden");
+    vtoggleEl.textContent = curDoc.mode==="pretty" ? "🔤 Text only" : "🖼️ Text and images";
+  } else {
+    vtoggleEl.classList.add("hidden");
+  }
+}
+
+// Render the currently open document in its current mode.
+async function renderViewer(){
+  if(!curDoc) return;
+  vbodyEl.innerHTML=`<div class="vnote">Loading…</div>`;
+  vbodyEl.scrollTop=0;
+  showExport(false);
+  if(curDoc.mode==="text"){ updateToggle(); showExport(curDoc.isImage); return loadTextView(); }
+  // pretty mode: fetch the retained original and render by type
+  try{
+    const r=await fetch(`${API}/workspace/${WS_SLUG}/doc-original?path=${encodeURIComponent(curDoc.docpath)}`);
+    if(!r.ok) throw new Error("no-original");
+    const blob=await r.blob();
+    curDoc.hasOriginal=true; updateToggle();
+    const type=(blob.type||"").toLowerCase();
+    if(type.includes("pdf")) return renderPdf(blob);
+    if(type.startsWith("image/")){ curDoc.isImage=true; showExport(true); return renderImage(blob); }
+    if(type.includes("wordprocessingml")) return renderDocx(blob);
+    if(type.includes("spreadsheetml")||type.includes("csv")) return renderXlsx(blob);
+    // plain text / markdown / unknown -> the AI text view reads cleaner anyway
+    curDoc.mode="text"; updateToggle(); return loadTextView();
+  }catch(e){
+    // older docs added before originals were retained -> text only
+    curDoc.hasOriginal=false; curDoc.mode="text"; updateToggle();
+    return loadTextView();
+  }
+}
+
+// Text view = exactly what the AI reads (extracted text).
+async function loadTextView(){
+  if(!curDoc) return;
+  try{
+    const r=await fetch(`${API}/workspace/${WS_SLUG}/doc-view?path=${encodeURIComponent(curDoc.docpath)}`);
+    if(!r.ok) throw 0;
+    const d=await r.json();
+    vtitleEl.textContent=d.title||curDoc.name;
+    // AMAdocs: if this document has been summarized (right-click → Summarize), show
+    // the stored gist at the top of the text view.
+    const summaryPanel=d.aiSummary?`<div class="vmeta"><section><h4>🧠 AI summary</h4><p>${esc(d.aiSummary)}</p></section></div>`:"";
+    const note=`<div class="vnote">🔤 The text AMAdocs reads from this file — images and layout aren’t shown here${d.wordCount?` · ${d.wordCount.toLocaleString()} words`:""}.${curDoc.hasOriginal?` Use “Text and images” for the full document.`:""}</div>`;
+    vbodyEl.innerHTML=summaryPanel+note+(d.pageContent?renderDoc(d.pageContent):`<p>No readable text found in this document.</p>`);
+    vbodyEl.scrollTop=0;
+  }catch(e){
+    vbodyEl.innerHTML=`<div class="vnote">Couldn’t open this document.</div>`;
+  }
+}
+
+function renderImage(blob){
+  const url=URL.createObjectURL(blob);
+  vbodyEl.innerHTML="";
+  const img=document.createElement("img");
+  img.className="vimg"; img.src=url;
+  img.onload=()=>URL.revokeObjectURL(url);
+  vbodyEl.appendChild(img);
+  vbodyEl.scrollTop=0;
+  // AMAdocs: show what AMAdocs understands about the photo (AI caption + any text
+  // found in it) beneath the image. Data is already in doc-view's pageContent —
+  // split on the section markers asImage writes ("Image description:" / "Text
+  // found in image:"). Best-effort: a fetch/parse failure just leaves the image.
+  loadImageMeta();
+}
+
+// AMAdocs: parse the caption/OCR sections out of an image's combined pageContent
+// and render them under the photo. (EXIF/source is a planned stretch — needs a
+// JSON variant of doc-export; see AMAdocs-DEV-NOTES.md.)
+async function loadImageMeta(){
+  const forDoc=curDoc&&curDoc.docpath;
+  try{
+    const r=await fetch(`${API}/workspace/${WS_SLUG}/doc-view?path=${encodeURIComponent(forDoc)}`);
+    if(!r.ok) return;
+    const d=await r.json();
+    // Guard against a slow fetch resolving after the user switched documents.
+    if(!curDoc||curDoc.docpath!==forDoc||curDoc.mode!=="pretty") return;
+    const pc=d&&d.pageContent?String(d.pageContent):"";
+    const caption=sliceSection(pc,"Image description:",["Text found in image:"]);
+    const ocr=sliceSection(pc,"Text found in image:",["Image description:"]);
+    if(!caption&&!ocr) return;
+    let html='<div class="vmeta">';
+    if(caption) html+=`<section><h4>🖼️ AI description</h4><p>${esc(caption)}</p></section>`;
+    if(ocr) html+=`<section><h4>🔤 Text found in image</h4><p>${esc(ocr)}</p></section>`;
+    html+='</div>';
+    vbodyEl.insertAdjacentHTML("beforeend",html);
+  }catch(e){/* best-effort: leave the image as-is */}
+}
+
+// Pull one labelled section out of the combined pageContent: text after `label`
+// up to the next section label (or end). Returns "" if the label isn't present.
+function sliceSection(text,label,otherLabels){
+  const i=text.indexOf(label);
+  if(i<0) return "";
+  let rest=text.slice(i+label.length);
+  let cut=rest.length;
+  for(const ol of otherLabels){ const j=rest.indexOf(ol); if(j>=0&&j<cut) cut=j; }
+  return rest.slice(0,cut).trim();
+}
+
+async function renderDocx(blob){
+  try{
+    const buf=await blob.arrayBuffer();
+    const res=await mammoth.convertToHtml({arrayBuffer:buf});
+    vbodyEl.innerHTML=`<div class="vdoc">${res.value||"<p>No content.</p>"}</div>`;
+    vbodyEl.scrollTop=0;
+  }catch(e){ curDoc.mode="text"; updateToggle(); loadTextView(); }
+}
+
+async function renderXlsx(blob){
+  try{
+    const buf=await blob.arrayBuffer();
+    const wb=XLSX.read(buf,{type:"array"});
+    let html="";
+    wb.SheetNames.forEach(n=>{ html+=`<div class="vsheet-name">${esc(n)}</div>`+XLSX.utils.sheet_to_html(wb.Sheets[n]); });
+    vbodyEl.innerHTML=`<div class="vsheet">${html}</div>`;
+    vbodyEl.scrollTop=0;
+  }catch(e){ curDoc.mode="text"; updateToggle(); loadTextView(); }
+}
+
+// PDF: render pages on demand (lazily) so big textbooks stay responsive.
+async function renderPdf(blob){
+  try{
+    const buf=await blob.arrayBuffer();
+    const pdf=await pdfjsLib.getDocument({data:buf}).promise;
+    vbodyEl.innerHTML=`<div class="vpdf" id="vpdf"></div>`;
+    const cont=$("#vpdf");
+    const baseW=Math.max(200,vbodyEl.clientWidth-60);
+    const io=new IntersectionObserver((entries)=>{
+      entries.forEach(en=>{
+        if(!en.isIntersecting) return;
+        const wrap=en.target; io.unobserve(wrap);
+        if(wrap.dataset.rendered) return;
+        wrap.dataset.rendered="1";
+        renderPdfPage(pdf,parseInt(wrap.dataset.page,10),wrap.querySelector("canvas"));
+      });
+    },{root:vbodyEl,rootMargin:"800px 0px"});
+    const wraps=[];
+    for(let p=1;p<=pdf.numPages;p++){
+      const wrap=document.createElement("div");
+      wrap.className="vpage-wrap"; wrap.dataset.page=p;
+      const cv=document.createElement("canvas");
+      cv.className="vpage"; cv.dataset.page=p;
+      cv.style.width=baseW+"px"; cv.style.height=Math.round(baseW*1.3)+"px"; // placeholder
+      wrap.appendChild(cv);
+      cont.appendChild(wrap);
+      wraps.push(wrap);
+      io.observe(wrap);
+    }
+    // If we arrived from a citation, highlight the exact passage and scroll to it.
+    const needle=curDoc&&curDoc.targetText?normWS(stripChunkHeader(curDoc.targetText)):"";
+    let tp=curDoc&&curDoc.targetPage;
+    if(needle&&needle.length>=24){
+      // No page anchor (bridged/flat docs have pages:null => no targetPage): scan ALL
+      // pages cheaply for the best matching page instead of capping at pages 1–5, so a
+      // passage deeper in the PDF is found rather than a recurring footer near the top.
+      if(!(tp&&tp>=1)){ const found=await locatePassagePage(pdf,needle); if(found) tp=found; }
+      // The cited chunk starts at/near the matched page and runs forward a few pages.
+      const startP=(tp&&tp>=1)?tp:1, endP=Math.min(pdf.numPages,startP+4);
+      let firstHit=null;
+      for(let p=startP;p<=endP;p++){
+        const wrap=wraps[p-1]; if(!wrap) continue;
+        io.unobserve(wrap); wrap.dataset.rendered="1";
+        const hit=await renderPdfPageHighlight(pdf,p,wrap,needle);
+        if(hit&&!firstHit) firstHit=wrap;
+      }
+      const target=firstHit||wraps[(tp||1)-1];
+      if(target) requestAnimationFrame(()=>{ scrollToHighlight(target); flashPage(target.querySelector("canvas")); });
+    } else if(tp&&tp>=1&&tp<=pdf.numPages){
+      const target=wraps[tp-1];
+      if(target) requestAnimationFrame(()=>{ target.scrollIntoView({block:"start"}); flashPage(target.querySelector("canvas")); });
+    } else {
+      vbodyEl.scrollTop=0;
+    }
+    if(curDoc){ curDoc.targetPage=null; curDoc.targetText=""; } // consume — don't re-jump on re-render
+  }catch(e){ curDoc.mode="text"; updateToggle(); loadTextView(); }
+}
+// Collapse all whitespace + lowercase, so the (whitespace-mangled) chunk text and
+// PDF.js's own text extraction can be compared.
+function normWS(s){ return String(s||"").replace(/\s+/g," ").trim().toLowerCase(); }
+// Render a page's canvas + an overlaid text layer, then highlight the spans that
+// fall inside the cited passage. Returns true if anything was highlighted.
+async function renderPdfPageHighlight(pdf,num,wrap,needle){
+  try{
+    const canvas=wrap.querySelector("canvas");
+    const page=await pdf.getPage(num);
+    const targetW=Math.max(200,vbodyEl.clientWidth-60);
+    const base=page.getViewport({scale:1});
+    const vp=page.getViewport({scale:targetW/base.width});
+    const ratio=window.devicePixelRatio||1;
+    canvas.width=Math.floor(vp.width*ratio); canvas.height=Math.floor(vp.height*ratio);
+    canvas.style.width=vp.width+"px"; canvas.style.height=vp.height+"px";
+    const ctx=canvas.getContext("2d"); ctx.scale(ratio,ratio);
+    await page.render({canvasContext:ctx,viewport:vp}).promise;
+    const tl=document.createElement("div");
+    tl.className="textLayer";
+    tl.style.width=vp.width+"px"; tl.style.height=vp.height+"px";
+    tl.style.setProperty("--scale-factor",vp.scale);
+    wrap.appendChild(tl);
+    const tc=await page.getTextContent();
+    const textDivs=[];
+    await pdfjsLib.renderTextLayer({textContentSource:tc,container:tl,viewport:vp,textDivs}).promise;
+    // Build a normalized string from the rendered spans, remembering which span owns
+    // each character, so a matched char-range maps straight back to spans to style.
+    let pageStr=""; const owner=[];
+    for(let i=0;i<textDivs.length;i++){
+      let t=(textDivs[i].textContent||"").replace(/\s+/g," ");
+      if(!t) continue;
+      if(pageStr&&!pageStr.endsWith(" ")){ pageStr+=" "; owner.push(-1); }
+      for(const ch of t){ pageStr+=ch; owner.push(i); }
+    }
+    pageStr=pageStr.toLowerCase();
+    const region=findPassageRegion(pageStr,needle);
+    if(!region) return false;
+    const hit=new Set();
+    for(let k=region.lo;k<region.hi&&k<owner.length;k++){ if(owner[k]>=0) hit.add(owner[k]); }
+    hit.forEach(i=>textDivs[i].classList.add("hl"));
+    return hit.size>0;
+  }catch(e){ return false; }
+}
+// A page may hold all / a prefix / a suffix of the chunk. Probe with sliding
+// fragments of the needle, then highlight the LARGEST CONTIGUOUS cluster of hits
+// — so a lone recurring header/footer fragment (which the chunk's flat text often
+// contains, esp. for bridged docs) can't balloon the region to span the whole page
+// or get mistaken for the passage. Returns {lo,hi,score,count}: score = total
+// fragment hits on the page, count = hits in the chosen cluster (the page-ranking
+// signal). See locatePassagePage.
+function findPassageRegion(pageStr,needle){
+  const W=40,STEP=24; const hits=[];
+  for(let i=0;i+W<=needle.length;i+=STEP){
+    const at=pageStr.indexOf(needle.substr(i,W));
+    if(at>=0) hits.push(at);
+  }
+  // also try the very end of the needle (loop may skip the tail fragment)
+  if(needle.length>=W){ const at=pageStr.indexOf(needle.slice(-W)); if(at>=0) hits.push(at); }
+  if(!hits.length) return null;
+  hits.sort((a,b)=>a-b);
+  // Group nearby matches into clusters; keep the biggest. A far-apart footer match
+  // starts a new cluster instead of stretching the body cluster's [lo,hi].
+  let bestLo=hits[0],bestHi=hits[0]+W,bestCount=1, lo=hits[0],hi=hits[0]+W,count=1;
+  for(let j=1;j<hits.length;j++){
+    if(hits[j]-hits[j-1]<=W*3){ hi=Math.max(hi,hits[j]+W); count++; }
+    else { if(count>bestCount){bestCount=count;bestLo=lo;bestHi=hi;} lo=hits[j]; hi=hits[j]+W; count=1; }
+  }
+  if(count>bestCount){bestCount=count;bestLo=lo;bestHi=hi;}
+  return {lo:bestLo,hi:bestHi,score:hits.length,count:bestCount};
+}
+// Locate the page whose text best matches the cited passage, WITHOUT rendering any
+// canvas (a cheap text-only pass). Used when we have no page anchor — bridged/flat
+// docs return pages:null from doc-view, so matchPage gives no targetPage and the old
+// code capped the search at pages 1–5, mis-highlighting a recurring footer for any
+// passage deeper than that. Picks the page with the largest contiguous match cluster
+// (require >=3 so a lone recurring header/footer can't win); 0 if no real match.
+async function locatePassagePage(pdf,needle){
+  let bestP=0,bestCount=2; // >2 => need a cluster of >=3 contiguous fragment hits
+  for(let p=1;p<=pdf.numPages;p++){
+    let pageStr="";
+    try{
+      const tc=await (await pdf.getPage(p)).getTextContent();
+      pageStr=tc.items.map(it=>it.str||"").join(" ").replace(/\s+/g," ").toLowerCase();
+    }catch(_){ continue; }
+    const r=findPassageRegion(pageStr,needle);
+    if(r&&r.count>bestCount){ bestCount=r.count; bestP=p; }
+  }
+  return bestP;
+}
+// Scroll so the first highlighted span (not just the page top) sits in view.
+function scrollToHighlight(wrap){
+  const hl=wrap.querySelector(".textLayer span.hl");
+  if(hl){ hl.scrollIntoView({block:"center"}); }
+  else { wrap.scrollIntoView({block:"start"}); }
+}
+async function renderPdfPage(pdf,num,canvas){
+  try{
+    const page=await pdf.getPage(num);
+    const targetW=Math.max(200,vbodyEl.clientWidth-60);
+    const base=page.getViewport({scale:1});
+    const vp=page.getViewport({scale:targetW/base.width});
+    const ratio=window.devicePixelRatio||1;
+    canvas.width=Math.floor(vp.width*ratio);
+    canvas.height=Math.floor(vp.height*ratio);
+    canvas.style.width=vp.width+"px";
+    canvas.style.height=vp.height+"px";
+    const ctx=canvas.getContext("2d");
+    ctx.scale(ratio,ratio);
+    await page.render({canvasContext:ctx,viewport:vp}).promise;
+  }catch(e){}
+}
+
+/* ---------- uploads ---------- */
+async function uploadFiles(files){
+  const ws = await ensureWorkspace();
+  if(!ws) return;
+  // switch to chat view immediately so the user sees progress in the sidebar
+  heroEl.classList.add("hidden"); splitEl.classList.remove("hidden");
+  const total=files.length; let done=0, failed=0;
+  const sys=addSystemMsg(total>1?`Adding ${total} documents…`:"Adding your document…",{timer:true});
+  for(const file of files){
+    done++;
+    sys.set(total>1?`Reading ${done} of ${total}: ${file.name}`:`Reading “${file.name}”…`);
+    rememberPath(file.name, resolveFilePath(file));
+    const row = addDocRow(file.name,true);
+    try{
+      const fd=new FormData(); fd.append("file",file);
+      const r=await fetch(`${API}/workspace/${WS_SLUG}/upload-and-embed`,{method:"POST",body:fd});
+      const j=await r.json();
+      if(!j.success) throw new Error(j.error||"failed");
+      row.classList.remove("processing");
+      const sp=row.querySelector(".spin"); if(sp) sp.remove();
+    }catch(e){
+      failed++;
+      row.classList.remove("processing");
+      const sp=row.querySelector(".spin"); if(sp) sp.remove();
+      row.querySelector(".nm").textContent = file.name+" — couldn’t read this file";
+      row.style.opacity=.5;
+    }
+  }
+  if(!failed) sys.ok(total>1?`Cataloged ${total} documents. Right-click any file → 🔍 Deep search to make its full contents searchable.`:"Cataloged your document. Right-click it → 🔍 Deep search to make its full contents searchable.");
+  else if(failed<total) sys.error(`Cataloged ${total-failed} of ${total} — ${failed} couldn’t be read.`);
+  else sys.error(total>1?"Couldn’t read those files.":"Couldn’t read that file.");
+  await loadDocuments();
+}
+
+/* ---------- chat ---------- */
+function addMessage(role,html){
+  const row=document.createElement("div");
+  row.className="row "+(role==="user"?"user":"ai");
+  row.innerHTML=`<div class="av ${role==='user'?'me':'ai'}">${role==='user'?'ME':'AI'}</div><div class="bub">${html}</div>`;
+  messagesEl.appendChild(row);
+  messagesEl.scrollTop=messagesEl.scrollHeight;
+  return row.querySelector(".bub");
+}
+function fmt(t){
+  return t
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/\*\*([^*]+)\*\*/g,"<strong>$1</strong>")
+    .split(/\n\n+/).map(p=>`<p>${p.replace(/\n/g,"<br>")}</p>`).join("");
+}
+
+// While a question is streaming, the send button becomes a Stop button so the user
+// can cut a long-running answer short.
+let currentAbort=null;
+function setSendMode(stopping){
+  sendEl.classList.toggle("stop",stopping);
+  sendEl.textContent = stopping ? "⏹" : "➤";
+  sendEl.title = stopping ? "Stop" : "";
+}
+function stopAsk(){ if(currentAbort) currentAbort.abort(); }
+
+// A live "thinking" note inside the streaming AI bubble: a running elapsed timer
+// plus reassurance that escalates the longer the answer takes — so the long,
+// silent first-answer wait (the AI model cold-loading, fan spinning, no tokens
+// yet) reads as "working", not "stuck". Returns a stopper; the streamed text
+// replaces the note as soon as the first token arrives.
+function startThinking(bub,cold){
+  const note=bub&&bub.querySelector(".warm");
+  if(!note) return ()=>{};
+  const start=Date.now(); let stopped=false;
+  const render=()=>{
+    if(stopped) return;
+    const s=Math.floor((Date.now()-start)/1000);
+    if(!cold && s<4){ note.textContent=""; return; }   // fast warm answers stay quiet
+    const t=Math.floor(s/60)+":"+String(s%60).padStart(2,"0");
+    const msg = cold
+      ? (s<25 ? "Warming up the AI for your first question — this one takes the longest…"
+              : "Still loading the AI model — the first answer is the slow one, especially on a computer without a graphics card.")
+      : (s<20 ? "Thinking…"
+              : "Still working on it — this can take a little longer on a busy computer.");
+    note.innerHTML=`${esc(msg)}<span class="warm-t">${t}</span>`;
+  };
+  render();
+  const h=setInterval(render,1000);
+  return ()=>{ if(stopped) return; stopped=true; clearInterval(h); };
+}
+
+// AMAdocs: the AI model is a one-time download (the bundle ships none). When chat
+// fails because the chat model isn't installed yet, we show a friendly prompt with a
+// download button instead of leaking the raw engine error ("llm model not found").
+function isModelMissingError(err){
+  const s=String(err||"").toLowerCase();
+  return /\bmodel\b/.test(s) &&
+    /(not found|not installed|try pulling|pull it|no such model|404|isn'?t (?:installed|available))/.test(s);
+}
+
+async function ask(text){
+  if(busy||!text.trim())return;
+  busy=true; setSendMode(true);
+  addMessage("user",fmt(text));
+  qEl.value=""; autoGrow();
+  const cold=firstQuery;
+  const bub=addMessage("ai",`<span class="typing"><i></i><i></i><i></i></span><div class="warm"></div>`);
+  const stopThinking=startThinking(bub,cold);
+  let answer="",sources=[],modelMissing=false;
+  currentAbort=new AbortController();
+  try{
+    const resp=await fetch(`${API}/workspace/${WS_SLUG}/stream-chat`,{
+      method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({message:text,sessionId:SESSION_ID}),signal:currentAbort.signal});
+    const reader=resp.body.getReader(),dec=new TextDecoder();let buf="";
+    while(true){
+      const {done,value}=await reader.read(); if(done)break;
+      buf+=dec.decode(value,{stream:true});
+      let parts=buf.split("\n"); buf=parts.pop();
+      for(const line of parts){
+        const m=line.match(/^data:\s*(.*)$/); if(!m)continue;
+        let j; try{j=JSON.parse(m[1])}catch(_){continue}
+        stopThinking();   // first real event — the placeholder is about to be replaced
+        if(j.type==="abort"&&j.error){
+          if(!answer.trim()&&isModelMissingError(j.error)) modelMissing=true;
+          else answer=answer||("Sorry — "+j.error);
+        }
+        if(j.textResponse) answer+=j.textResponse;
+        if(j.sources&&j.sources.length) sources=j.sources;
+        let html=fmt(answer||"…");
+        if(sources.length){
+          const names=[...new Set(sources.map(s=>{
+            try{return s.title||JSON.parse(s.metadata||"{}").title||s.filename}catch(_){return s.title||s.filename}
+          }).filter(Boolean))];
+          if(names.length){
+            html+=`<div class="sources">`+names.map(n=>`<span class="src" data-reveal="${escAttr(n)}" title="Open in system explorer">📎 ${esc(n)}</span>`).join("")+`</div>`;
+            html+=`<div class="srcline">📂 From your files: `+names.map(n=>`<a href="#" data-reveal="${escAttr(n)}">${esc(n)}</a>`).join(", ")+` — click a name to open it in your file explorer.</div>`;
+          }
+        }
+        bub.innerHTML=html;
+        messagesEl.scrollTop=messagesEl.scrollHeight;
+      }
+    }
+    stopThinking();
+    if(modelMissing){
+      // AMAdocs: friendly first-run prompt instead of the raw "model not found" error.
+      bub.innerHTML=`<div class="modelmiss">⬇️ Your AI isn’t installed yet.<br>`+
+        `AMAdocs needs a one-time download of its local AI before it can answer questions about your documents — it then runs entirely on this computer.`+
+        `<div><button type="button" class="dlbtn missget">Download your AI…</button></div></div>`;
+      const gm=bub.querySelector(".missget"); if(gm) gm.onclick=()=>openDownloadModal();
+      messagesEl.scrollTop=messagesEl.scrollHeight;
+      firstQuery=false; currentAbort=null; busy=false; setSendMode(false); qEl.focus();
+      return;
+    }
+    answer=capAnswer(answer);   // AMAdocs: enforce the ~120-word paragraph cap on the final answer
+    if(!answer.trim()) bub.innerHTML=fmt("I couldn’t find anything about that in your documents.");
+    // Re-render the citations with their page numbers resolved, so each chip can
+    // jump straight to the cited page of the original document.
+    if(answer.trim() && sources.length){
+      try{
+        const cites=await resolveCitations(sources);
+        bub.innerHTML=fmt(answer)+sourcesHtml(cites);
+        messagesEl.scrollTop=messagesEl.scrollHeight;
+      }catch(_){}
+    }
+    firstQuery=false;
+  }catch(e){
+    stopThinking();
+    if(e&&e.name==="AbortError"){
+      // User pressed Stop — keep whatever streamed so far, mark it stopped.
+      bub.innerHTML = answer.trim()
+        ? fmt(answer)+`<div class="stopnote">⏹ Stopped.</div>`
+        : `<div class="stopnote">⏹ Stopped.</div>`;
+    } else {
+      bub.innerHTML=fmt("Sorry — I couldn’t reach the AI engine. Is it still running?");
+    }
+  }
+  currentAbort=null;
+  busy=false; setSendMode(false); qEl.focus();
+}
+
+/* ---------- input wiring ---------- */
+function autoGrow(){ qEl.style.height="auto"; qEl.style.height=Math.min(qEl.scrollHeight,140)+"px"; }
+qEl.addEventListener("input",autoGrow);
+qEl.addEventListener("keydown",e=>{ if(e.key==="Enter"&&!e.shiftKey){e.preventDefault();ask(qEl.value);} });
+sendEl.addEventListener("click",()=>{ if(busy) stopAsk(); else ask(qEl.value); });
+$("#vclose").addEventListener("click",closeDoc);
+$("#vtoggle").addEventListener("click",()=>{
+  if(!curDoc) return;
+  curDoc.mode = curDoc.mode==="pretty" ? "text" : "pretty";
+  renderViewer();
+});
+$("#vexport").addEventListener("click",exportPhoto);
+$("#clearBtn").addEventListener("click",clearLibrary);
+(function(){ const s=$("#showStorage"); if(!s) return;
+  // desktop app only (window.amadocs, not the `desktop` const which is declared later)
+  if(!window.amadocs||!window.amadocs.openFolder){ s.style.display="none"; return; }
+  s.addEventListener("click",e=>{ e.preventDefault(); openStorageFolder(); });
+})();
+$("#addBtn").addEventListener("click",()=>fileInput.click());
+$("#browseBtn").addEventListener("click",()=>fileInput.click());
+fileInput.addEventListener("change",e=>{ if(e.target.files.length) uploadFiles([...e.target.files]); fileInput.value=""; });
+// "Sync a folder" — desktop only (needs the native folder picker + a local OS index).
+(function(){ const b=$("#syncBtn"); if(!b) return;
+  if(!window.amadocs||!window.amadocs.pickFolder) return;   // stays hidden in the browser dev stack
+  b.classList.remove("hidden");
+  b.addEventListener("click",openSyncModal);
+})();
+
+/* drag & drop anywhere */
+let dragDepth=0;
+window.addEventListener("dragenter",e=>{e.preventDefault();dragDepth++;overlay.classList.add("show");});
+window.addEventListener("dragover",e=>e.preventDefault());
+window.addEventListener("dragleave",e=>{dragDepth--;if(dragDepth<=0)overlay.classList.remove("show");});
+window.addEventListener("drop",e=>{
+  e.preventDefault();dragDepth=0;overlay.classList.remove("show");
+  if(e.dataTransfer.files.length) uploadFiles([...e.dataTransfer.files]);
+});
+
+/* ---------- desktop bridge: remember original file paths + reveal in OS explorer ---------- */
+const desktop = window.amadocs || null;
+const esc = s => String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+const escAttr = s => esc(s).replace(/"/g,"&quot;");
+
+const PATHS_KEY="amadocs.filePaths";
+let filePaths={}; try{ filePaths=JSON.parse(localStorage.getItem(PATHS_KEY)||"{}"); }catch(_){ filePaths={}; }
+function rememberPath(name,p){ if(name&&p){ filePaths[name]=p; try{localStorage.setItem(PATHS_KEY,JSON.stringify(filePaths));}catch(_){} } }
+function forgetPath(name){ if(name&&filePaths[name]){ delete filePaths[name]; try{localStorage.setItem(PATHS_KEY,JSON.stringify(filePaths));}catch(_){} } }
+function resolveFilePath(file){
+  try{ if(desktop&&desktop.pathForFile){ const p=desktop.pathForFile(file); if(p) return p; } }catch(_){}
+  return file&&file.path ? file.path : null;
+}
+async function revealFile(name,docpath){
+  if(!desktop||!desktop.revealInFolder){ toast("Opening files in the explorer works in the AMAdocs desktop app."); return; }
+  // 1) Prefer the user's ORIGINAL source file, if AMAdocs remembers where it came from.
+  const src=filePaths[name];
+  if(src){
+    try{ const res=await desktop.revealInFolder(src); if(res&&res.ok) return; }catch(_){}
+    // original moved/deleted → fall through to AMAdocs' own copy
+  }
+  // 2) Fallback: reveal AMAdocs' OWN retained copy, so "reveal" never dead-ends —
+  // the user can always find their docs on disk (their files, their machine).
+  const dp=docpath||docpathFor(name);
+  if(dp){
+    try{
+      const r=await fetch(`${API}/workspace/${WS_SLUG}/original-location?path=${encodeURIComponent(dp)}`);
+      const j=await r.json().catch(()=>null);
+      if(j&&j.ok&&j.path){
+        const res=await desktop.revealInFolder(j.path);
+        if(res&&res.ok){ toast(src?"Your original wasn’t found — showing AMAdocs’ own copy.":"Showing AMAdocs’ own copy of this file."); return; }
+      }
+    }catch(_){}
+  }
+  toast("Couldn’t open the file location.");
+}
+// AMAdocs: open the folder where AMAdocs keeps its copy of every file, so the
+// user is never in the dark about where their documents live on disk.
+async function openStorageFolder(){
+  if(!desktop||!desktop.openFolder){ toast("This opens in the AMAdocs desktop app."); return; }
+  try{
+    const r=await fetch(`${API}/system/storage-location`);
+    const j=await r.json().catch(()=>null);
+    if(j&&j.ok&&j.path){
+      if(j.exists===false){ toast("AMAdocs hasn’t stored any files yet."); return; }
+      const res=await desktop.openFolder(j.path);
+      if(res&&res.ok) return;
+    }
+  }catch(_){}
+  toast("Couldn’t open the storage folder.");
+}
+
+/* ---------- Sync a folder (ride-on-GNOME bulk indexing) ----------
+   Reads the text your computer's own file indexer (GNOME LocalSearch / TinySPARQL)
+   has ALREADY extracted for the files in a folder, and embeds them into a chosen
+   collection — so AMAdocs indexes a whole folder without re-scanning the disk.
+   Bounded + stoppable by design (THE #1 RULE). Desktop only. */
+
+const shortName = p => (String(p||"").split("/").filter(Boolean).pop() || String(p||""));
+
+// Switch the app's active collection: re-point WS_SLUG/WS_NAME, force docs-only
+// answering, and reload its document list (the chat is left as-is). This is what
+// makes a just-synced folder immediately visible and chattable.
+async function setActiveWorkspace(slug,name){
+  WS_SLUG=slug; WS_NAME=name||slug;
+  try{ await fetch(`${API}/workspace/${WS_SLUG}/update`,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({chatMode:"query"})}); }catch(_){}
+  await loadDocuments();
+}
+
+const syncModal=document.createElement("div"); syncModal.id="syncModal"; syncModal.className="hidden";
+syncModal.innerHTML=
+  `<div class="dlcard">`+
+    `<div class="dlhead"><h3>Sync a folder</h3><button class="x" id="syncX" title="Close">✕</button></div>`+
+    `<div class="dlbody" id="syncBody"></div>`+
+    `<div class="dlfoot">📂 AMAdocs reads the text your computer has already catalogued for these files — it doesn’t re-scan your whole disk. Large folders index in the background and you can stop anytime.</div>`+
+  `</div>`;
+document.body.appendChild(syncModal);
+syncModal.addEventListener("click",e=>{ if(e.target===syncModal) closeSyncModal(); });
+syncModal.querySelector("#syncX").onclick=closeSyncModal;
+function closeSyncModal(){ syncModal.classList.add("hidden"); }
+
+let syncFolder=null;
+
+async function openSyncModal(){
+  if(!desktop||!desktop.pickFolder){ toast("Folder sync works in the AMAdocs desktop app."); return; }
+  const folder=await desktop.pickFolder();
+  if(!folder) return;   // cancelled
+  await showSyncModalFor(folder);
+}
+
+// Build + show the sync modal for an already-chosen folder. Split from the picker
+// step so it can be driven without the native dialog (and so the dialog stays a
+// thin shell). Fetches collections, renders the dryRun banner.
+async function showSyncModalFor(folder){
+  syncFolder=folder;
+  const body=syncModal.querySelector("#syncBody");
+  let workspaces=[];
+  try{ const r=await fetch(`${API}/workspaces`); workspaces=((await r.json()).workspaces)||[]; }catch(_){}
+  const opts=workspaces.map(w=>`<option value="${escAttr(w.slug)}"${w.slug===WS_SLUG?" selected":""}>${esc(w.name)}</option>`).join("");
+  const short=shortName(folder);
+  body.innerHTML=
+    `<div class="sync-folder">Folder: <b>${esc(folder)}</b></div>`+
+    `<div class="sync-row"><label>Add to collection</label>`+
+      `<select id="syncWs">${opts}<option value="__new__">➕ New collection…</option></select></div>`+
+    `<div class="sync-row hidden" id="syncNewRow"><label>New collection name</label>`+
+      `<input type="text" id="syncNewName" placeholder="${escAttr(short)}" value="${escAttr(short)}"></div>`+
+    `<label class="sync-opt"><input type="checkbox" id="syncReconcile"><span>Re-scan the disk first (slower). Turn this on the first time, or if files seem to be missing — it wakes your computer’s file indexer.</span></label>`+
+    `<div class="sync-banner" id="syncBanner">Checking what’s ready to index…</div>`+
+    `<button class="sync-go" id="syncGo" disabled>Sync</button>`;
+  syncModal.classList.remove("hidden");
+  const wsSel=body.querySelector("#syncWs"), newRow=body.querySelector("#syncNewRow");
+  wsSel.onchange=()=>{ newRow.classList.toggle("hidden",wsSel.value!=="__new__"); refreshSyncPlan(); };
+  body.querySelector("#syncReconcile").onchange=refreshSyncPlan;
+  body.querySelector("#syncGo").onclick=runSync;
+  refreshSyncPlan();
+}
+
+// Preview the work (dryRun) and render the honest banner. dryRun never restarts the
+// OS indexer (no side effects) — so on a dormant indexer it returns 503, which we turn
+// into a "switch on Re-scan" hint. A brand-new collection has no prior state to diff,
+// so we show a generic "index everything" line rather than a misleading count.
+async function refreshSyncPlan(){
+  const body=syncModal.querySelector("#syncBody");
+  const banner=body.querySelector("#syncBanner"), go=body.querySelector("#syncGo");
+  const wsSel=body.querySelector("#syncWs");
+  go.disabled=true; banner.classList.remove("warn");
+  if(wsSel.value==="__new__"){
+    banner.innerHTML=`A new collection will be filled with the catalogued files in this folder (up to 200 at a time — run Sync again to continue if there are more).`;
+    go.disabled=false; return;
+  }
+  banner.textContent="Checking what’s ready to index…";
+  try{
+    const r=await fetch(`${API}/workspace/${wsSel.value}/gnome-sync`,{
+      method:"POST",headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({folder:syncFolder,dryRun:true})
+    });
+    const d=await r.json().catch(()=>({}));
+    if(r.status===503){
+      banner.innerHTML=`<span class="warn">Your computer’s file indexer isn’t running, so AMAdocs can’t see this folder yet. Switch on “Re-scan the disk first” to start it.</span>`;
+      const rc=body.querySelector("#syncReconcile"); if(rc&&!rc.checked){ rc.checked=true; } // nudge it on
+      go.disabled=false; return;
+    }
+    if(!r.ok){ banner.textContent=(d&&d.error)||"Couldn’t check this folder."; return; }
+    const queued=d.queued||0, deleted=d.deleted||0, remaining=d.remaining||0, indexed=d.indexed||0;
+    if(queued===0 && deleted===0){
+      banner.innerHTML=indexed?`All ${indexed} catalogued file(s) in this folder are already indexed — nothing to do.`:`Your computer hasn’t catalogued any files in this folder yet. Switch on “Re-scan the disk first” to index it.`;
+      go.disabled=indexed?false:false; // allow a re-run either way (a reconcile run may find more)
+    }else{
+      let t=`<b>${queued}</b> file${queued===1?"":"s"} will be indexed now`;
+      if(remaining>0) t+=` (${remaining} more after — run Sync again to continue)`;
+      if(deleted>0) t+=`, and ${deleted} no longer on disk will be removed`;
+      t+=`. Large batches can keep your computer busy for a while — you can stop anytime.`;
+      banner.innerHTML=t;
+      go.disabled=false;
+    }
+  }catch(e){ banner.textContent="Couldn’t reach the engine."; }
+}
+
+async function runSync(){
+  const body=syncModal.querySelector("#syncBody");
+  const wsSel=body.querySelector("#syncWs");
+  const reconcile=body.querySelector("#syncReconcile").checked;
+  const folder=syncFolder;
+  let slug=wsSel.value, name=null;
+  if(slug==="__new__"){
+    name=(body.querySelector("#syncNewName").value||"").trim();
+    if(!name){ toast("Name your new collection first."); return; }
+    try{
+      const c=await fetch(`${API}/workspace/new`,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({name})});
+      const w=(await c.json()).workspace;
+      if(!w||!w.slug) throw 0;
+      slug=w.slug;
+    }catch(_){ toast("Couldn’t create the collection."); return; }
+  }else{
+    name=wsSel.options[wsSel.selectedIndex].textContent;
+  }
+  closeSyncModal();
+  await setActiveWorkspace(slug,name);
+  startFolderSync(folder,slug,name,reconcile);
+}
+
+// Run the real sync and track it. We open the progress stream FIRST so no events are
+// missed, then POST gnome-sync (which returns 202 and embeds asynchronously). The
+// status bubble carries the STOP button (global kill switch). On overflow it offers
+// a "Continue" action that runs the next bounded batch.
+async function startFolderSync(folder,slug,name,reconcile){
+  heroEl.classList.add("hidden"); splitEl.classList.remove("hidden");
+  const status=addSystemMsg(`📂 Syncing “${shortName(folder)}” into “${name}”…`,{timer:true,onStop:stopAllIngest});
+  let es=null, total=0, done=0, failed=0, settled=false;
+  const cleanup=()=>{ if(es){ try{es.close();}catch(_){} es=null; } };
+  const prog=new Promise(resolve=>{
+    try{
+      es=new EventSource(apiUrl(`${API}/workspace/${slug}/embed-progress`));
+      es.onmessage=ev=>{
+        let m; try{m=JSON.parse(ev.data);}catch(_){ return; }
+        if(m.type==="batch_starting"){ if(m.totalDocs) total=m.totalDocs; }
+        else if(m.type==="doc_starting"){ if(m.totalDocs) total=m.totalDocs; const i=(m.docIndex!=null?m.docIndex+1:done+1); status.set(`📂 Indexing ${i} of ${total||"…"} — “${shortName(m.filename)}”`); }
+        else if(m.type==="doc_complete"){ done=(m.docIndex!=null?m.docIndex+1:done+1); if(m.totalDocs) total=m.totalDocs; status.set(`📂 Indexed ${done} of ${total||done}…`); }
+        else if(m.type==="doc_failed"){ failed++; }
+        else if(m.type==="all_complete"){ if(!settled){ settled=true; resolve({kind:"done",embedded:m.embedded,failed:m.failed!=null?m.failed:failed}); } }
+        else if(m.type==="stopped"){ if(!settled){ settled=true; resolve({kind:"stopped"}); } }
+      };
+      es.onerror=()=>{};   // SSE auto-reconnects; the safety timeout covers a dead stream
+    }catch(_){ /* no EventSource → rely on the 202 + timeout */ }
+  });
+
+  let d;
+  try{
+    const r=await fetch(`${API}/workspace/${slug}/gnome-sync`,{
+      method:"POST",headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({folder,reconcile})
+    });
+    d=await r.json().catch(()=>({}));
+    if(r.status===503){ cleanup(); status.error("Your computer’s file indexer isn’t running. Open Sync again and switch on “Re-scan the disk first”."); return; }
+    if(r.status!==202){ cleanup(); status.error((d&&d.error)||"Couldn’t start the sync."); return; }
+  }catch(e){ cleanup(); status.error("Couldn’t reach the engine."); return; }
+
+  const queued=d.queued||0, remaining=d.remaining||0, deleted=d.deleted||0;
+  if(queued===0){
+    cleanup();
+    status.ok(deleted?`Up to date — removed ${deleted} file(s) no longer on disk.`:"Everything in that folder is already indexed.");
+    await loadDocuments(); return;
+  }
+  if(!total) total=queued;
+
+  const timeout=new Promise(res=>setTimeout(()=>res({kind:"timeout"}),1000*60*60));
+  const res=await Promise.race([prog,timeout]);
+  cleanup();
+  await loadDocuments();
+  if(res.kind==="stopped"){
+    status.error("Sync stopped. Your collection keeps whatever was indexed so far — run Sync again to continue.");
+  }else{
+    const n=(res.kind==="done"&&res.embedded!=null)?res.embedded:done;
+    let msg=`Indexed ${n} file${n===1?"":"s"} into “${name}”.`;
+    if(deleted) msg+=` Removed ${deleted}.`;
+    if(remaining>0){
+      status.okSticky(msg+` ${remaining} more remain.`);
+      status.addAction("Continue","syscont",()=>{ status.remove(); startFolderSync(folder,slug,name,false); });
+    }else{
+      status.ok(msg);
+    }
+  }
+}
+
+// THE #1 RULE global kill switch — instantly halt ALL ingest. Bound to the STOP
+// button on a running sync's status bubble; the worker's `stopped` event settles it.
+async function stopAllIngest(){
+  try{ await fetch(`${API}/system/stop-all`,{method:"POST",headers:{'Content-Type':'application/json'},body:"{}"}); }
+  catch(_){ toast("Couldn’t reach the engine to stop."); }
+}
+
+/* ---------- in-chat status messages ----------
+   The chat is the app's single, direct status surface. A "system" message is a
+   distinct centered bubble in the conversation flow, used for the long, silent
+   jobs (indexing a pile of files — OCR on scanned PDFs can run for minutes) and
+   any other app status. While active it shows a spinning dial and a live elapsed
+   timer (continuous motion = proof it's working, not stuck), then resolves to a
+   ✓ done (fades away) or ⚠ error (stays put) state. Returns a small handle. */
+function addSystemMsg(text,{timer=false,onStop=null}={}){
+  const row=document.createElement("div"); row.className="row sys";
+  row.innerHTML=`<div class="sysbub"><span class="dial"></span>`+
+    `<span class="systx"></span>`+(timer?`<span class="systime"></span>`:``)+
+    (onStop?`<button type="button" class="sysstop">Stop</button>`:``)+`</div>`;
+  messagesEl.appendChild(row);
+  messagesEl.scrollTop=messagesEl.scrollHeight;
+  const bub=row.querySelector(".sysbub"), tx=row.querySelector(".systx"), timeEl=row.querySelector(".systime");
+  tx.textContent=text;
+  // AMAdocs: an inline STOP button (THE #1 RULE kill switch) for long ingest jobs.
+  const stopBtn=bub.querySelector(".sysstop");
+  if(stopBtn) stopBtn.onclick=()=>{ stopBtn.disabled=true; stopBtn.textContent="Stopping…"; onStop(); };
+  const start=Date.now(); let h=null;
+  if(timer){
+    const tick=()=>{ const s=Math.floor((Date.now()-start)/1000); timeEl.textContent=Math.floor(s/60)+":"+String(s%60).padStart(2,"0"); };
+    tick(); h=setInterval(tick,1000);
+  }
+  function settle(tone,icon,t,fade){
+    if(h){ clearInterval(h); h=null; }
+    bub.classList.add(tone);
+    const d=bub.querySelector(".dial"); if(d) d.outerHTML=`<span class="sysic">${icon}</span>`;
+    if(timeEl) timeEl.remove();
+    if(stopBtn) stopBtn.remove();
+    if(t!=null) tx.textContent=t;
+    messagesEl.scrollTop=messagesEl.scrollHeight;
+    if(fade) setTimeout(()=>{ bub.classList.add("gone"); setTimeout(()=>row.remove(),450); },4500);
+  }
+  return {
+    set(t){ tx.textContent=t; },
+    // AMAdocs: append an inline action button (e.g. "Continue") to a settled bubble.
+    addAction(label,cls,fn){ const b=document.createElement("button"); b.type="button"; b.className=cls; b.textContent=label; b.onclick=()=>fn(b); bub.appendChild(b); return b; },
+    ok(t){ settle("ok","✓",t,true); },        // success fades away after a moment
+    okSticky(t){ settle("ok","✓",t,false); },  // success that stays (e.g. has a follow-up action)
+    error(t){ settle("err","⚠",t,false); },    // problems stay put
+    remove(){ if(h){clearInterval(h);h=null;} row.remove(); }
+  };
+}
+
+/* ---------- toast ---------- */
+function toast(msg){
+  let t=document.getElementById("toast");
+  if(!t){ t=document.createElement("div"); t.id="toast"; document.body.appendChild(t); }
+  t.textContent=msg; t.classList.add("show");
+  clearTimeout(t._h); t._h=setTimeout(()=>t.classList.remove("show"),3400);
+}
+
+/* ---------- right-click menu on documents ---------- */
+const docMenu=document.createElement("div"); docMenu.className="ctxmenu hidden"; document.body.appendChild(docMenu);
+// AMAdocs: is this an image file? Images already carry an AI caption (their
+// summary), so the "Summarize" action is offered only for text documents.
+function isImageName(name){
+  const e=(String(name).split('.').pop()||'').toLowerCase();
+  return ['png','jpg','jpeg','webp','gif','bmp','tif','tiff'].includes(e);
+}
+// AMAdocs: formats we can embed the summary INTO (the file's own metadata) for the
+// "Save copy with summary" action. Major formats only for now (most of a typical drive).
+function canEmbedSummary(name){
+  const e=(String(name).split('.').pop()||'').toLowerCase();
+  return ['pdf','docx','xlsx','pptx','jpg','jpeg','png'].includes(e);
+}
+function showDocMenu(x,y,name,docpath){
+  const canSummarize=!isImageName(name);
+  const canEmbed=canEmbedSummary(name);
+  const isDeep=(docModeByPath[docpath]||"deep")==="deep";
+  docMenu.innerHTML=
+    (isDeep?`<button type="button" data-act="deep" class="done">✓ Deep searched</button>`
+           :`<button type="button" data-act="deep">🔍 Deep search this file</button>`)+
+    (canSummarize?`<button type="button" data-act="summarize">🧠 Summarize</button>`:``)+
+    (canEmbed?`<button type="button" data-act="embed">💾 Save copy with summary</button>`:``)+
+    `<button type="button" data-act="reveal">🗂️ Show in file manager</button>`+
+    `<button type="button" data-act="delete" class="danger">🗑️ Remove from Library</button>`;
+  if(!isDeep) docMenu.querySelector('[data-act="deep"]').onclick=()=>{ hideDocMenu(); deepSearchDoc(name,docpath); };
+  if(canSummarize) docMenu.querySelector('[data-act="summarize"]').onclick=()=>{ hideDocMenu(); summarizeDoc(name,docpath); };
+  if(canEmbed) docMenu.querySelector('[data-act="embed"]').onclick=()=>{ hideDocMenu(); saveWithSummary(name,docpath); };
+  docMenu.querySelector('[data-act="reveal"]').onclick=()=>{ hideDocMenu(); revealFile(name,docpath); };
+  docMenu.querySelector('[data-act="delete"]').onclick=()=>{ hideDocMenu(); deleteDoc(docpath,name); };
+  docMenu.classList.remove("hidden");
+  docMenu.style.left=Math.min(x,innerWidth-docMenu.offsetWidth-8)+"px";
+  docMenu.style.top=Math.min(y,innerHeight-docMenu.offsetHeight-8)+"px";
+}
+function hideDocMenu(){ docMenu.classList.add("hidden"); }
+
+// AMAdocs: "Deep search" one file (the right-click action / sidebar pill). By default
+// a dropped file is only CATALOGED — its summary is embedded so the librarian can find
+// it, but the full text isn't searchable. This re-embeds the whole file in place so the
+// AI can answer from any passage inside it (and citations jump to the cited page).
+async function deepSearchDoc(name,docpath){
+  if((docModeByPath[docpath]||"deep")==="deep"){ toast(`“${name}” is already fully searchable.`); return; }
+  const status=addSystemMsg(`🔍 Deep searching “${name}” — reading the whole file…`,{timer:true});
+  try{
+    const r=await fetch(`${API}/workspace/${WS_SLUG}/doc-deep-search`,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({path:docpath})
+    });
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.success){ status.error(d.error||"Couldn’t deep search this file."); return; }
+    docModeByPath[docpath]="deep";
+    status.ok(`🔍 “${name}” is now fully searchable — ask about anything inside it.`);
+    await loadDocuments();
+  }catch(e){ status.error("Couldn’t reach the search indexer."); }
+}
+
+// AMAdocs: on-demand document summary (the right-click "Summarize" action). Asks the
+// engine to write a short "catalog card" gist of the document with the local AI, shows
+// a live status bubble while it works, then drops the summary into the chat. The
+// summary is cached server-side (aiSummary) — re-summarising is instant unless changed.
+async function summarizeDoc(name,docpath){
+  const status=addSystemMsg(`🧠 Summarizing “${name}”…`,{timer:true});
+  try{
+    const r=await fetch(`${API}/workspace/${WS_SLUG}/doc-summarize`,{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({path:docpath})
+    });
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok||!d.summary){ status.error(d.error||"Couldn’t summarize this document."); return; }
+    status.ok(d.cached?`🧠 Summary of “${name}” (already done)`:`🧠 Summarized “${name}”`);
+    addMessage("assistant",`<strong>🧠 Summary of ${esc(name)}</strong>${fmt("\n\n"+d.summary)}`);
+    // If the document's text view is open, refresh it so the stored summary panel shows.
+    if(curDoc&&curDoc.docpath===docpath&&curDoc.mode==="text") loadTextView();
+  }catch(e){ status.error("Couldn’t reach the summarizer."); }
+}
+
+// AMAdocs: download a COPY of the file with its AI summary embedded in the file's own
+// metadata (PDF/office/jpg/png). The user's source file is untouched. Generates the
+// summary first if the document hasn't been summarized yet (so it can take a moment).
+async function saveWithSummary(name,docpath){
+  const status=addSystemMsg(`💾 Preparing “${name}” with its summary…`,{timer:true});
+  try{
+    const r=await fetch(apiUrl(`${API}/workspace/${WS_SLUG}/doc-export-embedded?path=${encodeURIComponent(docpath)}`));
+    const ct=r.headers.get("Content-Type")||"";
+    if(!r.ok||ct.includes("application/json")){
+      let msg="Couldn’t prepare this file.";
+      try{ const j=await r.json(); if(j&&j.error) msg=j.error; }catch(_){}
+      status.error(msg); return;
+    }
+    const blob=await r.blob();
+    let fname=name.replace(/\.[^.]+$/,"")+"-with-summary"+((name.match(/\.[^.]+$/)||[""])[0]);
+    const cd=r.headers.get("Content-Disposition")||"";
+    const m=cd.match(/filename="?([^";]+)"?/); if(m) fname=m[1];
+    const url=URL.createObjectURL(blob);
+    const a=document.createElement("a"); a.href=url; a.download=fname;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),1000);
+    status.ok(`💾 Saved “${fname}” — summary is inside the file`);
+  }catch(e){ status.error("Couldn’t reach the summarizer."); }
+}
+window.addEventListener("click",hideDocMenu);
+window.addEventListener("blur",hideDocMenu);
+window.addEventListener("resize",hideDocMenu);
+window.addEventListener("scroll",hideDocMenu,true);
+
+/* citations inside answers: a chip jumps to the cited page in the viewer;
+   the "open in file explorer" links reveal the original file in the OS. */
+messagesEl.addEventListener("click",e=>{
+  const jump=e.target.closest("[data-docpath]");
+  if(jump){
+    e.preventDefault();
+    const cid=parseInt(jump.dataset.cite||"",10);
+    const cite=(cid>=0&&CITES[cid])?CITES[cid]:null;
+    jumpToCitation(jump.dataset.docpath,jump.dataset.name||"",parseInt(jump.dataset.page||"",10)||null,cite?cite.text:"");
+    return;
+  }
+  const el=e.target.closest("[data-reveal]"); if(!el) return;
+  e.preventDefault(); revealFile(el.getAttribute("data-reveal"));
+});
+
+/* ---------- draggable panel resizing ---------- */
+const sidebarEl=$("#sidebar"), gutterSide=$("#gutterSide"), gutterSplit=$("#gutterSplit");
+const SIDE_KEY="amadocs.sidebarW", VIEW_KEY="amadocs.viewerW";
+
+function makeResizer(gutter,getW,setW,minW,getMaxW,onDone){
+  gutter.addEventListener("pointerdown",e=>{
+    e.preventDefault();
+    const startX=e.clientX, startW=getW();
+    gutter.classList.add("active");
+    document.body.style.cursor="col-resize"; document.body.style.userSelect="none";
+    const move=ev=>{
+      let w=Math.max(minW,Math.min(getMaxW(),startW+(ev.clientX-startX)));
+      setW(w);
+    };
+    const up=()=>{
+      gutter.classList.remove("active");
+      document.body.style.cursor=""; document.body.style.userSelect="";
+      document.removeEventListener("pointermove",move);
+      document.removeEventListener("pointerup",up);
+      if(onDone) onDone();
+    };
+    document.addEventListener("pointermove",move);
+    document.addEventListener("pointerup",up);
+  });
+}
+
+// Sidebar width (200px .. leave room for the rest of the app)
+(function(){
+  const saved=parseInt(localStorage.getItem(SIDE_KEY),10);
+  if(saved) sidebarEl.style.width=saved+"px";
+  makeResizer(gutterSide,
+    ()=>sidebarEl.getBoundingClientRect().width,
+    w=>{ sidebarEl.style.width=w+"px"; },
+    200, ()=>Math.min(560, innerWidth-480),
+    ()=>localStorage.setItem(SIDE_KEY, Math.round(sidebarEl.getBoundingClientRect().width)));
+})();
+
+// Reading pane vs. chat split width
+function restoreViewerWidth(){
+  const saved=parseInt(localStorage.getItem(VIEW_KEY),10);
+  if(saved) viewerEl.style.flex="0 0 "+saved+"px";
+}
+makeResizer(gutterSplit,
+  ()=>viewerEl.getBoundingClientRect().width,
+  w=>{ viewerEl.style.flex="0 0 "+w+"px"; },
+  260, ()=>Math.max(260, splitEl.getBoundingClientRect().width-340),
+  ()=>localStorage.setItem(VIEW_KEY, Math.round(viewerEl.getBoundingClientRect().width)));
+
+/* ---------- AI model picker (swap which local model answers) ---------- */
+// Friendly names/blurbs for known permissive models. Any other installed model
+// still appears, labelled by a tidied version of its raw id.
+const KNOWN_MODELS = {
+  // keyed by exact id where a tag matters (model size), else by base name
+  "qwen3:1.7b":{name:"Qwen 3 (small)", desc:"Light & fast · 1.7B"},
+  "qwen3:4b": {name:"Qwen 3",     desc:"Strong all-rounder · 4B"},
+  "phi3.5":   {name:"Phi-3.5",    desc:"Balanced all-rounder · 3.8B · the default"},
+  "phi4-mini":{name:"Phi-4 mini", desc:"Newer than Phi-3.5, a little sharper"},
+  "phi4":     {name:"Phi-4",      desc:"Most capable Phi · needs more memory"},
+  "qwen3":    {name:"Qwen 3",     desc:"Strong all-rounder"},
+  "llama3.2": {name:"Llama 3.2",  desc:"Light and fast"},
+  "llama3.1": {name:"Llama 3.1",  desc:"Capable · larger, slower"},
+  "gemma2":   {name:"Gemma 2",    desc:"Google · compact"},
+  "mistral":  {name:"Mistral",    desc:"7B · needs more memory"},
+};
+// Never offer these in the chat picker — either research/non-commercial licences
+// that must not appear in a shipped AMAdocs build (e.g. Qwen2.5), or vision models
+// (moondream/llava) which aren't chat models: they run behind the scenes to make
+// images searchable, so they should never appear as a "answer with" option.
+// Matched on the id base.
+const HIDDEN_MODELS = [/^qwen2(\.\d+)?$/i, /^moondream/i, /^llava/i, /^bakllava/i];
+
+const modelBtn=$("#modelBtn"), modelNameEl=$("#modelName");
+let CUR_MODEL=null;
+
+const modelBase = id => String(id||"").split(":")[0].toLowerCase();
+const isHiddenModel = id => HIDDEN_MODELS.some(re=>re.test(modelBase(id)));
+function prettyModel(id){
+  if(KNOWN_MODELS[id]) return KNOWN_MODELS[id];           // exact tag (size-specific)
+  const base=modelBase(id);
+  if(KNOWN_MODELS[base]) return KNOWN_MODELS[base];
+  return { name: base.charAt(0).toUpperCase()+base.slice(1), desc:"Installed model" };
+}
+
+async function fetchInstalledModels(){
+  try{
+    const r=await fetch(`${API}/system/custom-models`,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:"ollama"})});
+    if(!r.ok) return [];
+    const {models=[]}=await r.json();
+    return models.map(m=>m&&m.id).filter(Boolean).filter(id=>!isHiddenModel(id));
+  }catch(_){ return []; }
+}
+
+function paintModelButton(){
+  if(!CUR_MODEL){ modelBtn.classList.add("hidden"); return; }
+  modelNameEl.textContent=prettyModel(CUR_MODEL).name;
+  modelBtn.classList.remove("hidden");
+}
+
+async function setModel(id){
+  if(!id || id===CUR_MODEL){ hideModelMenu(); return; }
+  const prev=CUR_MODEL, p=prettyModel(id);
+  CUR_MODEL=id; paintModelButton(); hideModelMenu();
+  try{
+    const r=await fetch(`${API}/workspace/${WS_SLUG}/update`,{method:"POST",headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({chatProvider:"ollama",chatModel:id})});
+    if(!r.ok) throw 0;
+    firstQuery=true; // next answer cold-loads the new model — re-show the warming hint
+    toast(`Now using ${p.name}. Your first answer may take a moment while it loads.`);
+  }catch(e){
+    CUR_MODEL=prev; paintModelButton();
+    toast("Couldn’t switch the model. Make sure the engine is running, then try again.");
+  }
+}
+
+const modelMenu=document.createElement("div"); modelMenu.className="ctxmenu modelmenu hidden"; document.body.appendChild(modelMenu);
+async function showModelMenu(){
+  const models=await fetchInstalledModels();
+  if(!models.length){ toast("No local AI models found. The engine bundles one on first run."); return; }
+  modelMenu.innerHTML =
+    `<div class="mm-head">Answer with</div>` +
+    models.map(id=>{
+      const p=prettyModel(id), cur=id===CUR_MODEL?" cur":"";
+      return `<button type="button" class="mm-item${cur}" data-model="${escAttr(id)}">`+
+             `<span class="mm-ic">🧠</span>`+
+             `<span class="mm-tx"><div class="mm-nm">${esc(p.name)}</div><div class="mm-ds">${esc(p.desc)}</div></span>`+
+             `<span class="mm-ck">✓</span></button>`;
+    }).join("") +
+    `<button type="button" class="mm-item" data-getmore><span class="mm-ic">⬇</span>`+
+      `<span class="mm-tx"><div class="mm-nm">Get another model…</div><div class="mm-ds">Download a different local AI</div></span>`+
+      `<span class="mm-ck"></span></button>` +
+    `<div class="mm-foot">Bigger, newer models answer better but need a faster computer. All run privately on this machine.</div>`;
+  modelMenu.querySelectorAll(".mm-item[data-model]").forEach(b=>b.onclick=ev=>{ ev.stopPropagation(); setModel(b.dataset.model); });
+  modelMenu.querySelector("[data-getmore]").onclick=ev=>{ ev.stopPropagation(); openDownloadModal(); };
+  modelMenu.classList.remove("hidden");
+  const r=modelBtn.getBoundingClientRect();
+  modelMenu.style.left=Math.max(8,Math.min(r.right-modelMenu.offsetWidth,innerWidth-modelMenu.offsetWidth-8))+"px";
+  modelMenu.style.top=(r.bottom+6)+"px";
+}
+function hideModelMenu(){ modelMenu.classList.add("hidden"); }
+modelBtn.addEventListener("click",e=>{
+  e.stopPropagation();
+  if(modelMenu.classList.contains("hidden")) showModelMenu(); else hideModelMenu();
+});
+window.addEventListener("click",hideModelMenu);
+window.addEventListener("blur",hideModelMenu);
+window.addEventListener("resize",hideModelMenu);
+window.addEventListener("scroll",hideModelMenu,true);
+
+async function loadCurrentModel(){
+  try{
+    const r=await fetch(`${API}/workspace/${WS_SLUG}`);
+    const data=await r.json();
+    const ws=data.workspace||(data.workspaces&&data.workspaces[0])||data;
+    CUR_MODEL=(ws&&ws.chatModel)||null;
+    if(!CUR_MODEL){
+      // No per-collection model set → it's using the engine default. Show that
+      // (prefer the bundled phi3.5) so the picker still appears and reads true.
+      const models=await fetchInstalledModels();
+      CUR_MODEL = models.find(m=>modelBase(m)==="phi3.5") || models[0] || null;
+    }
+    paintModelButton();
+  }catch(_){}
+}
+
+/* ---------- download a new model ---------- */
+const dlModal=document.createElement("div"); dlModal.id="dlModal"; dlModal.className="hidden";
+dlModal.innerHTML=
+  `<div class="dlcard">`+
+    `<div class="dlhead"><h3>Add an AI model</h3><button class="x" id="dlX" title="Close">✕</button></div>`+
+    `<div class="dlbody" id="dlBody"></div>`+
+    `<div class="dlfoot">⬇ Each model downloads once and then runs entirely on this computer — nothing leaves your machine. Bigger models give better answers but use more disk space and need a faster computer.</div>`+
+  `</div>`;
+document.body.appendChild(dlModal);
+dlModal.addEventListener("click",e=>{ if(e.target===dlModal) closeDownloadModal(); });
+dlModal.querySelector("#dlX").onclick=closeDownloadModal;
+function closeDownloadModal(){ dlModal.classList.add("hidden"); }
+
+function fmtBytes(n){ if(!n) return "0 MB"; const gb=n/1e9; return gb>=1 ? gb.toFixed(1)+" GB" : Math.round(n/1e6)+" MB"; }
+function humanStatus(s){ s=String(s||"");
+  if(/manifest/i.test(s)) return "Preparing…";
+  if(/pulling/i.test(s))  return "Downloading…";
+  if(/verif/i.test(s))    return "Verifying…";
+  if(/extract/i.test(s))  return "Unpacking…";
+  if(/success/i.test(s))  return "Finishing…";
+  return s ? s.charAt(0).toUpperCase()+s.slice(1) : "Working…"; }
+
+async function openDownloadModal(){
+  hideModelMenu();
+  const body=dlModal.querySelector("#dlBody");
+  body.innerHTML=`<div style="color:var(--muted);font-size:13px;padding:10px">Loading available models…</div>`;
+  dlModal.classList.remove("hidden");
+  let catalog=[], installed=[];
+  try{
+    const [c,inst]=await Promise.all([
+      fetch(`${API}/system/model-catalog`).then(r=>r.json()),
+      fetchInstalledModels()
+    ]);
+    catalog=(c&&c.models)||[]; installed=inst;
+  }catch(_){
+    body.innerHTML=`<div style="color:#b91c1c;font-size:13px;padding:10px">Couldn’t reach the engine. Make sure it’s running, then try again.</div>`;
+    return;
+  }
+  // A catalog entry counts as installed only if the right *variant* is present:
+  // tagged ids (qwen3:4b) need an exact match; untagged ids (phi3.5) match by
+  // base so they pair with the installed "phi3.5:latest".
+  const instSet=new Set(installed), instBase=new Set(installed.map(modelBase));
+  const isInstalled=id=> id.includes(":") ? instSet.has(id) : instBase.has(id);
+  body.innerHTML="";
+  catalog.forEach(m=>{
+    const isInst=isInstalled(m.id);
+    const row=document.createElement("div"); row.className="dlrow";
+    row.innerHTML=
+      `<div class="top">`+
+        `<div><div class="nm">${esc(m.name)}</div><div class="meta">~${esc(String(m.sizeGB))} GB · ${esc(m.license)}</div></div>`+
+        (isInst?`<span class="installed">✓ Installed</span>`:`<button type="button" class="dlbtn">⬇ Download</button>`)+
+      `</div>`+
+      `<div class="desc">${esc(m.desc)}</div>`+
+      `<div class="prog"><div class="bar"><i></i></div><div class="lbl"></div></div>`;
+    body.appendChild(row);
+    const btn=row.querySelector(".dlbtn");
+    if(btn) btn.onclick=()=>pullModel(m,row,btn);
+  });
+}
+
+// Stream a model pull over the SSE endpoint, calling onProgress({percent,completed,
+// total,status,...}) for each event. Resolves on success, throws on error/incomplete.
+// Shared by the download modal and the first-run setup screen.
+async function streamModelPull(modelId, onProgress){
+  const resp=await fetch(`${API}/system/pull-model`,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({model:modelId})});
+  if(!resp.ok||!resp.body) throw new Error("start");
+  const reader=resp.body.getReader(), dec=new TextDecoder(); let buf="", ok=false;
+  while(true){
+    const {done,value}=await reader.read(); if(done) break;
+    buf+=dec.decode(value,{stream:true});
+    const parts=buf.split("\n"); buf=parts.pop();
+    for(const line of parts){
+      const mm=line.match(/^data:\s*(.*)$/); if(!mm) continue;
+      let j; try{ j=JSON.parse(mm[1]) }catch(_){ continue }
+      if(j.error) throw new Error(j.error);
+      if(j.done){ ok=true; continue; }
+      onProgress&&onProgress(j);
+    }
+  }
+  if(!ok) throw new Error("incomplete");
+}
+
+async function pullModel(m,row,btn){
+  const prog=row.querySelector(".prog"), bar=row.querySelector(".bar > i"), lbl=row.querySelector(".prog .lbl");
+  btn.disabled=true; btn.textContent="Downloading…"; prog.classList.add("show"); lbl.textContent="Starting…";
+  try{
+    await streamModelPull(m.id, j=>{
+      if(j.percent!=null){ bar.style.width=j.percent+"%"; lbl.textContent=`${j.percent}% — ${fmtBytes(j.completed)} of ${fmtBytes(j.total)}`; }
+      else lbl.textContent=humanStatus(j.status);
+    });
+    bar.style.width="100%"; lbl.textContent="Done ✓";
+    closeDownloadModal();
+    if(m.type==="vision"){
+      // A vision model isn't something you "chat with" — it works in the
+      // background to read images. Don't switch the chat model to it.
+      toast(`${m.name} ready — images you add can now be searched by what's in them.`);
+    }else{
+      toast(`${m.name} downloaded — now using it.`);
+      await loadCurrentModel();   // refresh button label baseline
+      setModel(m.id);             // switch to the freshly downloaded model
+    }
+  }catch(e){
+    prog.classList.remove("show"); btn.disabled=false; btn.textContent="⬇ Download";
+    toast(`Couldn’t download ${m.name}. Check your internet connection and try again.`);
+  }
+}
+
+/* ---------- first-run setup: proactively download the AI on a clean install ---------- */
+// The bundle ships no Ollama model, so a fresh install can't answer anything until one
+// is pulled. Rather than wait for the user to ask a question and hit the reactive
+// "Download your AI…" prompt, greet them with a friendly one-time setup screen.
+const DEFAULT_CHAT_ID="phi3.5", VISION_MODEL_ID="moondream";
+const frEl=document.createElement("div"); frEl.id="firstRun"; frEl.className="hidden"; document.body.appendChild(frEl);
+function hideFirstRun(){ frEl.classList.add("hidden"); frEl.innerHTML=""; }
+
+async function maybeFirstRun(){
+  // Only treat an engine that *answered with an empty list* as a true first run.
+  // A network error means the engine is still warming up — don't nag; the reactive
+  // download prompt still covers the user later.
+  let chatModels;
+  try{
+    const r=await fetch(`${API}/system/custom-models`,{method:"POST",headers:{'Content-Type':'application/json'},body:JSON.stringify({provider:"ollama"})});
+    if(!r.ok) return;
+    const {models=[]}=await r.json();
+    chatModels=models.map(m=>m&&m.id).filter(Boolean).filter(id=>!isHiddenModel(id));
+  }catch(_){ return; }
+  if(chatModels.length) return;   // a chat model is already installed → not a first run
+  showFirstRun();
+}
+
+async function showFirstRun(){
+  // Best-effort catalog lookup for accurate sizes; fall back to known defaults.
+  let catalog=[];
+  try{ catalog=((await (await fetch(`${API}/system/model-catalog`)).json())||{}).models||[]; }catch(_){}
+  const chat=catalog.find(m=>m.id===DEFAULT_CHAT_ID), vision=catalog.find(m=>m.id===VISION_MODEL_ID);
+  const chatGB=chat?chat.sizeGB:2.2, visionGB=vision?vision.sizeGB:1.7;
+  frEl.innerHTML=
+    `<div class="fr-card">`+
+      `<div class="fr-mark">📚</div>`+
+      `<h2>Welcome to AMAdocs</h2>`+
+      `<p class="fr-sub">Before you can ask your documents anything, AMAdocs needs a one-time download `+
+        `of its local AI (~${chatGB} GB). After this it runs entirely on this computer — nothing you `+
+        `add or ask ever leaves your machine.</p>`+
+      `<label class="fr-opt"><input type="checkbox" id="frVision" checked>`+
+        `<span><b>Let AMAdocs read images & scans</b> (+~${visionGB} GB)`+
+        `<div class="fr-opt-ds">Adds image understanding so photos, whiteboards and receipts become searchable by what’s in them. Recommended.</div></span></label>`+
+      `<button type="button" class="fr-go" id="frGo">Download &amp; get started</button>`+
+      `<div class="fr-prog" id="frProg"><div class="bar"><i></i></div><div class="lbl" id="frLbl"></div></div>`+
+      `<div class="fr-err" id="frErr"></div>`+
+      `<div><button type="button" class="fr-skip" id="frSkip">Set up later</button></div>`+
+      `<div class="fr-foot">⬇ Downloads once over the internet, then works fully offline. Keep this window open until it finishes.</div>`+
+    `</div>`;
+  frEl.classList.remove("hidden");
+
+  const go=frEl.querySelector("#frGo"), skip=frEl.querySelector("#frSkip"), visionChk=frEl.querySelector("#frVision");
+  const prog=frEl.querySelector("#frProg"), bar=frEl.querySelector("#frProg .bar > i"), lbl=frEl.querySelector("#frLbl"), err=frEl.querySelector("#frErr");
+  skip.onclick=hideFirstRun;   // the reactive "Download your AI…" prompt still covers them later
+
+  go.onclick=async()=>{
+    err.classList.remove("show"); skip.style.display="none";
+    go.disabled=true; visionChk.disabled=true; prog.classList.add("show");
+    // The AI is required; image understanding is optional and pulled after it.
+    const queue=[{id:DEFAULT_CHAT_ID,label:"your AI"}];
+    if(visionChk.checked) queue.push({id:VISION_MODEL_ID,label:"image understanding"});
+    try{
+      for(const m of queue){
+        bar.style.width="0%"; lbl.textContent=`Downloading ${m.label}…`;
+        await streamModelPull(m.id, j=>{
+          if(j.percent!=null){ bar.style.width=j.percent+"%"; lbl.textContent=`Downloading ${m.label} · ${j.percent}% (${fmtBytes(j.completed)} of ${fmtBytes(j.total)})`; }
+          else lbl.textContent=`${m.label} · ${humanStatus(j.status)}`;
+        });
+      }
+      bar.style.width="100%"; lbl.textContent="✓ All set — opening AMAdocs…";
+      await loadCurrentModel();   // populate the model picker now that a model exists
+      setTimeout(hideFirstRun, 900);
+    }catch(e){
+      prog.classList.remove("show"); err.textContent="Couldn’t finish the download. Check your internet connection and try again.";
+      err.classList.add("show"); go.disabled=false; visionChk.disabled=false; go.textContent="Try again"; skip.style.display="";
+    }
+  };
+}
+
+/* boot */
+(async()=>{ await ensureWorkspace(); await loadDocuments(); await loadCurrentModel(); await maybeFirstRun(); })();
+</script>
+</body>
+</html>

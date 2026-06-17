@@ -1,0 +1,32 @@
+ M collector/processSingleFile/convert/asImage.js
+ M collector/processSingleFile/convert/asPDF/index.js
+ M collector/processSingleFile/index.js
+ M collector/utils/OCRLoader/index.js
+ M collector/utils/WhisperProviders/localWhisper.js
+ M collector/utils/constants.js
+ M collector/utils/files/index.js
+ M server/endpoints/chat.js
+ M server/endpoints/system.js
+ M server/endpoints/workspaces.js
+ M server/index.js
+ M server/jobs/embedding-worker.js
+ M server/models/documents.js
+ M server/models/systemSettings.js
+ M server/package.json
+ M server/prisma/schema.prisma
+ M server/utils/AiProviders/ollama/index.js
+ M server/utils/EmbeddingWorkerManager.js
+ M server/utils/chats/stream.js
+ M server/utils/collectorApi/index.js
+ M server/utils/files/multer.js
+ M server/yarn.lock
+?? collector/utils/DocSummary/
+?? collector/utils/VisionCaption/
+?? server/package-lock.json
+?? server/storage/anythingllm.db.bak-1781320702
+?? server/storage/gnome-sync/
+?? server/storage/originals/
+?? server/storage/vector-cache.bak-1781321058/
+?? server/utils/DocSummary/
+?? server/utils/GnomeBridge/
+?? server/utils/MetadataEmbed/
