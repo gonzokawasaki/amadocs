@@ -116,6 +116,29 @@ The native embedder model downloads from HuggingFace on the **first embed** (nee
 
 ---
 
+## Coexisting with the stock AnythingLLM already installed on this machine
+
+This box already has **AnythingLLM + Ollama (with a qwen model)** installed. They coexist fine, with
+one caveat:
+
+- **Ollama — shared, no conflict.** Both use the one daemon on `127.0.0.1:11434`. Our stack does NOT
+  start its own Ollama (`start-stack.sh` expects one running), and the Electron app **pings 11434 and
+  only spawns its own if nothing answers** (`amadocs-desktop/main.js`). So the existing system Ollama
+  is reused. Just `ollama pull granite4.1:3b` (+ `moondream`) into that shared daemon. The qwen model
+  sitting alongside is harmless — our workspaces pin their own model. *(Licensing note: Qwen**2.5** is
+  non-commercial and our model picker hides it via `HIDDEN_MODELS`; Qwen**3** is Apache-2.0 and fine.
+  Neither causes a runtime conflict.)*
+- **⚠️ Ports — the one real conflict. Do NOT run both AnythingLLMs at once.** Our stack binds
+  **3001 (server)** and **3000 (frontend)** — which are **AnythingLLM's own defaults** — plus
+  **8888 (collector)**. If the installed AnythingLLM is running, those ports are already taken and our
+  server won't bind. **Quit the stock AnythingLLM before launching ours** (or remap `SERVER_PORT` in
+  `server/.env.development` + the collector/frontend ports — simpler to just not run both).
+- **Storage/data — separate, no conflict.** Our fork uses a repo-local DB
+  (`DATABASE_URL=file:../storage/anythingllm.db`) and its own `storage/`. The stock app keeps its own.
+  Workspaces, embeddings, and settings do not cross over.
+
+---
+
 ## GNOME indexer (the whole reason for the move)
 
 On this GNOME box, LocalSearch/TinySPARQL should be installed and **running warm** (unlike the Arch
