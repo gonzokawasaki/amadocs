@@ -6,6 +6,8 @@ node_modules/
 tooling/ollama-models/
 tooling/ollama/
 **/ollama-models/
+tooling/ollama.tar.zst
+*.zst
 *.gguf
 *.bin
 *.onnx
@@ -36,3 +38,8 @@ amadocs-desktop/vendor/
 tooling/logs/
 *.log
 .DS_Store
+
+# --- Editor / local state (not needed on the handover machine) ---
+.obsidian/
+tooling/tinysparql-sync-state.*.json
+.claude/settings.local.json

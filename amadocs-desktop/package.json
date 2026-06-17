@@ -1,0 +1,51 @@
+{
+  "name": "amadocs-desktop",
+  "productName": "AMAdocs",
+  "version": "0.1.0",
+  "description": "Ask your documents anything — private, local AI for your files.",
+  "main": "main.js",
+  "author": "AMAdocs",
+  "license": "MIT",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder"
+  },
+  "devDependencies": {
+    "electron": "^31.7.6",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.amadocs.app",
+    "productName": "AMAdocs",
+    "directories": { "output": "dist" },
+    "npmRebuild": false,
+    "files": ["main.js", "preload.js", "loading.html", "ui/**/*"],
+    "extraResources": [
+      {
+        "from": "../anythingllm-upstream/server",
+        "to": "engine/server",
+        "filter": ["**/*", "!storage/**", "!.env*", "!**/*.log"]
+      },
+      {
+        "from": "../anythingllm-upstream/collector",
+        "to": "engine/collector",
+        "filter": ["**/*", "!storage/**", "!hotdir/**", "!.env*", "!**/*.log"]
+      },
+      {
+        "from": "../anythingllm-upstream/server/storage/models",
+        "to": "storage-seed/models"
+      },
+      { "from": "vendor/anythingllm.db", "to": "storage-seed/anythingllm.db" },
+      { "from": "vendor/node", "to": "node" },
+      { "from": "vendor/ollama", "to": "ollama" },
+      { "from": "../LICENSE", "to": "LICENSE" },
+      { "from": "../THIRD_PARTY_LICENSES", "to": "THIRD_PARTY_LICENSES" }
+    ],
+    "linux": {
+      "target": ["AppImage", "pacman"],
+      "category": "Office",
+      "maintainer": "AMAdocs",
+      "artifactName": "AMAdocs-${version}-${arch}.${ext}"
+    }
+  }
+}
