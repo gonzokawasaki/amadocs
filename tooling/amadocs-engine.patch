@@ -1,0 +1,3078 @@
+diff --git a/collector/processSingleFile/convert/asImage.js b/collector/processSingleFile/convert/asImage.js
+index 85e941c..ee42a0a 100644
+--- a/collector/processSingleFile/convert/asImage.js
++++ b/collector/processSingleFile/convert/asImage.js
+@@ -6,6 +6,7 @@ const {
+   writeToServerDocuments,
+ } = require("../../utils/files");
+ const OCRLoader = require("../../utils/OCRLoader");
++const VisionCaption = require("../../utils/VisionCaption");
+ const { default: slugify } = require("slugify");
+ 
+ async function asImage({
+@@ -14,21 +15,62 @@ async function asImage({
+   options = {},
+   metadata = {},
+ }) {
+-  let content = await new OCRLoader({
+-    targetLanguages: options?.ocr?.langList,
+-  }).ocrImage(fullFilePath);
++  // AMAdocs: read an image two ways and combine them, so a picture is searchable
++  // by both its literal text AND its visual content:
++  //   • OCR  — pulls out any text glyphs in the image (exact anchors).
++  //   • Vision caption — a local model describes what's *in* the image, so
++  //     text-less photos/whiteboards/screenshots are no longer dead weight.
++  // Both are best-effort; we only fail the file if BOTH come back empty.
++  const [ocr, caption] = await Promise.all([
++    new OCRLoader({ targetLanguages: options?.ocr?.langList })
++      .ocrImage(fullFilePath)
++      .catch(() => ({ text: null, confidence: 0, reliable: false })),
++    new VisionCaption({
++      model: options?.vision?.model,
++      basePath: options?.vision?.ollamaBasePath,
++    })
++      .caption(fullFilePath)
++      .catch(() => null),
++  ]);
+ 
+-  if (!content?.length) {
+-    console.error(`Resulting text content was empty for ${filename}.`);
++  // Assemble the searchable text. Lead with the caption (what the image is),
++  // then the verbatim OCR text (what it literally says). Light labels help the
++  // model ground answers without polluting retrieval.
++  // AMAdocs: OCR on a text-less photo hallucinates low-confidence glyph noise
++  // ("PEER EEE HEE EE Spey 11 ¢ Bi…") that pollutes retrieval and shows up as
++  // junk `extractedText` in the export sidecar. OCRLoader flags that via a mean
++  // -confidence gate (`reliable`). Drop unreliable OCR — but only when the
++  // caption can carry the file; with no caption we keep whatever OCR we have
++  // rather than drop the file (never-drop guarantee).
++  const hasCaption = !!caption?.trim();
++  const ocrTrim = ocr?.text?.trim() || "";
++  const keepOcr = ocrTrim && (ocr?.reliable || !hasCaption);
++  const sections = [];
++  if (hasCaption) sections.push(`Image description:\n${caption.trim()}`);
++  if (keepOcr) sections.push(`Text found in image:\n${ocrTrim}`);
++  const content = sections.join("\n\n");
++
++  if (!content.length) {
++    console.error(
++      `[asImage] No text or visual content could be extracted from ${filename}.`
++    );
+     if (!options.absolutePath) trashFile(fullFilePath);
+     return {
+       success: false,
+-      reason: `No text content found in ${filename}.`,
++      reason: `No readable content found in ${filename}.`,
+       documents: [],
+     };
+   }
+ 
+-  console.log(`-- Working ${filename} --`);
++  console.log(
++    `-- Working ${filename} -- (caption: ${hasCaption ? "yes" : "no"}, ocr: ${
++      keepOcr
++        ? `kept@${Math.round(ocr?.confidence || 0)}`
++        : ocrTrim
++          ? `dropped-as-noise@${Math.round(ocr?.confidence || 0)}`
++          : "none"
++    })`
++  );
+   const data = {
+     id: v4(),
+     url: "file://" + fullFilePath,
+diff --git a/collector/processSingleFile/convert/asPDF/index.js b/collector/processSingleFile/convert/asPDF/index.js
+index 59d26f5..3906462 100644
+--- a/collector/processSingleFile/convert/asPDF/index.js
++++ b/collector/processSingleFile/convert/asPDF/index.js
+@@ -32,14 +32,21 @@ async function asPdf({
+     }).ocrPDF(fullFilePath);
+   }
+ 
++  // AMAdocs: track per-page char ranges within the joined content so the UI can
++  // jump a citation to the exact page of the original PDF.
++  const pages = [];
++  let cursor = 0;
+   for (const doc of docs) {
+-    console.log(
+-      `-- Parsing content from pg ${
+-        doc.metadata?.loc?.pageNumber || "unknown"
+-      } --`
+-    );
++    const pageNumber = doc.metadata?.loc?.pageNumber ?? pages.length + 1;
++    console.log(`-- Parsing content from pg ${pageNumber} --`);
+     if (!doc.pageContent || !doc.pageContent.length) continue;
+     pageContent.push(doc.pageContent);
++    pages.push({
++      page: pageNumber,
++      start: cursor,
++      end: cursor + doc.pageContent.length,
++    });
++    cursor += doc.pageContent.length;
+   }
+ 
+   if (!pageContent.length) {
+@@ -70,6 +77,7 @@ async function asPdf({
+     published: createdDate(fullFilePath),
+     wordCount: content.split(" ").length,
+     pageContent: content,
++    pages, // AMAdocs: per-page char ranges for citation jump-to-page
+     token_count_estimate: tokenizeString(content),
+   };
+ 
+diff --git a/collector/processSingleFile/index.js b/collector/processSingleFile/index.js
+index 4f2defb..069ce88 100644
+--- a/collector/processSingleFile/index.js
++++ b/collector/processSingleFile/index.js
+@@ -9,9 +9,67 @@ const {
+   isTextType,
+   normalizePath,
+   isWithin,
++  stashOriginal,
++  commitOriginal,
++  discardOriginal,
++  documentsFolder,
+ } = require("../utils/files");
++const DocSummary = require("../utils/DocSummary");
++const VisionCaption = require("../utils/VisionCaption");
+ const RESERVED_FILES = ["__HOTDIR__.md"];
+ 
++/**
++ * AMAdocs: generate a short "catalog card" summary for each freshly-parsed document
++ * and write it back to the document's JSON as `aiSummary` (metadata for the semantic
++ * file browser). Runs at the single funnel every file drop passes through, so all
++ * file types are covered without touching each converter. Best-effort and isolated:
++ * any failure is logged and skipped — never breaks ingestion.
++ *
++ * Skipped for: parse-only/direct uploads (not embedded into a workspace), images
++ * (their vision caption already IS their summary), and when DOC_SUMMARY_ENABLED=false.
++ * @param {{success:boolean, documents:Object[]}} result
++ * @param {string} fileExtension
++ * @param {Object} options - carries `summary:{enabled,model,ollamaBasePath}` from the server
++ */
++async function attachDocumentSummary(result, fileExtension, options = {}) {
++  const cfg = options?.summary;
++  if (!result?.success || options.parseOnly) return;
++  if (cfg && cfg.enabled === false) return;
++  if (VisionCaption.SUPPORTED.has(fileExtension)) return; // caption is the image's summary
++
++  const summarizer = new DocSummary({
++    model: cfg?.model,
++    basePath: cfg?.ollamaBasePath,
++  });
++
++  for (const document of result.documents || []) {
++    try {
++      if (!document?.location || !document?.pageContent) continue;
++      const summary = await summarizer.summarize(document.pageContent, {
++        title: document.title,
++        pages: document.pages,
++      });
++      if (!summary) continue;
++
++      // Persist onto the on-disk document JSON (strip the runtime-only fields the
++      // write helper appends) and reflect it on the returned object.
++      const docPath = normalizePath(
++        path.resolve(documentsFolder, document.location)
++      );
++      if (fs.existsSync(docPath)) {
++        const { location, isDirectUpload, ...data } = document;
++        data.aiSummary = summary;
++        fs.writeFileSync(docPath, JSON.stringify(data, null, 4), {
++          encoding: "utf-8",
++        });
++      }
++      document.aiSummary = summary;
++    } catch (e) {
++      console.error(`[DocSummary] Skipped summary for a document: ${e.message}`);
++    }
++  }
++}
++
+ /**
+  * Process a single file and return the documents
+  * @param {string} targetFilename - The filename to process
+@@ -82,12 +140,32 @@ async function processSingleFile(targetFilename, options = {}, metadata = {}) {
+   const FileTypeProcessor = require(SUPPORTED_FILETYPE_CONVERTERS[
+     processFileAs
+   ]);
+-  return await FileTypeProcessor({
++
++  // AMAdocs: keep a copy of the original file (so the UI can show the "pretty"
++  // version) before the converter runs — converters trash the source file.
++  // Skip for parse-only/direct uploads which aren't embedded into a workspace.
++  const retainOriginal = !options.parseOnly;
++  const pendingOriginal = retainOriginal
++    ? stashOriginal(fullFilePath, fileExtension)
++    : null;
++
++  const result = await FileTypeProcessor({
+     fullFilePath,
+     filename: targetFilename,
+     options,
+     metadata,
+   });
++
++  // Commit the stashed original under the generated document id, or drop it.
++  const docId = result?.documents?.[0]?.id;
++  if (result?.success && docId) commitOriginal(pendingOriginal, docId);
++  else discardOriginal(pendingOriginal);
++
++  // AMAdocs: attach a short AI summary to each parsed document (metadata for the
++  // semantic file browser). Best-effort — never fails the ingestion.
++  await attachDocumentSummary(result, fileExtension, options);
++
++  return result;
+ }
+ 
+ module.exports = {
+diff --git a/collector/utils/OCRLoader/index.js b/collector/utils/OCRLoader/index.js
+index 8f5ae99..e41018b 100644
+--- a/collector/utils/OCRLoader/index.js
++++ b/collector/utils/OCRLoader/index.js
+@@ -22,6 +22,17 @@ class OCRLoader {
+    */
+   constructor({ targetLanguages = "eng" } = {}) {
+     this.language = this.parseLanguages(targetLanguages);
++    // AMAdocs: rasterization DPI for scanned-PDF OCR. Upstream hard-coded 70 (low —
++    // tuned for speed/memory); we raise the default so small print survives, but keep
++    // it env-tunable and clamped so a low-RAM machine can dial it back (or a power user
++    // up) without code changes. Clamp ceiling guards against OOM on huge pages.
++    this.dpi = this.parseDpi(process.env.OCR_PDF_DPI);
++    // AMAdocs: minimum mean OCR confidence (0-100) for an image's text to count
++    // as real. Photos/graphics with no text make Tesseract hallucinate strings
++    // of stray glyphs that score very low (~25-40) where genuine text scores
++    // ~85-95 — even when blurred. Below this we treat the image as text-less so
++    // the noise never gets embedded or shown. Env-tunable + clamped.
++    this.minConfidence = this.parseConfidence(process.env.OCR_MIN_CONFIDENCE);
+     this.cacheDir = path.resolve(
+       process.env.STORAGE_DIR
+         ? path.resolve(process.env.STORAGE_DIR, `models`, `tesseract`)
+@@ -42,6 +53,61 @@ class OCRLoader {
+    * @param {string} language - The language code to parse.
+    * @returns {string[]} The parsed language code.
+    */
++  /**
++   * AMAdocs: parse + clamp the scanned-PDF rasterization DPI from env.
++   * Defaults to 150 (2x the old 72-relative baseline) and is clamped to [72, 300]:
++   * below 72 loses detail, above 300 mostly bloats memory/time without OCR gains.
++   * @param {string} value - The raw OCR_PDF_DPI env value.
++   * @returns {number} The clamped DPI.
++   */
++  parseDpi(value = null) {
++    const dpi = parseInt(value, 10);
++    if (!Number.isFinite(dpi)) return 150;
++    return Math.min(300, Math.max(72, dpi));
++  }
++
++  /**
++   * AMAdocs: parse + clamp the minimum mean-OCR-confidence gate from env.
++   * Defaults to 50 (well clear of the ~28-40 that text-less photos score and the
++   * ~85-95 of real text) and is clamped to [0, 100]. Set to 0 to disable the gate.
++   * @param {string} value - The raw OCR_MIN_CONFIDENCE env value.
++   * @returns {number} The clamped confidence threshold.
++   */
++  parseConfidence(value = null) {
++    const c = parseInt(value, 10);
++    if (!Number.isFinite(c)) return 50;
++    return Math.min(100, Math.max(0, c));
++  }
++
++  /**
++   * AMAdocs: preprocess an image buffer/path for OCR — grayscale + contrast
++   * normalize, which reliably lifts Tesseract accuracy on photos/faded scans
++   * (Tesseract binarizes internally, so we stop short of hard thresholding).
++   * Small images are gently upscaled so glyphs are big enough to recognize.
++   * Best-effort: any failure returns the original input so OCR still runs.
++   * @param {string|Buffer} input - The image file path or raw buffer.
++   * @returns {Promise<string|Buffer>} A preprocessed PNG buffer, or the input on failure.
++   */
++  async preprocessImage(input) {
++    try {
++      const sharp = (await import("sharp")).default;
++      let pipeline = sharp(input).grayscale().normalize();
++      const meta = await sharp(input).metadata();
++      const longest = Math.max(meta.width || 0, meta.height || 0);
++      // Upscale small images (≈ low-DPI scans / thumbnails) so text is legible to OCR.
++      if (longest > 0 && longest < 1500)
++        pipeline = pipeline.resize({
++          width: Math.round((meta.width || 0) * 2),
++          height: Math.round((meta.height || 0) * 2),
++          fit: "fill",
++        });
++      return await pipeline.png().toBuffer();
++    } catch (e) {
++      this.log(`Image preprocessing skipped: ${e.message}`);
++      return input;
++    }
++  }
++
+   parseLanguages(language = null) {
+     try {
+       if (!language || typeof language !== "string") return ["eng"];
+@@ -100,6 +166,7 @@ class OCRLoader {
+     };
+ 
+     const pdfSharp = new PDFSharp({
++      dpi: this.dpi, // AMAdocs: env-tunable rasterization DPI (default 150)
+       validOps: [
+         pdfjs.OPS.paintJpegXObject,
+         pdfjs.OPS.paintImageXObject,
+@@ -212,14 +279,19 @@ class OCRLoader {
+   }
+ 
+   /**
+-   * Loads an image file and returns the OCRed text.
++   * Loads an image file and returns the OCRed text plus a confidence signal.
++   * AMAdocs: returns an object (was a bare string) so the caller can tell real
++   * text from the low-confidence noise Tesseract emits on text-less photos.
+    * @param {string} filePath - The path to the image file.
+    * @param {Object} options - The options for the OCR.
+    * @param {number} options.maxExecutionTime - The maximum execution time of the OCR in milliseconds.
+-   * @returns {Promise<string>} The OCRed text.
++   * @returns {Promise<{text: string|null, confidence: number, reliable: boolean}>}
++   *   text: the OCRed text (null on failure); confidence: mean 0-100;
++   *   reliable: confidence >= the configured minConfidence gate.
+    */
+   async ocrImage(filePath, { maxExecutionTime = 300_000 } = {}) {
+     let content = "";
++    let confidence = 0;
+     let worker = null;
+     if (
+       !filePath ||
+@@ -227,7 +299,7 @@ class OCRLoader {
+       !fs.statSync(filePath).isFile()
+     ) {
+       this.log(`File ${filePath} does not exist. Skipping OCR.`);
+-      return null;
++      return { text: null, confidence: 0, reliable: false };
+     }
+ 
+     const documentTitle = path.basename(filePath);
+@@ -253,19 +325,32 @@ class OCRLoader {
+       });
+ 
+       const processImage = async () => {
+-        const { data } = await worker.recognize(filePath, {}, "text");
++        // AMAdocs: grayscale/normalize/upscale before OCR for cleaner extraction.
++        const prepared = await this.preprocessImage(filePath);
++        // Default output (no "text"-only restriction) so `data.confidence` —
++        // the mean per-word confidence — comes back for the noise gate below.
++        const { data } = await worker.recognize(prepared);
+         content = data.text;
++        confidence = Number.isFinite(data.confidence) ? data.confidence : 0;
+       };
+ 
+       await Promise.race([timeoutPromise, processImage()]);
++      const reliable = confidence >= this.minConfidence;
+       this.log(`Completed OCR of ${documentTitle}!`, {
+         executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
++        confidence: Math.round(confidence),
++        reliable, // false => treated as a text-less image (noise discarded by caller)
+       });
++      if (!reliable && (content || "").trim())
++        this.log(
++          `OCR confidence ${Math.round(confidence)} < ${this.minConfidence} ` +
++            `for ${documentTitle} — flagged as noise (text-less image).`
++        );
+ 
+-      return content;
++      return { text: content, confidence, reliable };
+     } catch (e) {
+       this.log(`Error: ${e.message}`);
+-      return null;
++      return { text: null, confidence: 0, reliable: false };
+     } finally {
+       //eslint-disable-next-line
+       if (!worker) return;
+@@ -281,9 +366,10 @@ class OCRLoader {
+  * @returns {Promise<Buffer>} The buffer of the page.
+  */
+ class PDFSharp {
+-  constructor({ validOps = [] } = {}) {
++  constructor({ validOps = [], dpi = 150 } = {}) {
+     this.sharp = null;
+     this.validOps = validOps;
++    this.dpi = dpi; // AMAdocs: rasterization DPI (was hard-coded 70)
+   }
+ 
+   log(text, ...args) {
+@@ -316,7 +402,7 @@ class PDFSharp {
+           const { width, height } = img;
+           const size = img.data.length;
+           const channels = size / width / height;
+-          const targetDPI = 70;
++          const targetDPI = this.dpi;
+           const targetWidth = Math.floor(width * (targetDPI / 72));
+           const targetHeight = Math.floor(height * (targetDPI / 72));
+ 
+@@ -329,6 +415,11 @@ class PDFSharp {
+               height: targetHeight,
+               fit: "fill",
+             })
++            // AMAdocs: grayscale + contrast-normalize lifts OCR accuracy on
++            // faded/low-contrast scans (Tesseract binarizes internally, so we
++            // stop short of a hard threshold that would wreck uneven lighting).
++            .grayscale()
++            .normalize()
+             .withMetadata({
+               density: targetDPI,
+               resolution: targetDPI,
+diff --git a/collector/utils/WhisperProviders/localWhisper.js b/collector/utils/WhisperProviders/localWhisper.js
+index 6ee124f..9a1b967 100644
+--- a/collector/utils/WhisperProviders/localWhisper.js
++++ b/collector/utils/WhisperProviders/localWhisper.js
+@@ -1,6 +1,7 @@
+ const fs = require("fs");
+ const path = require("path");
+ const { v4 } = require("uuid");
++const { TMP_DIRECTORY } = require("../constants"); // AMAdocs: packaged-aware tmp dir
+ const defaultWhisper = "Xenova/whisper-small"; // Model Card: https://huggingface.co/Xenova/whisper-small
+ const fileSize = {
+   "Xenova/whisper-small": "250mb",
+@@ -66,7 +67,7 @@ class LocalWhisper {
+       const wavefile = require("wavefile");
+       const { FFMPEGWrapper } = require("./ffmpeg");
+       const ffmpeg = new FFMPEGWrapper();
+-      const outFolder = path.resolve(__dirname, `../../storage/tmp`);
++      const outFolder = TMP_DIRECTORY;
+       if (!fs.existsSync(outFolder))
+         fs.mkdirSync(outFolder, { recursive: true });
+ 
+diff --git a/collector/utils/constants.js b/collector/utils/constants.js
+index 4813e6e..8bfbbdd 100644
+--- a/collector/utils/constants.js
++++ b/collector/utils/constants.js
+@@ -1,4 +1,16 @@
+-const WATCH_DIRECTORY = require("path").resolve(__dirname, "../hotdir");
++const path = require("path");
++// AMAdocs: in the packaged app the collector runs from a read-only AppImage mount,
++// so the hotdir (upload landing zone) and tmp scratch dir must live in the writable
++// STORAGE_DIR. The server's multer writes uploads to the same STORAGE_DIR/hotdir, so
++// both processes agree on one shared path. Dev (NODE_ENV=development) is unchanged.
++const WATCH_DIRECTORY =
++  process.env.NODE_ENV === "development"
++    ? path.resolve(__dirname, "../hotdir")
++    : path.resolve(process.env.STORAGE_DIR, "hotdir");
++const TMP_DIRECTORY =
++  process.env.NODE_ENV === "development"
++    ? path.resolve(__dirname, "../storage/tmp")
++    : path.resolve(process.env.STORAGE_DIR, "tmp");
+ 
+ const ACCEPTED_MIMES = {
+   "text/plain": [".txt", ".md", ".org", ".adoc", ".rst"],
+@@ -88,5 +100,6 @@ const SUPPORTED_FILETYPE_CONVERTERS = {
+ module.exports = {
+   SUPPORTED_FILETYPE_CONVERTERS,
+   WATCH_DIRECTORY,
++  TMP_DIRECTORY,
+   ACCEPTED_MIMES,
+ };
+diff --git a/collector/utils/files/index.js b/collector/utils/files/index.js
+index c36f059..3472929 100644
+--- a/collector/utils/files/index.js
++++ b/collector/utils/files/index.js
+@@ -1,6 +1,7 @@
+ const fs = require("fs");
+ const path = require("path");
+ const { MimeDetector } = require("./mime");
++const { WATCH_DIRECTORY, TMP_DIRECTORY } = require("../constants");
+ 
+ /**
+  * The folder where documents are stored to be stored when
+@@ -21,6 +22,17 @@ const directUploadsFolder =
+     ? path.resolve(__dirname, `../../../server/storage/direct-uploads`)
+     : path.resolve(process.env.STORAGE_DIR, `direct-uploads`);
+ 
++/**
++ * AMAdocs: the folder where we keep the ORIGINAL uploaded file (PDF/DOCX/etc.)
++ * so the desktop UI can show the "pretty" version with its graphics & layout.
++ * The collector normally extracts text then trashes the original; we keep a
++ * copy here keyed by the generated document id (`<docId><ext>`).
++ */
++const originalsFolder =
++  process.env.NODE_ENV === "development"
++    ? path.resolve(__dirname, `../../../server/storage/originals`)
++    : path.resolve(process.env.STORAGE_DIR, `originals`);
++
+ /**
+  * Checks if a file is text by checking the mime type and then falling back to buffer inspection.
+  * This way we can capture all the cases where the mime type is not known but still parseable as text
+@@ -97,6 +109,53 @@ function trashFile(filepath) {
+   return;
+ }
+ 
++/**
++ * AMAdocs: copy the original file into a temporary slot in the originals store
++ * BEFORE the converter runs (the converter trashes the source). Returns the temp
++ * path, or null on failure. Pair with commitOriginal()/discardOriginal().
++ */
++function stashOriginal(sourcePath, ext = "") {
++  try {
++    if (!sourcePath || !fs.existsSync(sourcePath)) return null;
++    if (!fs.existsSync(originalsFolder))
++      fs.mkdirSync(originalsFolder, { recursive: true });
++    const finalExt = (ext || path.extname(sourcePath) || "").toLowerCase();
++    const tmpName = `.pending-${Date.now()}-${Math.random()
++      .toString(36)
++      .slice(2)}${finalExt}`;
++    const tmpPath = path.resolve(originalsFolder, tmpName);
++    fs.copyFileSync(sourcePath, tmpPath);
++    return tmpPath;
++  } catch {
++    return null;
++  }
++}
++
++/**
++ * AMAdocs: once the document id is known, rename the stashed original to
++ * `<docId><ext>` so the server can serve it for the document viewer.
++ */
++function commitOriginal(tmpPath, docId) {
++  try {
++    if (!tmpPath || !fs.existsSync(tmpPath) || !docId)
++      return discardOriginal(tmpPath);
++    const ext = path.extname(tmpPath).toLowerCase();
++    const finalPath = path.resolve(originalsFolder, `${docId}${ext}`);
++    fs.renameSync(tmpPath, finalPath);
++    return finalPath;
++  } catch {
++    return discardOriginal(tmpPath);
++  }
++}
++
++/** AMAdocs: drop a stashed original (conversion failed or wasn't retained). */
++function discardOriginal(tmpPath) {
++  try {
++    if (tmpPath && fs.existsSync(tmpPath)) fs.rmSync(tmpPath);
++  } catch {}
++  return null;
++}
++
+ function createdDate(filepath) {
+   try {
+     const { birthtimeMs, birthtime } = fs.statSync(filepath);
+@@ -156,9 +215,11 @@ function writeToServerDocuments({
+ // force remove them.
+ async function wipeCollectorStorage() {
+   const cleanHotDir = new Promise((resolve) => {
+-    const directory = path.resolve(__dirname, "../../hotdir");
++    // AMAdocs: use the shared (packaged-aware) hotdir, and return on readdir error so
++    // a missing dir doesn't fall through to iterating an undefined `files` (crash on boot).
++    const directory = WATCH_DIRECTORY;
+     fs.readdir(directory, (err, files) => {
+-      if (err) resolve();
++      if (err) return resolve();
+ 
+       for (const file of files) {
+         if (file === "__HOTDIR__.md") continue;
+@@ -171,9 +232,9 @@ async function wipeCollectorStorage() {
+   });
+ 
+   const cleanTmpDir = new Promise((resolve) => {
+-    const directory = path.resolve(__dirname, "../../storage/tmp");
++    const directory = TMP_DIRECTORY;
+     fs.readdir(directory, (err, files) => {
+-      if (err) resolve();
++      if (err) return resolve();
+ 
+       for (const file of files) {
+         if (file === ".placeholder") continue;
+@@ -249,4 +310,8 @@ module.exports = {
+   sanitizeFileName,
+   documentsFolder,
+   directUploadsFolder,
++  originalsFolder,
++  stashOriginal,
++  commitOriginal,
++  discardOriginal,
+ };
+diff --git a/server/endpoints/chat.js b/server/endpoints/chat.js
+index 1f7e5ec..7a108b0 100644
+--- a/server/endpoints/chat.js
++++ b/server/endpoints/chat.js
+@@ -26,7 +26,8 @@ function chatEndpoints(app) {
+     async (request, response) => {
+       try {
+         const user = await userFromSession(request, response);
+-        const { message, attachments = [] } = reqBody(request);
++        // AMAdocs: sessionId scopes chat history to the current launch session.
++        const { message, attachments = [], sessionId = null } = reqBody(request);
+         const workspace = response.locals.workspace;
+ 
+         if (typeof message !== "string" || message.trim().length === 0) {
+@@ -66,7 +67,8 @@ function chatEndpoints(app) {
+           workspace?.chatMode,
+           user,
+           null,
+-          attachments
++          attachments,
++          sessionId // AMAdocs: per-launch session id
+         );
+         await Telemetry.sendTelemetry("sent_chat", {
+           multiUserMode: multiUserMode(response),
+diff --git a/server/endpoints/system.js b/server/endpoints/system.js
+index cdcdef3..2b0c343 100644
+--- a/server/endpoints/system.js
++++ b/server/endpoints/system.js
+@@ -431,6 +431,25 @@ function systemEndpoints(app) {
+     }
+   );
+ 
++  // AMAdocs (THE #1 RULE — "don't kill their machine"): the GLOBAL kill switch.
++  // Instantly suspends ALL embedding/ingest across every workspace — drops queues and
++  // SIGTERMs the worker children. In-flight chat is untouched. This is the hard STOP
++  // the UI's stop button binds to. See [[k-base-ingest-safety]].
++  app.post(
++    "/system/stop-all",
++    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
++    async (_request, response) => {
++      try {
++        const { stopAll } = require("../utils/EmbeddingWorkerManager");
++        const stopped = stopAll();
++        response.status(200).json({ stopped });
++      } catch (error) {
++        console.error("[stop-all] error:", error);
++        response.status(500).json({ success: false, message: error.message });
++      }
++    }
++  );
++
+   app.get(
+     "/system/system-vectors",
+     [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+diff --git a/server/endpoints/workspaces.js b/server/endpoints/workspaces.js
+index 9529cca..2744787 100644
+--- a/server/endpoints/workspaces.js
++++ b/server/endpoints/workspaces.js
+@@ -42,6 +42,87 @@ const {
+   workspaceDeletionProtection,
+ } = require("../utils/middleware/workspaceDeletionProtection");
+ 
++// AMAdocs: single source of truth for where AMAdocs keeps its OWN retained copy
++// of every ingested file (the user's originals live wherever they dropped them
++// from). This was duplicated across doc-original / doc-export / document-delete —
++// centralized here so the path can never drift between them (Fable note).
++function amadocsOriginalsDir() {
++  return process.env.NODE_ENV === "development"
++    ? path.resolve(__dirname, `../storage/originals`)
++    : path.resolve(process.env.STORAGE_DIR, `originals`);
++}
++
++// AMAdocs: absolute path to AMAdocs' retained original for a document id, or null.
++// The id is a uuid, so a `<id>.<ext>` prefix match is safe from traversal/collision.
++function amadocsRetainedOriginal(docId) {
++  const dir = amadocsOriginalsDir();
++  if (!docId || !fs.existsSync(dir)) return null;
++  const match = fs.readdirSync(dir).find((f) => f.startsWith(`${docId}.`));
++  return match ? path.resolve(dir, match) : null;
++}
++
++// AMAdocs: single source of truth for the "everything AMAdocs understands about a
++// document" payload — the AI summary, the AI vision description, any OCR'd text, source
++// provenance, and (for photos) the original EXIF + basic image facts. Used by BOTH the
++// sidecar export (doc-export → JSON) and the native-metadata embed (doc-export-embedded →
++// inside the file) so the two can never drift. Best-effort: EXIF/image facts are null for
++// non-photos or on error and never throw.
++async function amadocsExtractMetadata({ data, slug, originalFile, ext }) {
++  // Split the AI description / OCR text back out of the combined pageContent
++  // (asImage writes "Image description:\n…\n\nText found in image:\n…").
++  let aiDescription = null;
++  let extractedText = null;
++  const pc = data.pageContent || "";
++  if (/Image description:|Text found in image:/.test(pc)) {
++    const d = pc.match(
++      /Image description:\s*([\s\S]*?)(?:\n\nText found in image:|$)/
++    );
++    const o = pc.match(/Text found in image:\s*([\s\S]*)$/);
++    aiDescription = d ? d[1].trim() : null;
++    extractedText = o ? o[1].trim() : null;
++  } else {
++    extractedText = pc.trim() || null;
++  }
++
++  let exif = null;
++  let image = null;
++  const IMAGE_EXTS = [
++    ".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".tif", ".tiff", ".heic",
++  ];
++  if (originalFile && IMAGE_EXTS.includes(ext)) {
++    exif = await require("exifr")
++      .parse(originalFile)
++      .catch(() => null);
++    image = await require("sharp")(originalFile)
++      .metadata()
++      .then((m) => ({
++        width: m.width,
++        height: m.height,
++        format: m.format,
++        space: m.space,
++        density: m.density || null,
++      }))
++      .catch(() => null);
++  }
++
++  return {
++    exportedBy: "AMAdocs",
++    exportedAt: new Date().toISOString(),
++    source: {
++      filename: data.title || null,
++      collection: slug,
++      ingestedAt: data.published || null,
++      documentId: data.id,
++      wordCount: data.wordCount ?? null,
++    },
++    aiSummary: data.aiSummary || null,
++    aiDescription,
++    extractedText,
++    image,
++    exif,
++  };
++}
++
+ function workspaceEndpoints(app) {
+   if (!app) return;
+   const responseCache = new Map();
+@@ -222,6 +303,29 @@ function workspaceEndpoints(app) {
+           return;
+         }
+ 
++        // AMAdocs: also delete the retained ORIGINAL files for removed docs so
++        // the Library stays in sync (the "private copy" we promised the user).
++        try {
++          if (deletes.length > 0) {
++            const fs = require("fs");
++            const path = require("path");
++            const { fileData } = require("../utils/files");
++            const originalsPath = amadocsOriginalsDir();
++            if (fs.existsSync(originalsPath)) {
++              const stored = fs.readdirSync(originalsPath);
++              for (const docpath of deletes) {
++                const data = await fileData(docpath).catch(() => null);
++                if (!data?.id) continue;
++                const match = stored.find((f) => f.startsWith(`${data.id}.`));
++                if (match)
++                  fs.rmSync(path.resolve(originalsPath, match), { force: true });
++              }
++            }
++          }
++        } catch (e) {
++          console.error("[update-embeddings] original cleanup failed:", e.message);
++        }
++
+         await Document.removeDocuments(
+           currWorkspace,
+           deletes,
+@@ -271,6 +375,228 @@ function workspaceEndpoints(app) {
+     }
+   );
+ 
++  // AMAdocs: "ride on GNOME" — index a folder's OS-extracted text into this
++  // workspace and keep it fresh incrementally, without re-parsing files. The OS
++  // desktop indexer (LocalSearch/TinySPARQL) already crawled + extracted the text;
++  // we just add embeddings + the citation loop on top. FIRST call full-indexes the
++  // folder (embeds every file LocalSearch has text for, up to optional `limit`);
++  // LATER calls delta-sync (re-embed only new/changed via nfo:fileLastModified, drop
++  // deleted). Productionized form of tooling/tinysparql-{bridge,sync}.js. See
++  // utils/GnomeBridge. Body: { folder, exclude?="/novels/", limit?=0, dryRun?=false }.
++  app.post(
++    "/workspace/:slug/gnome-sync",
++    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
++    async (request, response) => {
++      try {
++        const { slug = null } = request.params;
++        const {
++          folder = null,
++          exclude = "/novels/",
++          limit = 0,
++          dryRun = false,
++          reconcile = false,
++        } = reqBody(request);
++        const currWorkspace = await Workspace.get({ slug });
++        if (!currWorkspace) return response.sendStatus(400).end();
++        if (!folder)
++          return response.status(400).json({ error: "Missing 'folder'." });
++
++        const Gnome = require("../utils/GnomeBridge");
++        // AMAdocs: only poke the OS indexer when the caller explicitly asks
++        // (reconcile) — never restart a system service silently. On a non-GNOME box
++        // inotify doesn't fire, so this is what wakes LocalSearch + forces a re-crawl
++        // so the delta actually sees new/changed/deleted files. See [[k-base-ingest-safety]].
++        if (reconcile) await Gnome.ensureIndexer({ restart: true });
++        if (!Gnome.available())
++          return response.status(503).json({
++            error:
++              "GNOME LocalSearch (TinySPARQL) is not running or reachable. Start the indexer and retry.",
++          });
++
++        const current = Gnome.queryFileList({ folder, exclude });
++        const prevState = Gnome.loadState(slug);
++
++        // ---- PLAN (no side effects, so dryRun is truly read-only) ----
++        // toEmbed: [{url,mtime}] to (re)embed; toDelete: old docpaths to drop;
++        // nextFiles: the state map we'll persist. Entries for the files we're about
++        // to embed are deliberately left ABSENT here and only added once a doc is
++        // CONFIRMED embedded (see EXECUTE) — so state never claims a file is indexed
++        // before it actually is, and a crash mid-batch is retried next sync.
++        let mode;
++        let toEmbed = [];
++        let toDelete = [];
++        let nextFiles = {};
++        if (!prevState) {
++          // FULL INDEX — embed the whole folder (bounded below by `cap`).
++          mode = "index";
++          toEmbed = current;
++        } else {
++          // DELTA — re-embed only changes; cost scales with changes, not corpus.
++          mode = "sync";
++          nextFiles = { ...(prevState.files || {}) };
++          const { news, changed, deleted } = Gnome.computeDelta(nextFiles, current);
++          const changedManaged = changed.filter((c) => c.prev.docpath);
++          for (const c of changed.filter((c) => !c.prev.docpath)) // dormant: refresh mtime only
++            nextFiles[c.url] = { docpath: c.prev.docpath, mtime: c.mtime };
++          toDelete = [
++            ...changedManaged.map((c) => c.prev.docpath), // re-embed: drop old vectors
++            ...deleted.map((d) => d.prev.docpath),
++          ];
++          // Changed-managed first: their old vectors are about to be dropped, so they
++          // must win the cap over brand-new files (else they'd be left de-indexed).
++          toEmbed = [
++            ...changedManaged.map((c) => ({ url: c.url, mtime: c.mtime })),
++            ...news,
++          ];
++          for (const d of deleted) delete nextFiles[d.url];
++        }
++
++        // ---- BOUND the per-call work (THE #1 RULE — "don't kill their machine") ----
++        // An explicit `limit` is the user's deliberate cap: embed the first `limit`
++        // and record the rest as a DORMANT baseline (docpath:null) so they are NOT
++        // auto-pulled later. With no limit we still refuse unbounded work — cap at
++        // GNOME_SYNC_CAP (default 200) and report `remaining`, but leave the overflow
++        // ABSENT from state so the next sync re-sees it and continues (the "continue"
++        // contract). This also bounds the materialize() loop below (2 SPARQL + a JSON
++        // write per file) to at most `cap` files of synchronous request-thread work.
++        let remaining = 0;
++        const explicitLimit = limit > 0;
++        const cap = explicitLimit ? limit : Number(process.env.GNOME_SYNC_CAP) || 200;
++        if (toEmbed.length > cap) {
++          const overflow = toEmbed.slice(cap);
++          toEmbed = toEmbed.slice(0, cap);
++          remaining = overflow.length;
++          if (explicitLimit)
++            for (const { url, mtime } of overflow)
++              nextFiles[url] = { docpath: null, mtime }; // dormant baseline
++          // no-limit overflow: intentionally NOT recorded → retried next sync.
++        }
++
++        if (dryRun)
++          return response.status(200).json({
++            dryRun: true,
++            mode,
++            indexed: current.length,
++            queued: toEmbed.length,
++            deleted: toDelete.length,
++            remaining,
++          });
++
++        // ---- EXECUTE (async, durable, finalize-on-confirm) ----
++        // 1) Apply deletes first (idempotent — a crash here just re-deletes next sync).
++        if (toDelete.length > 0)
++          await Document.removeDocuments(
++            currWorkspace,
++            toDelete,
++            response.locals?.user?.id
++          );
++
++        // 2) Materialize the (bounded) docs to embed; map docpath -> {url,mtime} so we
++        //    can finalize state as each one is confirmed embedded.
++        const pending = new Map();
++        const adds = [];
++        for (const { url, mtime } of toEmbed) {
++          const docpath = Gnome.materialize(slug, url);
++          if (docpath) {
++            adds.push(docpath);
++            pending.set(docpath, { url, mtime });
++          }
++          // else: text vanished mid-flight — leave ABSENT so it's retried next sync.
++        }
++
++        // 3) Persist the PRE-EMBED baseline NOW (deletes + dormant refreshes applied;
++        //    the about-to-embed files deliberately absent). Durable: die mid-batch and
++        //    the next sync re-sees those files as new/changed and retries them.
++        const persist = () =>
++          Gnome.saveState(slug, {
++            folder,
++            exclude,
++            slug,
++            lastSync: new Date().toISOString(),
++            files: nextFiles,
++          });
++        persist();
++
++        // 4) Kick off embedding. Finalize state per CONFIRMED doc — NOT at dispatch,
++        //    because embedFiles() is fire-and-forget (returns before any embedding).
++        const {
++          isNativeEmbedder,
++          embedFiles,
++        } = require("../utils/EmbeddingWorkerManager");
++        if (adds.length > 0 && isNativeEmbedder()) {
++          await embedFiles(
++            currWorkspace.slug,
++            adds,
++            currWorkspace.id,
++            response.locals?.user?.id ?? null,
++            {
++              onDocComplete: (docpath) => {
++                const e = pending.get(docpath);
++                if (!e) return;
++                nextFiles[e.url] = { docpath, mtime: e.mtime };
++                try {
++                  persist();
++                } catch (err) {
++                  console.error("[gnome-sync] persist:", err.message);
++                }
++              },
++              onComplete: () => {
++                try {
++                  persist();
++                } catch (err) {
++                  console.error("[gnome-sync] persist:", err.message);
++                }
++              },
++            }
++          );
++        } else if (adds.length > 0) {
++          // Non-native embedder: addDocuments is synchronous — confirm all, persist.
++          await Document.addDocuments(
++            currWorkspace,
++            adds,
++            response.locals?.user?.id
++          );
++          for (const [docpath, e] of pending)
++            nextFiles[e.url] = { docpath, mtime: e.mtime };
++          persist();
++        }
++
++        // 5) Respond with the PLAN (202 Accepted). Embedding continues async over the
++        //    existing SSE channel; we do NOT report `added` because it may still run.
++        response.status(202).json({
++          mode,
++          indexed: current.length,
++          queued: adds.length,
++          deleted: toDelete.length,
++          remaining,
++          tracked: Object.keys(nextFiles).length,
++        });
++      } catch (e) {
++        console.error("[gnome-sync] error:", e);
++        response.status(500).json({ error: e.message });
++      }
++    }
++  );
++
++  // AMAdocs (THE #1 RULE kill switch): instantly halt embedding/ingest for THIS
++  // workspace — drops the queue and SIGTERMs the worker child. Does not touch
++  // in-flight chat. Pairs with POST /system/stop-all for a global halt.
++  app.post(
++    "/workspace/:slug/embedding-stop",
++    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
++    async (request, response) => {
++      try {
++        const { slug = null } = request.params;
++        const { stopWorkspace } = require("../utils/EmbeddingWorkerManager");
++        const stopped = stopWorkspace(slug);
++        response.status(200).json({ stopped });
++      } catch (e) {
++        console.error("[embedding-stop] error:", e);
++        response.status(500).json({ error: e.message });
++      }
++    }
++  );
++
+   app.delete(
+     "/workspace/:slug",
+     [
+@@ -956,10 +1282,15 @@ function workspaceEndpoints(app) {
+         );
+ 
+         const document = documents[0];
++        // AMAdocs: by default a dropped file is only CATALOGED — embed just its
++        // ~120-word summary card so the AI librarian can find it, without a full
++        // scan. Full-text search is opt-in per file via the "Deep search" action
++        // (POST /workspace/:slug/doc-deep-search).
+         const { failedToEmbed = [], errors = [] } = await Document.addDocuments(
+           currWorkspace,
+           [document.location],
+-          response.locals?.user?.id
++          response.locals?.user?.id,
++          { mode: "summary" }
+         );
+ 
+         if (failedToEmbed.length > 0)
+@@ -1168,6 +1499,599 @@ function workspaceEndpoints(app) {
+     }
+   );
+ 
++  // AMAdocs: return a single document's extracted text for the in-app viewer pane.
++  app.get(
++    "/workspace/:slug/doc-view",
++    [validatedRequest, flexUserRoleValid([ROLES.all]), validWorkspaceSlug],
++    async (request, response) => {
++      try {
++        const docpath = request.query.path;
++        if (!docpath)
++          return response.status(400).json({ error: "Missing document path" });
++        const { fileData } = require("../utils/files");
++        const data = await fileData(docpath); // path-traversal protected
++        if (!data)
++          return response.status(404).json({ error: "Document not found" });
++        response.status(200).json({
++          title: data.title || "Document",
++          pageContent: data.pageContent || "",
++          wordCount: data.wordCount || null,
++          docAuthor: data.docAuthor || null,
++          description: data.description || null,
++          aiSummary: data.aiSummary || null, // AMAdocs: ingest-time gist for the semantic file browser
++          pages: Array.isArray(data.pages) ? data.pages : null, // AMAdocs: page ranges for jump-to-page
++        });
++      } catch (e) {
++        console.error("[doc-view] error:", e);
++        response.status(500).json({ error: e.message });
++      }
++    }
++  );
++
++  // AMAdocs: generate a short "catalog card" summary for ONE document on demand
++  // (the right-click "Summarize" action). Uses the workspace's chat model. The
++  // summary is cached on the document JSON (`aiSummary`); a cached value is returned
++  // immediately unless `force` is set. This is the on-demand counterpart to the
++  // opt-in auto-summarise-at-ingest path (DOC_SUMMARY_ENABLED).
++  app.post(
++    "/workspace/:slug/doc-summarize",
++    [validatedRequest, flexUserRoleValid([ROLES.all]), validWorkspaceSlug],
++    async (request, response) => {
++      try {
++        const workspace = response.locals.workspace;
++        const { path: docpath, force = false } = reqBody(request);
++        if (!docpath)
++          return response.status(400).json({ error: "Missing document path" });
++
++        const {
++          fileData,
++          documentsPath,
++          normalizePath,
++          isWithin,
++        } = require("../utils/files");
++        const data = await fileData(docpath); // path-traversal protected
++        if (!data)
++          return response.status(404).json({ error: "Document not found" });
++
++        if (data.aiSummary && !force)
++          return response
++            .status(200)
++            .json({ summary: data.aiSummary, cached: true });
++
++        const DocSummary = require("../utils/DocSummary");
++        const summary = await new DocSummary({
++          model: workspace?.chatModel || process.env.OLLAMA_MODEL_PREF || null,
++        }).summarize(data.pageContent || "", {
++          title: data.title,
++          pages: Array.isArray(data.pages) ? data.pages : null,
++        });
++
++        if (!summary)
++          return response.status(200).json({
++            summary: null,
++            cached: false,
++            error:
++              "Couldn’t generate a summary — the AI model may still be downloading.",
++          });
++
++        // Persist the summary back onto the document JSON (path-traversal safe).
++        try {
++          const fs = require("fs");
++          const fullPath = path.resolve(documentsPath, normalizePath(docpath));
++          if (isWithin(documentsPath, fullPath) && fs.existsSync(fullPath)) {
++            data.aiSummary = summary;
++            fs.writeFileSync(fullPath, JSON.stringify(data, null, 4), {
++              encoding: "utf-8",
++            });
++          }
++        } catch (werr) {
++          console.error("[doc-summarize] write-back failed:", werr.message);
++        }
++
++        response.status(200).json({ summary, cached: false });
++      } catch (e) {
++        console.error("[doc-summarize] error:", e);
++        response.status(500).json({ error: e.message });
++      }
++    }
++  );
++
++  // AMAdocs: "Deep search" a single document on demand (the right-click action).
++  // By default a dropped file is only CATALOGED — its ~120-word summary card is
++  // embedded so the librarian can find it, but the full text is not. This upgrades
++  // ONE file to full-text semantic search IN PLACE: drop the summary vectors and
++  // re-embed the document's full content under the SAME docId, keeping the
++  // workspace_documents row and the retained original file untouched. Idempotent
++  // (re-running just re-embeds the full text again).
++  app.post(
++    "/workspace/:slug/doc-deep-search",
++    [
++      validatedRequest,
++      flexUserRoleValid([ROLES.admin, ROLES.manager]),
++      validWorkspaceSlug,
++    ],
++    async (request, response) => {
++      try {
++        const workspace = response.locals.workspace;
++        const { path: docpath } = reqBody(request);
++        if (!docpath)
++          return response.status(400).json({ error: "Missing document path" });
++
++        const docRow = await Document.get({
++          docpath,
++          workspaceId: workspace.id,
++        });
++        if (!docRow)
++          return response
++            .status(404)
++            .json({ error: "Document is not in this workspace." });
++
++        const { fileData } = require("../utils/files");
++        const data = await fileData(docpath); // path-traversal protected
++        if (!data || !data.pageContent)
++          return response
++            .status(404)
++            .json({ error: "Document content not found." });
++
++        const prisma = require("../utils/prisma");
++        const VectorDb = getVectorDbClass();
++        const docId = docRow.docId;
++
++        // Drop the existing (summary-only) vectors for this doc, then clear the stale
++        // docId→vectorId rows (deleteDocumentFromNamespace only removes them from the
++        // vector table, not the DB mapping), then re-embed the FULL text under the
++        // same docId. skipCache=true is REQUIRED: the vector cache is keyed on docpath
++        // and still holds the summary chunks, so without it the re-embed would just
++        // restore the summary instead of the full text.
++        await VectorDb.deleteDocumentFromNamespace(workspace.slug, docId);
++        await prisma.document_vectors.deleteMany({ where: { docId } });
++        const { vectorized, error } = await VectorDb.addDocumentToNamespace(
++          workspace.slug,
++          { ...data, docId },
++          docpath,
++          true // skipCache
++        );
++        if (!vectorized)
++          return response.status(200).json({
++            success: false,
++            error: error || "Could not deep search this document.",
++          });
++
++        // Flag the row as deep-searched so the UI reflects it and it survives reloads.
++        try {
++          const meta = safeJsonParse(docRow.metadata, {});
++          meta.amadocsSearchMode = "deep";
++          await prisma.workspace_documents.update({
++            where: { id: docRow.id },
++            data: { metadata: JSON.stringify(meta) },
++          });
++        } catch (merr) {
++          console.error("[doc-deep-search] mode flag failed:", merr.message);
++        }
++
++        response.status(200).json({ success: true, error: null, mode: "deep" });
++      } catch (e) {
++        console.error("[doc-deep-search] error:", e);
++        response.status(500).json({ error: e.message });
++      }
++    }
++  );
++
++  // AMAdocs: stream a document's ORIGINAL file (PDF/DOCX/image/etc.) so the
++  // in-app viewer can show the "pretty" version with graphics & layout. The AI
++  // still reads the extracted text (doc-view); this is for the human only.
++  app.get(
++    "/workspace/:slug/doc-original",
++    [validatedRequest, flexUserRoleValid([ROLES.all]), validWorkspaceSlug],
++    async (request, response) => {
++      try {
++        const fs = require("fs");
++        const path = require("path");
++        const docpath = request.query.path;
++        if (!docpath)
++          return response.status(400).json({ error: "Missing document path" });
++
++        const { fileData } = require("../utils/files");
++        const data = await fileData(docpath); // path-traversal protected
++        if (!data || !data.id)
++          return response.status(404).json({ error: "Document not found" });
++
++        const MIME = {
++          ".pdf": "application/pdf",
++          ".png": "image/png",
++          ".jpg": "image/jpeg",
++          ".jpeg": "image/jpeg",
++          ".webp": "image/webp",
++          ".gif": "image/gif",
++          ".bmp": "image/bmp",
++          ".docx":
++            "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
++          ".xlsx":
++            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
++          ".csv": "text/csv",
++          ".txt": "text/plain",
++          ".md": "text/markdown",
++        };
++        const streamFile = (absPath) => {
++          const ext = path.extname(absPath).toLowerCase();
++          response.setHeader(
++            "Content-Type",
++            MIME[ext] || "application/octet-stream"
++          );
++          return response.sendFile(path.resolve(absPath));
++        };
++
++        const originalsPath = amadocsOriginalsDir();
++
++        // Find the stored original by document id (<id><ext>). The id is a uuid
++        // so a prefix match is safe from traversal/collision.
++        let match = null;
++        if (fs.existsSync(originalsPath)) {
++          match = fs
++            .readdirSync(originalsPath)
++            .find((f) => f.startsWith(`${data.id}.`));
++        }
++        if (match) return streamFile(path.resolve(originalsPath, match));
++
++        // AMAdocs: bridged "ride on GNOME" (TinySPARQL) docs have no retained
++        // original — they reference the user's real file in place via sourcePath.
++        // Stream that so bridged docs are first-class for the viewer + citation
++        // loop (passage-highlight works via PDF.js text-match; only the page-number
++        // chip label is unavailable, since flat OS-extracted text has no page ranges).
++        if (data.amadocsSource === "tinysparql" && data.sourcePath) {
++          try {
++            if (fs.statSync(data.sourcePath).isFile())
++              return streamFile(data.sourcePath);
++          } catch (_) {
++            /* file moved/unreadable — fall through to 404 */
++          }
++        }
++        return response
++          .status(404)
++          .json({ error: "No original retained for this document" });
++      } catch (e) {
++        console.error("[doc-original] error:", e);
++        response.status(500).json({ error: e.message });
++      }
++    }
++  );
++
++  // AMAdocs: export a photo together with everything AMAdocs understands about it —
++  // the AI vision description, any OCR'd text, the original camera EXIF, and source
++  // provenance — as a ZIP: the original file (untouched) + a readable JSON sidecar.
++  // This lets the AI's understanding travel WITH the photo into other tools. Originals
++  // are never modified; we stream a copy. Sidecar form (no embedding) keeps it
++  // format-agnostic (PNG/JPG/HEIC/…) and robust.
++  app.get(
++    "/workspace/:slug/doc-export",
++    [validatedRequest, flexUserRoleValid([ROLES.all]), validWorkspaceSlug],
++    async (request, response) => {
++      try {
++        const fs = require("fs");
++        const path = require("path");
++        const archiver = require("archiver");
++        const docpath = request.query.path;
++        if (!docpath)
++          return response.status(400).json({ error: "Missing document path" });
++
++        const { fileData } = require("../utils/files");
++        const data = await fileData(docpath); // path-traversal protected
++        if (!data || !data.id)
++          return response.status(404).json({ error: "Document not found" });
++
++        const originalsPath = amadocsOriginalsDir();
++        // Find the retained original by uuid prefix (<id><ext>) — traversal-safe.
++        let match = null;
++        if (fs.existsSync(originalsPath))
++          match = fs
++            .readdirSync(originalsPath)
++            .find((f) => f.startsWith(`${data.id}.`));
++        if (!match)
++          return response
++            .status(404)
++            .json({ error: "No original retained for this document" });
++        const originalFile = path.resolve(originalsPath, match);
++        const ext = path.extname(match).toLowerCase();
++
++        const displayName = data.title || match;
++        const baseName = displayName.replace(/\.[^.]+$/, "");
++        const safeName = baseName.replace(/[^\w.-]+/g, "_") || "photo";
++        // Same payload the native-metadata embed writes — one source of truth.
++        const sidecar = await amadocsExtractMetadata({
++          data,
++          slug: request.params.slug,
++          originalFile,
++          ext,
++        });
++
++        response.setHeader("Content-Type", "application/zip");
++        response.setHeader(
++          "Content-Disposition",
++          `attachment; filename="${safeName}-export.zip"`
++        );
++        const archive = archiver("zip", { zlib: { level: 9 } });
++        archive.on("error", (e) => {
++          console.error("[doc-export] archive error:", e);
++          if (!response.headersSent) response.status(500);
++          try {
++            response.end();
++          } catch (_) {}
++        });
++        archive.pipe(response);
++        archive.file(originalFile, { name: displayName });
++        archive.append(JSON.stringify(sidecar, null, 2), {
++          name: `${baseName}.amadocs.json`,
++        });
++        await archive.finalize();
++      } catch (e) {
++        console.error("[doc-export] error:", e);
++        if (!response.headersSent)
++          response.status(500).json({ error: e.message });
++      }
++    }
++  );
++
++  // AMAdocs: download a COPY of a document with its AI summary embedded in the file's
++  // OWN native metadata (PDF /Subject, Office dc:description, JPEG EXIF, PNG iTXt), so
++  // the gist travels inside the file. The user's source is NEVER touched — we read the
++  // retained original into a buffer, embed, and stream a new file. Major formats only
++  // (jpg/png/pdf/office); others 415. Generates the summary on the fly if not cached.
++  app.get(
++    "/workspace/:slug/doc-export-embedded",
++    [validatedRequest, flexUserRoleValid([ROLES.all]), validWorkspaceSlug],
++    async (request, response) => {
++      try {
++        const fs = require("fs");
++        const docpath = request.query.path;
++        if (!docpath)
++          return response.status(400).json({ error: "Missing document path" });
++
++        const {
++          fileData,
++          documentsPath,
++          normalizePath,
++          isWithin,
++        } = require("../utils/files");
++        const data = await fileData(docpath); // path-traversal protected
++        if (!data || !data.id)
++          return response.status(404).json({ error: "Document not found" });
++
++        const originalFile = amadocsRetainedOriginal(data.id);
++        if (!originalFile)
++          return response
++            .status(404)
++            .json({ error: "No original retained for this document" });
++        const ext = path.extname(originalFile).toLowerCase();
++
++        const {
++          embedMetadata,
++          SUPPORTED_EMBED_EXTS,
++        } = require("../utils/MetadataEmbed");
++        if (!SUPPORTED_EMBED_EXTS.includes(ext))
++          return response.status(415).json({
++            error: `Embedding metadata into ${ext} files isn’t supported yet.`,
++          });
++
++        // Use the cached summary, or generate one now with the workspace's chat model.
++        let summary = data.aiSummary;
++        if (!summary) {
++          const DocSummary = require("../utils/DocSummary");
++          summary = await new DocSummary({
++            model:
++              response.locals.workspace?.chatModel ||
++              process.env.OLLAMA_MODEL_PREF ||
++              null,
++          }).summarize(data.pageContent || "", {
++            title: data.title,
++            pages: Array.isArray(data.pages) ? data.pages : null,
++          });
++          if (summary) {
++            try {
++              const full = path.resolve(documentsPath, normalizePath(docpath));
++              if (isWithin(documentsPath, full) && fs.existsSync(full)) {
++                data.aiSummary = summary;
++                fs.writeFileSync(full, JSON.stringify(data, null, 4));
++              }
++            } catch (werr) {
++              console.error("[doc-export-embedded] write-back:", werr.message);
++            }
++          }
++        }
++        if (!summary)
++          return response.status(200).json({
++            summary: null,
++            error:
++              "Couldn’t generate a summary — the AI model may still be downloading.",
++          });
++
++        // Build the full payload (summary + AI description + OCR + provenance + EXIF) and
++        // embed ALL of it into the file's native metadata — the same data the sidecar JSON
++        // carries, now travelling inside the file itself.
++        const metadata = await amadocsExtractMetadata({
++          data,
++          slug: request.params.slug,
++          originalFile,
++          ext,
++        });
++        const original = fs.readFileSync(originalFile);
++        const out = await embedMetadata({ buffer: original, ext, metadata });
++        if (!out || !out.buffer)
++          return response
++            .status(500)
++            .json({ error: "Couldn’t embed the metadata into this file." });
++
++        const displayName = data.title || path.basename(originalFile);
++        const base = displayName.replace(/\.[^.]+$/, "");
++        const safeBase = base.replace(/[^\w.-]+/g, "_") || "document";
++        response.setHeader("Content-Type", out.contentType);
++        response.setHeader(
++          "Content-Disposition",
++          `attachment; filename="${safeBase}-with-info${ext}"`
++        );
++        response.send(out.buffer);
++      } catch (e) {
++        console.error("[doc-export-embedded] error:", e);
++        if (!response.headersSent)
++          response.status(500).json({ error: e.message });
++      }
++    }
++  );
++
++  // AMAdocs: the absolute path of AMAdocs' OWN retained copy of a document, so the
++  // UI's "show in file manager" still works when we don't know where the user's
++  // original came from. Transparency: a user's files are never hidden from them —
++  // they can always find AMAdocs' copy on disk, on their own machine.
++  app.get(
++    "/workspace/:slug/original-location",
++    [validatedRequest, flexUserRoleValid([ROLES.all]), validWorkspaceSlug],
++    async (request, response) => {
++      try {
++        const docpath = request.query.path;
++        if (!docpath)
++          return response.status(400).json({ error: "Missing document path" });
++        const { fileData } = require("../utils/files");
++        const data = await fileData(docpath); // path-traversal protected
++        if (!data || !data.id)
++          return response.status(404).json({ ok: false, error: "not-found" });
++        const original = amadocsRetainedOriginal(data.id);
++        if (!original)
++          return response.status(404).json({ ok: false, error: "not-found" });
++        response.status(200).json({ ok: true, path: original });
++      } catch (e) {
++        console.error("[original-location] error:", e);
++        response.status(500).json({ ok: false, error: e.message });
++      }
++    }
++  );
++
++  // AMAdocs: where AMAdocs keeps every file's retained copy on this computer.
++  // Surfaced in the UI so the user can open the folder and see/manage their docs
++  // directly — they own the files and the machine; nothing is hidden from them.
++  app.get(
++    "/system/storage-location",
++    [validatedRequest, flexUserRoleValid([ROLES.all])],
++    async (_request, response) => {
++      try {
++        const dir = amadocsOriginalsDir();
++        response
++          .status(200)
++          .json({ ok: true, path: dir, exists: fs.existsSync(dir) });
++      } catch (e) {
++        response.status(500).json({ ok: false, error: e.message });
++      }
++    }
++  );
++
++  // AMAdocs: curated catalog of models the user may DOWNLOAD from inside the app.
++  // This is the single source of truth for what's offered — every entry is an
++  // OSI-permissive licence (MIT / Apache-2.0) so the product never pulls a
++  // research/non-commercial model. The pull endpoint refuses anything not here.
++  // Sizes are approximate (4-bit quantised) and only used for display.
++  const AMADOCS_MODEL_CATALOG = [
++    { id: "phi3.5", name: "Phi-3.5", license: "MIT", sizeGB: 2.2, desc: "Balanced all-rounder · the default" },
++    { id: "phi4-mini", name: "Phi-4 mini", license: "MIT", sizeGB: 2.5, desc: "Newer than Phi-3.5, a little sharper" },
++    { id: "qwen3:1.7b", name: "Qwen 3 (small)", license: "Apache-2.0", sizeGB: 1.4, desc: "Light & fast · great on modest laptops" },
++    { id: "qwen3:4b", name: "Qwen 3", license: "Apache-2.0", sizeGB: 2.6, desc: "Strong all-rounder · needs more memory" },
++    { id: "granite4.1:3b", name: "Granite 4 (small)", license: "Apache-2.0", sizeGB: 2.1, desc: "IBM · tuned to answer from your documents, not guess" },
++    { id: "mistral", name: "Mistral", license: "Apache-2.0", sizeGB: 4.1, desc: "Larger · best on a powerful computer" },
++    // type:"vision" — not a chat model. It lets AMAdocs "see" images so photos,
++    // whiteboards, receipts and screenshots become searchable. The UI offers it
++    // to download but never lists it as a chat model to switch to.
++    { id: "moondream", name: "Image understanding", license: "Apache-2.0", sizeGB: 1.7, desc: "Lets AMAdocs read photos & scans · makes images searchable", type: "vision" },
++  ];
++
++  // AMAdocs: the download catalog (permissive models the app offers to fetch).
++  app.get(
++    "/system/model-catalog",
++    [validatedRequest, flexUserRoleValid([ROLES.all])],
++    async (_request, response) => {
++      response.status(200).json({ models: AMADOCS_MODEL_CATALOG });
++    }
++  );
++
++  // AMAdocs: download (pull) a permissive model from Ollama, streaming progress
++  // to the UI as SSE. Refuses any model not in the curated catalog above.
++  app.post(
++    "/system/pull-model",
++    [validatedRequest, flexUserRoleValid([ROLES.all])],
++    async (request, response) => {
++      const { model } = reqBody(request);
++      const allowed = AMADOCS_MODEL_CATALOG.some((m) => m.id === model);
++      if (!model || !allowed)
++        return response
++          .status(400)
++          .json({ error: "That model isn't available for download." });
++      if (!process.env.OLLAMA_BASE_PATH)
++        return response.status(500).json({ error: "No local AI runtime found." });
++
++      response.setHeader("Content-Type", "text/event-stream");
++      response.setHeader("Cache-Control", "no-cache");
++      response.setHeader("Connection", "keep-alive");
++      response.flushHeaders?.();
++      const send = (obj) => response.write(`data: ${JSON.stringify(obj)}\n\n`);
++
++      const controller = new AbortController();
++      request.on("close", () => controller.abort());
++
++      try {
++        const ollama = await fetch(
++          `${process.env.OLLAMA_BASE_PATH}/api/pull`,
++          {
++            method: "POST",
++            headers: { "Content-Type": "application/json" },
++            body: JSON.stringify({ model, stream: true }),
++            signal: controller.signal,
++          }
++        );
++        if (!ollama.ok || !ollama.body)
++          throw new Error(`runtime returned ${ollama.status}`);
++
++        // Ollama streams newline-delimited JSON; relay each line as an SSE event
++        // with a normalised percent so the UI can draw one progress bar.
++        const reader = ollama.body.getReader();
++        const dec = new TextDecoder();
++        let buf = "";
++        while (true) {
++          const { done, value } = await reader.read();
++          if (done) break;
++          buf += dec.decode(value, { stream: true });
++          const lines = buf.split("\n");
++          buf = lines.pop();
++          for (const line of lines) {
++            if (!line.trim()) continue;
++            let j;
++            try {
++              j = JSON.parse(line);
++            } catch (_) {
++              continue;
++            }
++            if (j.error) {
++              send({ error: j.error });
++              return response.end();
++            }
++            const percent =
++              j.total && j.completed
++                ? Math.round((j.completed / j.total) * 100)
++                : null;
++            send({
++              status: j.status || "",
++              completed: j.completed || 0,
++              total: j.total || 0,
++              percent,
++            });
++          }
++        }
++        send({ done: true });
++        response.end();
++      } catch (e) {
++        if (controller.signal.aborted) return; // client navigated away
++        console.error("[pull-model] error:", e);
++        send({ error: "Download failed. Check your internet connection." });
++        response.end();
++      }
++    }
++  );
++
+   // Parsed Files in separate endpoint just to keep the workspace endpoints clean
+   workspaceParsedFilesEndpoints(app);
+ }
+diff --git a/server/index.js b/server/index.js
+index db2b6d1..6cb979a 100644
+--- a/server/index.js
++++ b/server/index.js
+@@ -78,6 +78,34 @@ if (!!process.env.ENABLE_HTTPS) {
+ }
+ 
+ app.use("/api", apiRouter);
++
++// AMAdocs: single-secret API gate. Closes the open-localhost hole — when
++// AMADOCS_API_TOKEN is set (the packaged app mints one per boot), every /api
++// request must present it, as either `Authorization: Bearer <token>` or
++// `?token=<token>` (the latter for download links that can't send a header).
++// Unset (the dev stack) => passthrough, dev workflow unchanged. Mounted before
++// the route handlers so it covers every endpoint registered below.
++const AMADOCS_API_TOKEN = process.env.AMADOCS_API_TOKEN;
++if (AMADOCS_API_TOKEN) {
++  const nodeCrypto = require("crypto");
++  const tokenBuf = Buffer.from(AMADOCS_API_TOKEN);
++  const tokenOk = (provided) => {
++    if (!provided) return false;
++    const buf = Buffer.from(String(provided));
++    return (
++      buf.length === tokenBuf.length &&
++      nodeCrypto.timingSafeEqual(buf, tokenBuf)
++    );
++  };
++  apiRouter.use((req, res, next) => {
++    if (req.method === "OPTIONS") return next(); // CORS preflight carries no auth
++    const header = req.header("Authorization") || "";
++    const bearer = header.startsWith("Bearer ") ? header.slice(7) : null;
++    if (tokenOk(bearer) || tokenOk(req.query.token)) return next();
++    return res.status(401).json({ error: "Unauthorized" });
++  });
++}
++
+ systemEndpoints(apiRouter);
+ extensionEndpoints(apiRouter);
+ workspaceEndpoints(apiRouter);
+diff --git a/server/jobs/embedding-worker.js b/server/jobs/embedding-worker.js
+index 1e2071c..f1fbfe4 100644
+--- a/server/jobs/embedding-worker.js
++++ b/server/jobs/embedding-worker.js
+@@ -8,8 +8,9 @@
+  * Processes files sequentially and accepts additional files mid-run.
+  *
+  * IPC protocol (receives from parent):
+- *   { type: "embed", files, workspaceSlug, workspaceId, userId }
+- *   { type: "add_files", files }
++ *   { type: "embed", files, workspaceSlug, workspaceId, userId, cooldownMs? }
++ *   { type: "add_files", files, cooldownMs? }
++ *   { type: "stop" }                              // AMAdocs: hard kill switch
+  *
+  * IPC protocol (sends to parent):
+  *   { type: "batch_starting", workspaceSlug, filenames, totalDocs }
+@@ -18,6 +19,12 @@
+  *   { type: "doc_complete", workspaceSlug, filename, docIndex, totalDocs }
+  *   { type: "doc_failed", workspaceSlug, filename, error }
+  *   { type: "all_complete", workspaceSlug, embedded, failed }
++ *   { type: "stopped", workspaceSlug }            // AMAdocs: acked a stop
++ *
++ * AMAdocs (THE #1 RULE — "don't kill their machine"): a deliberate cool-down
++ * between documents keeps a long ingest from pinning the CPU/GPU, and a `stop`
++ * message lets the parent instantly halt all embedding work (it also SIGTERMs us
++ * as a belt-and-suspenders).
+  */
+ 
+ const { v4: uuidv4 } = require("uuid");
+@@ -32,6 +39,15 @@ let processing = false;
+ let workspaceSlug = null;
+ let workspaceId = null;
+ let userId = null;
++// AMAdocs: cool-down between docs (ms; 0 = back-to-back, the old behaviour) and a
++// stop flag the processing loop checks between items so a STOP halts promptly.
++// `processedAny` tracks whether we've already handled a doc so the cool-down lands
++// BETWEEN items (never before the first / after the last), even across recursions.
++let cooldownMs = 0;
++let stopping = false;
++let processedAny = false;
++
++const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+ 
+ function emit(event) {
+   try {
+@@ -62,11 +78,21 @@ async function processQueue() {
+   const failedToEmbed = [];
+ 
+   for (const [index, filePath] of batch.entries()) {
++    if (stopping) break;
+     if (cancelled.has(filePath)) {
+       cancelled.delete(filePath);
+       continue;
+     }
+ 
++    // AMAdocs: cool-down BETWEEN documents (not before the first / after the last).
++    // Re-check `stopping` after the wait so a STOP that arrives during the pause
++    // doesn't start another file.
++    if (processedAny && cooldownMs > 0) {
++      await sleep(cooldownMs);
++      if (stopping) break;
++    }
++    processedAny = true;
++
+     const docProgress = {
+       workspaceSlug,
+       userId,
+@@ -141,6 +167,10 @@ async function processQueue() {
+ 
+   processing = false;
+ 
++  // AMAdocs: a STOP arrived mid-batch — don't drain the queue or claim completion.
++  // The stop handler emits `stopped` and exits the process.
++  if (stopping) return;
++
+   // If new files were added while we were processing, recurse.
+   if (queue.length > 0) {
+     await processQueue();
+@@ -163,10 +193,22 @@ async function processQueue() {
+ process.on("message", async (msg) => {
+   if (!msg || !msg.type) return;
+ 
++  if (msg.type === "stop") {
++    // AMAdocs (THE #1 RULE): hard stop — drop everything pending, refuse to start
++    // any more files, ack, and exit. The parent also SIGTERMs us; whichever wins,
++    // no further embedding happens and no misleading all_complete is emitted.
++    stopping = true;
++    queue.length = 0;
++    cancelled.clear();
++    emit({ type: "stopped", workspaceSlug });
++    process.exit(0);
++  }
++
+   if (msg.type === "embed") {
+     workspaceSlug = msg.workspaceSlug;
+     workspaceId = msg.workspaceId;
+     userId = msg.userId;
++    if (typeof msg.cooldownMs === "number") cooldownMs = msg.cooldownMs;
+     queue.push(...msg.files);
+     processQueue().catch((err) => {
+       console.error("[embedding-worker] Fatal error:", err);
+@@ -175,6 +217,7 @@ process.on("message", async (msg) => {
+   }
+ 
+   if (msg.type === "add_files") {
++    if (typeof msg.cooldownMs === "number") cooldownMs = msg.cooldownMs;
+     queue.push(...msg.files);
+     // If we're not currently processing (worker is idle between batches),
+     // kick off processing immediately.
+diff --git a/server/models/documents.js b/server/models/documents.js
+index 390df91..b8592bb 100644
+--- a/server/models/documents.js
++++ b/server/models/documents.js
+@@ -6,6 +6,21 @@ const { EventLogs } = require("./eventLogs");
+ const { safeJsonParse } = require("../utils/http");
+ const { getModelTag } = require("../endpoints/utils");
+ 
++// AMAdocs: the bounded text embedded for a CATALOGED (not deep-searched) document.
++// Prefers the ~120-word AI summary (prefixed with the title so a "which file is the X
++// report" query retrieves it well). Falls back to a short leading slice when there is
++// no summary yet (e.g. the model was unavailable at ingest, or an image whose vision
++// caption — already short — IS its gist), so the file stays findable while keeping the
++// per-file embed cost bounded.
++function catalogText(data = {}) {
++  const summary = String(data?.aiSummary || "").trim();
++  if (summary) {
++    const title = String(data?.title || "").trim();
++    return title ? `${title}\n\n${summary}` : summary;
++  }
++  return String(data?.pageContent || "").slice(0, 2000);
++}
++
+ const Document = {
+   writable: ["pinned", "watched", "lastUpdatedAt"],
+   /**
+@@ -80,7 +95,21 @@ const Document = {
+     }
+   },
+ 
+-  addDocuments: async function (workspace, additions = [], userId = null) {
++  // AMAdocs: `mode` controls WHAT gets embedded for a document:
++  //   - "deep"    (default) → the full document text (full-text semantic search)
++  //   - "summary"           → only the ~120-word "catalog card" gist, so the file is
++  //                           findable by the AI librarian without a full scan (the
++  //                           ingest default; full-text is upgraded later per file via
++  //                           the "Deep search" action). The on-disk document JSON
++  //                           keeps its full pageContent either way — only the embedded
++  //                           text differs. The chosen mode is tagged onto the
++  //                           workspace_documents metadata as `amadocsSearchMode`.
++  addDocuments: async function (
++    workspace,
++    additions = [],
++    userId = null,
++    { mode = "deep" } = {}
++  ) {
+     const VectorDb = getVectorDbClass();
+     if (additions.length === 0) return { failed: [], embedded: [] };
+     const { fileData } = require("../utils/files");
+@@ -118,6 +147,7 @@ const Document = {
+ 
+       const docId = uuidv4();
+       const { pageContent: _pageContent, ...metadata } = data;
++      metadata.amadocsSearchMode = mode; // AMAdocs: catalog (summary) vs deep (full-text)
+       const newDoc = {
+         docId,
+         filename: path.split("/")[1],
+@@ -134,9 +164,14 @@ const Document = {
+         userId,
+       };
+ 
++      // AMAdocs: in catalog ("summary") mode we embed only the gist, not the whole
++      // file. The full text still lives in the on-disk JSON (data.pageContent) for the
++      // viewer/citations; we just feed a bounded card to the embedder here.
++      const embedPageContent =
++        mode === "summary" ? catalogText(data) : data.pageContent;
+       const { vectorized, error } = await VectorDb.addDocumentToNamespace(
+         workspace.slug,
+-        { ...data, docId },
++        { ...data, pageContent: embedPageContent, docId },
+         path
+       );
+ 
+diff --git a/server/models/systemSettings.js b/server/models/systemSettings.js
+index b2e8a65..9aed2ed 100644
+--- a/server/models/systemSettings.js
++++ b/server/models/systemSettings.js
+@@ -35,8 +35,10 @@ function mergeStringField(target, source, fieldName, validator = null) {
+ 
+ const SystemSettings = {
+   /** A default system prompt that is used when no other system prompt is set or available to the function caller. */
++  // AMAdocs: hard-grounded default. The product is "your document, answering" — the model must
++  // stay strictly inside the provided context and never fall back on its own training data.
+   saneDefaultSystemPrompt:
+-    "Given the following conversation, relevant context, and a follow up question, reply with an answer to the current question the user is asking. Return only your response to the question given the above information following the users instructions as needed.",
++    "You are AMAdocs, a private assistant that answers questions about the user's own documents. Answer using ONLY the context provided below from those documents. Do not use any outside or general knowledge. Do not add background, examples, or comparisons that are not present in the provided context. If the answer is not contained in the context, say plainly that you could not find it in the documents — do not guess or fill the gap from general knowledge. This is a search tool, not a chat: keep every answer to at most a short paragraph (about 120 words). Lead with the direct answer in the first sentence. Do not pad, hedge, restate the question, or add caveats about the limits of the context — just give the answer and stop. Never mention or refer to \"the context\", \"Context 0/1\", chunk or document numbers, or how the information was provided to you — write the answer as if you simply know it.",
+   protectedFields: ["multi_user_mode", "hub_api_key", "onboarding_complete"],
+   publicFields: [
+     "footer_data",
+diff --git a/server/package.json b/server/package.json
+index 6c001bf..ec00c28 100644
+--- a/server/package.json
++++ b/server/package.json
+@@ -62,6 +62,7 @@
+     "dotenv": "^16.0.3",
+     "elevenlabs": "^0.5.0",
+     "exceljs": "4.4.0",
++    "exifr": "^7.1.3",
+     "express": "^4.21.2",
+     "extract-json-from-string": "^1.0.1",
+     "fast-levenshtein": "^3.0.0",
+@@ -87,6 +88,7 @@
+     "p-queue": "6.6.2",
+     "pdf-lib": "1.17.1",
+     "pg": "^8.11.5",
++    "piexifjs": "^1.0.6",
+     "pinecone-client": "^1.1.0",
+     "pluralize": "^8.0.0",
+     "posthog-node": "^3.1.1",
+diff --git a/server/prisma/schema.prisma b/server/prisma/schema.prisma
+index 65cfd6c..12b98bf 100644
+--- a/server/prisma/schema.prisma
++++ b/server/prisma/schema.prisma
+@@ -12,7 +12,9 @@ generator client {
+ // }
+ datasource db {
+   provider = "sqlite"
+-  url      = "file:../storage/anythingllm.db"
++  // AMAdocs: env-driven so the packaged AppImage can relocate the DB to userData
++  // (the AppImage mount is read-only). Dev keeps the original path via .env.development.
++  url      = env("DATABASE_URL")
+ }
+ 
+ model api_keys {
+diff --git a/server/utils/AiProviders/ollama/index.js b/server/utils/AiProviders/ollama/index.js
+index 62e899c..cb217c2 100644
+--- a/server/utils/AiProviders/ollama/index.js
++++ b/server/utils/AiProviders/ollama/index.js
+@@ -278,6 +278,10 @@ class OllamaAILLM {
+           options: {
+             temperature,
+             num_ctx: this.promptWindowLimit(),
++            // AMAdocs: hard answer-length cap. This is a search tool — answers must
++            // be ~a paragraph, not an essay. ~200 tokens ≈ 120 words; the model
++            // physically cannot ramble. The UI trims the trailing partial sentence.
++            num_predict: 200,
+           },
+         })
+         .then((res) => {
+@@ -330,6 +334,9 @@ class OllamaAILLM {
+         options: {
+           temperature,
+           num_ctx: this.promptWindowLimit(),
++          // AMAdocs: hard answer-length cap (see getChatCompletion). ~200 tokens
++          // ≈ 120 words; keeps streamed answers to ~a paragraph for this search tool.
++          num_predict: 200,
+         },
+       }),
+       messages,
+diff --git a/server/utils/EmbeddingWorkerManager.js b/server/utils/EmbeddingWorkerManager.js
+index 88eee1a..18a8c8f 100644
+--- a/server/utils/EmbeddingWorkerManager.js
++++ b/server/utils/EmbeddingWorkerManager.js
+@@ -87,12 +87,23 @@ function removeSSEConnection(slug, res) {
+  * @param {string[]} files - Document paths to embed
+  * @param {number} workspaceId - Workspace DB id
+  * @param {number|null} userId
++ * @param {{onDocComplete?: (docpath: string) => void, onDocFailed?: (docpath: string, error: string) => void, onComplete?: (summary: object) => void}} [hooks]
++ *   AMAdocs: optional in-process callbacks invoked from the worker message switch.
++ *   Used by gnome-sync to finalize durable state per CONFIRMED doc (not at dispatch
++ *   time, which would lie if the worker later crashed). No protocol change for other
++ *   callers — they simply pass no hooks.
+  */
+-async function embedFiles(slug, files, workspaceId, userId) {
++async function embedFiles(slug, files, workspaceId, userId, hooks = {}) {
+   if (runningWorkers.has(slug)) {
+-    const { worker } = runningWorkers.get(slug);
++    const entry = runningWorkers.get(slug);
+     try {
+-      worker.send({ type: "add_files", files });
++      // Adopt the latest caller's finalize hooks so appended files are tracked too.
++      entry.hooks = hooks;
++      entry.worker.send({
++        type: "add_files",
++        files,
++        cooldownMs: embedCooldownMs(),
++      });
+       return;
+     } catch {
+       runningWorkers.delete(slug);
+@@ -108,23 +119,38 @@ async function embedFiles(slug, files, workspaceId, userId) {
+   const scriptPath = path.resolve(bg.jobsRoot, "embedding-worker.js");
+   const { worker, jobId } = await bg.spawnWorker(scriptPath);
+ 
+-  runningWorkers.set(slug, { worker, jobId });
++  runningWorkers.set(slug, { worker, jobId, hooks, stopped: false });
+   let workerCompleted = false;
+   worker.on("message", (msg) => {
+     if (!msg || !msg.type) return;
+-    if (msg.type === "all_complete") {
++    // Read hooks off the entry each time so a later embedFiles() that appended
++    // files (and replaced the hooks) is honoured.
++    const h = runningWorkers.get(slug)?.hooks || {};
++    if (msg.type === "doc_complete") h.onDocComplete?.(msg.filename);
++    else if (msg.type === "doc_failed") h.onDocFailed?.(msg.filename, msg.error);
++    else if (msg.type === "all_complete") {
+       workerCompleted = true;
+       logEmbeddingEvent(msg);
++      h.onComplete?.(msg);
+     }
+     emitProgress(slug, msg);
+   });
+ 
+   worker.on("exit", (code) => {
+-    if (runningWorkers.get(slug)?.worker === worker) {
++    const entry = runningWorkers.get(slug);
++    const wasStopped = entry?.worker === worker && entry?.stopped;
++    if (entry?.worker === worker) {
+       runningWorkers.delete(slug);
+     }
+     bg.removeJob(jobId).catch(() => {});
+ 
++    // AMAdocs: a deliberate STOP exited the worker — emit a clean `stopped`, NOT the
++    // "exited unexpectedly" all_complete that would otherwise fire.
++    if (wasStopped) {
++      emitProgress(slug, { type: "stopped", workspaceSlug: slug });
++      return;
++    }
++
+     if (!workerCompleted) {
+       emitProgress(slug, {
+         type: "all_complete",
+@@ -152,9 +178,46 @@ async function embedFiles(slug, files, workspaceId, userId) {
+     workspaceSlug: slug,
+     workspaceId,
+     userId,
++    cooldownMs: embedCooldownMs(),
+   });
+ }
+ 
++/**
++ * AMAdocs (THE #1 RULE kill switch): instantly halt embedding for one workspace.
++ * Sends a `stop` (so the worker drops its queue + acks) then SIGTERMs the child as a
++ * hard backstop. The worker's `exit` handler clears runningWorkers and emits
++ * `stopped`. Does NOT touch in-flight chat — this is the ingest stop only.
++ * @param {string} slug
++ * @returns {boolean} true if a worker was running and was signalled
++ */
++function stopWorkspace(slug) {
++  const entry = runningWorkers.get(slug);
++  if (!entry) return false;
++  entry.stopped = true;
++  try {
++    entry.worker.send({ type: "stop" });
++  } catch {
++    /* worker may already be gone */
++  }
++  try {
++    entry.worker.kill("SIGTERM");
++  } catch {
++    /* worker may already have exited */
++  }
++  eventHistory.delete(slug);
++  return true;
++}
++
++/**
++ * AMAdocs: global STOP — halt embedding across every workspace.
++ * @returns {string[]} the slugs that had a running worker
++ */
++function stopAll() {
++  const slugs = [...runningWorkers.keys()];
++  for (const slug of slugs) stopWorkspace(slug);
++  return slugs;
++}
++
+ /**
+  * Remove a queued (not yet processing) file from the embedding worker.
+  * @param {string} slug - Workspace slug
+@@ -192,6 +255,15 @@ function isNativeEmbedder() {
+   return !engine || engine === "native";
+ }
+ 
++// AMAdocs (THE #1 RULE — "don't kill their machine"): deliberate cool-down between
++// documents so a long ingest never pins the machine. Read once per dispatch from
++// EMBED_COOLDOWN_MS (ms); default 750ms, set 0 in dev for fast iteration. A negative
++// or non-numeric value falls back to the default.
++function embedCooldownMs() {
++  const v = Number(process.env.EMBED_COOLDOWN_MS);
++  return Number.isFinite(v) && v >= 0 ? v : 750;
++}
++
+ module.exports = {
+   emitProgress,
+   addSSEConnection,
+@@ -199,4 +271,6 @@ module.exports = {
+   embedFiles,
+   removeQueuedFile,
+   isNativeEmbedder,
++  stopWorkspace,
++  stopAll,
+ };
+diff --git a/server/utils/chats/stream.js b/server/utils/chats/stream.js
+index 4e369af..fe36239 100644
+--- a/server/utils/chats/stream.js
++++ b/server/utils/chats/stream.js
+@@ -15,6 +15,27 @@ const {
+ 
+ const VALID_CHAT_MODE = ["automatic", "chat", "query"];
+ 
++// AMAdocs: detect whether a retrieved source is an image (caption/OCR doc), so
++// image-grounded answers can be kept memory-less (nothing to discuss, and the
++// model cannot actually see the picture). Matches the image file extension on
++// the source title OR the section markers asImage writes into pageContent.
++const AMADOCS_IMAGE_EXT = /\.(jpe?g|png|gif|webp|hei[cf]|bmp|tiff?|avif)$/i;
++function amadocsIsImageSource(source = {}) {
++  if (AMADOCS_IMAGE_EXT.test(source?.title || "")) return true;
++  const text = source?.text || "";
++  return /(^|\n)Image description:|(^|\n)Text found in image:/.test(text);
++}
++
++// AMAdocs: runtime-injected clause for image answers — the model reads an
++// automated text description, it never sees the image. Appended in-flight so it
++// applies to every workspace immediately (not subject to the openAiPrompt-baking
++// gotcha that affects saneDefaultSystemPrompt edits).
++const AMADOCS_IMAGE_PROMPT =
++  "The context below is an automated description of an image plus any text detected in it. " +
++  "You CANNOT see the image yourself — you are only reading this text description. " +
++  "Answer by relaying what the description and detected text state. " +
++  "Do not claim to view, look at, or visually inspect the image, and do not invent any visual detail that is not in the description.";
++
+ async function streamChatWithWorkspace(
+   response,
+   workspace,
+@@ -22,7 +43,8 @@ async function streamChatWithWorkspace(
+   chatMode = "automatic",
+   user = null,
+   thread = null,
+-  attachments = []
++  attachments = [],
++  sessionId = null // AMAdocs: per-launch session id → scopes chat history to one sitting
+ ) {
+   const uuid = uuidv4();
+   const updatedMessage = await grepCommand(message, user);
+@@ -114,6 +136,7 @@ async function streamChatWithWorkspace(
+         attachments,
+       },
+       threadId: thread?.id || null,
++      apiSessionId: sessionId,
+       include: false,
+       user,
+     });
+@@ -136,7 +159,15 @@ async function streamChatWithWorkspace(
+     pinnedDocs: prefetchedPinnedDocs,
+     parsedFiles: prefetchedParsedFiles,
+   } = prefetchedContext ??
+-  (await recentChatHistory({ user, workspace, thread, messageLimit }));
++  // AMAdocs: apiSessionId scopes history to the current launch session, so a
++  // fresh launch (new sessionId) never replays an earlier conversation.
++  (await recentChatHistory({
++    user,
++    workspace,
++    thread,
++    messageLimit,
++    apiSessionId: sessionId,
++  }));
+ 
+   // Pinned docs — reuse pre-fetched if available, otherwise fetch with token cap.
+   const pinnedDocs =
+@@ -247,30 +278,40 @@ async function streamChatWithWorkspace(
+         attachments,
+       },
+       threadId: thread?.id || null,
++      apiSessionId: sessionId,
+       include: false,
+       user,
+     });
+     return;
+   }
+ 
++  // AMAdocs: if every retrieved source is an image, treat this as an image
++  // answer — drop conversation history (nothing to discuss; the model can't see
++  // the picture) and add the "you can't view the image" clause. Mixed/text
++  // results keep normal (session-scoped) memory.
++  const imageGrounded = sources.length > 0 && sources.every(amadocsIsImageSource);
++  const promptRawHistory = imageGrounded ? [] : rawHistory;
++  const promptChatHistory = imageGrounded ? [] : chatHistory;
++
+   // Compress & Assemble message to ensure prompt passes token limit with room for response
+   // and build system messages based on inputs and history.
+   // Reuse the system prompt from routing pre-fetch when available.
+-  const systemPrompt =
++  let systemPrompt =
+     prefetchedContext?.systemPrompt ??
+     (await chatPrompt(workspace, user, {
+       prompt: updatedMessage,
+-      rawHistory,
++      rawHistory: promptRawHistory,
+     }));
++  if (imageGrounded) systemPrompt += `\n\n${AMADOCS_IMAGE_PROMPT}`;
+   const messages = await LLMConnector.compressMessages(
+     {
+       systemPrompt,
+       userPrompt: updatedMessage,
+       contextTexts,
+-      chatHistory,
++      chatHistory: promptChatHistory,
+       attachments,
+     },
+-    rawHistory
++    promptRawHistory
+   );
+ 
+   // If streaming is not explicitly enabled for connector
+@@ -308,7 +349,10 @@ async function streamChatWithWorkspace(
+     metrics = stream.metrics;
+   }
+ 
+-  if (completeText?.length > 0) {
++  // AMAdocs: persist the turn for session memory — but never store image
++  // answers, so they can't pollute a later (text) question in the same session.
++  // apiSessionId keeps stored turns scoped to this launch session.
++  if (completeText?.length > 0 && !imageGrounded) {
+     const { chat } = await WorkspaceChats.new({
+       workspaceId: workspace.id,
+       prompt: message,
+@@ -320,6 +364,7 @@ async function streamChatWithWorkspace(
+         metrics,
+       },
+       threadId: thread?.id || null,
++      apiSessionId: sessionId,
+       user,
+     });
+ 
+diff --git a/server/utils/collectorApi/index.js b/server/utils/collectorApi/index.js
+index a480ae4..5c9ab36 100644
+--- a/server/utils/collectorApi/index.js
++++ b/server/utils/collectorApi/index.js
+@@ -7,6 +7,8 @@ const { Agent } = require("undici");
+  * @property {string} WhisperModelPref - The model to use for whisper if set.
+  * @property {string} openAiKey - The API key to use for OpenAI interfacing, mostly passed to OAI Whisper provider.
+  * @property {Object} ocr - The OCR options
++ * @property {{model: string, ollamaBasePath: string|null}} vision - The local vision/captioning options (AMAdocs)
++ * @property {{enabled: boolean, model: string, ollamaBasePath: string|null}} summary - The local doc-summary options (AMAdocs)
+  * @property {{allowAnyIp: "true"|null|undefined}} runtimeSettings - The runtime settings that are passed to the collector. Persisted across requests.
+  */
+ 
+@@ -67,6 +69,28 @@ class CollectorApi {
+       ocr: {
+         langList: process.env.TARGET_OCR_LANG || "eng",
+       },
++      // AMAdocs: local vision model used to caption images so text-less pictures
++      // (photos, whiteboards, receipts) become searchable. The collector resolves
++      // the Ollama URL itself; we only pass the model preference here.
++      vision: {
++        model: process.env.VISION_MODEL_PREF || "moondream",
++        ollamaBasePath: process.env.OLLAMA_BASE_PATH || null,
++      },
++      // AMAdocs: local chat model used to write a short "catalog card" summary of
++      // a document. This is now the DEFAULT at ingest (the "AI librarian" reframe):
++      // every dropped file is cataloged with a bounded ~120-word summary (read from a
++      // capped leading slice — see DocSummary), and ONLY that summary is embedded for
++      // search. Full-text "Deep search" is opt-in per file (right-click). Set
++      // DOC_SUMMARY_ENABLED=false to turn cataloging off. The collector resolves the
++      // Ollama URL itself; we only pass the model preference here.
++      summary: {
++        enabled: (process.env.DOC_SUMMARY_ENABLED ?? "true") !== "false",
++        model:
++          process.env.SUMMARY_MODEL_PREF ||
++          process.env.OLLAMA_MODEL_PREF ||
++          "phi3.5",
++        ollamaBasePath: process.env.OLLAMA_BASE_PATH || null,
++      },
+       runtimeSettings: {
+         allowAnyIp: process.env.COLLECTOR_ALLOW_ANY_IP ?? "false",
+         browserLaunchArgs: process.env.ANYTHINGLLM_CHROMIUM_ARGS ?? [],
+diff --git a/server/utils/files/multer.js b/server/utils/files/multer.js
+index c394982..c5f19db 100644
+--- a/server/utils/files/multer.js
++++ b/server/utils/files/multer.js
+@@ -13,7 +13,9 @@ const fileUploadStorage = multer.diskStorage({
+     const uploadOutput =
+       process.env.NODE_ENV === "development"
+         ? path.resolve(__dirname, `../../../collector/hotdir`)
+-        : path.resolve(process.env.STORAGE_DIR, `../../collector/hotdir`);
++        : // AMAdocs: packaged collector is read-only; uploads land in the writable
++          // STORAGE_DIR/hotdir, which the collector's WATCH_DIRECTORY also resolves to.
++          path.resolve(process.env.STORAGE_DIR, `hotdir`);
+     cb(null, uploadOutput);
+   },
+   filename: function (_, file, cb) {
+@@ -33,7 +35,9 @@ const fileAPIUploadStorage = multer.diskStorage({
+     const uploadOutput =
+       process.env.NODE_ENV === "development"
+         ? path.resolve(__dirname, `../../../collector/hotdir`)
+-        : path.resolve(process.env.STORAGE_DIR, `../../collector/hotdir`);
++        : // AMAdocs: packaged collector is read-only; uploads land in the writable
++          // STORAGE_DIR/hotdir, which the collector's WATCH_DIRECTORY also resolves to.
++          path.resolve(process.env.STORAGE_DIR, `hotdir`);
+     cb(null, uploadOutput);
+   },
+   filename: function (_, file, cb) {
+diff --git a/server/yarn.lock b/server/yarn.lock
+index a84adab..fbceba2 100644
+--- a/server/yarn.lock
++++ b/server/yarn.lock
+@@ -54,7 +54,7 @@
+ 
+ "@asamuzakjp/css-color@^3.2.0":
+   version "3.2.0"
+-  resolved "https://registry.yarnpkg.com/@asamuzakjp/css-color/-/css-color-3.2.0.tgz#cc42f5b85c593f79f1fa4f25d2b9b321e61d1794"
++  resolved "https://registry.npmjs.org/@asamuzakjp/css-color/-/css-color-3.2.0.tgz"
+   integrity sha512-K1A6z8tS3XsmCMM86xoWdn7Fkdn9m6RSVtocUrJYIwZnFVkng/PvkEoWtOWmP+Scc6saYWHWZYbndEEXxl24jw==
+   dependencies:
+     "@csstools/css-calc" "^2.1.3"
+@@ -1607,17 +1607,17 @@
+ 
+ "@csstools/color-helpers@^5.1.0":
+   version "5.1.0"
+-  resolved "https://registry.yarnpkg.com/@csstools/color-helpers/-/color-helpers-5.1.0.tgz#106c54c808cabfd1ab4c602d8505ee584c2996ef"
++  resolved "https://registry.npmjs.org/@csstools/color-helpers/-/color-helpers-5.1.0.tgz"
+   integrity sha512-S11EXWJyy0Mz5SYvRmY8nJYTFFd1LCNV+7cXyAgQtOOuzb4EsgfqDufL+9esx72/eLhsRdGZwaldu/h+E4t4BA==
+ 
+ "@csstools/css-calc@^2.1.3", "@csstools/css-calc@^2.1.4":
+   version "2.1.4"
+-  resolved "https://registry.yarnpkg.com/@csstools/css-calc/-/css-calc-2.1.4.tgz#8473f63e2fcd6e459838dd412401d5948f224c65"
++  resolved "https://registry.npmjs.org/@csstools/css-calc/-/css-calc-2.1.4.tgz"
+   integrity sha512-3N8oaj+0juUw/1H3YwmDDJXCgTB1gKU6Hc/bB502u9zR0q2vd786XJH9QfrKIEgFlZmhZiq6epXl4rHqhzsIgQ==
+ 
+ "@csstools/css-color-parser@^3.0.9":
+   version "3.1.0"
+-  resolved "https://registry.yarnpkg.com/@csstools/css-color-parser/-/css-color-parser-3.1.0.tgz#4e386af3a99dd36c46fef013cfe4c1c341eed6f0"
++  resolved "https://registry.npmjs.org/@csstools/css-color-parser/-/css-color-parser-3.1.0.tgz"
+   integrity sha512-nbtKwh3a6xNVIp/VRuXV64yTKnb1IjTAEEh3irzS+HkKjAOYLTGNb9pmVNntZ8iVBHcWDA2Dof0QtPgFI1BaTA==
+   dependencies:
+     "@csstools/color-helpers" "^5.1.0"
+@@ -1625,12 +1625,12 @@
+ 
+ "@csstools/css-parser-algorithms@^3.0.4":
+   version "3.0.5"
+-  resolved "https://registry.yarnpkg.com/@csstools/css-parser-algorithms/-/css-parser-algorithms-3.0.5.tgz#5755370a9a29abaec5515b43c8b3f2cf9c2e3076"
++  resolved "https://registry.npmjs.org/@csstools/css-parser-algorithms/-/css-parser-algorithms-3.0.5.tgz"
+   integrity sha512-DaDeUkXZKjdGhgYaHNJTV9pV7Y9B3b644jCLs9Upc3VeNGg6LWARAT6O+Q+/COo+2gg/bM5rhpMAtf70WqfBdQ==
+ 
+ "@csstools/css-tokenizer@^3.0.3":
+   version "3.0.4"
+-  resolved "https://registry.yarnpkg.com/@csstools/css-tokenizer/-/css-tokenizer-3.0.4.tgz#333fedabc3fd1a8e5d0100013731cf19e6a8c5d3"
++  resolved "https://registry.npmjs.org/@csstools/css-tokenizer/-/css-tokenizer-3.0.4.tgz"
+   integrity sha512-Vd/9EVDiu6PPJt9yAh6roZP6El1xHrdvIVGjyBsHR0RYwNHgL7FJPyIIW4fANJNG6FtyZfvlRPpFI4ZM/lubvw==
+ 
+ "@cypress/request-promise@^5.0.0":
+@@ -1755,7 +1755,7 @@
+ 
+ "@fast-csv/format@4.3.5":
+   version "4.3.5"
+-  resolved "https://registry.yarnpkg.com/@fast-csv/format/-/format-4.3.5.tgz#90d83d1b47b6aaf67be70d6118f84f3e12ee1ff3"
++  resolved "https://registry.npmjs.org/@fast-csv/format/-/format-4.3.5.tgz"
+   integrity sha512-8iRn6QF3I8Ak78lNAa+Gdl5MJJBM5vRHivFtMRUWINdevNo00K7OXxS2PshawLKTejVwieIlPmK5YlLu6w4u8A==
+   dependencies:
+     "@types/node" "^14.0.1"
+@@ -1767,7 +1767,7 @@
+ 
+ "@fast-csv/parse@4.3.6":
+   version "4.3.6"
+-  resolved "https://registry.yarnpkg.com/@fast-csv/parse/-/parse-4.3.6.tgz#ee47d0640ca0291034c7aa94039a744cfb019264"
++  resolved "https://registry.npmjs.org/@fast-csv/parse/-/parse-4.3.6.tgz"
+   integrity sha512-uRsLYksqpbDmWaSmzvJcuApSEe38+6NQZBUsuAyMZKqHxH0g1wcJgsKUvN3WC8tewaqFjBMMGrkHmC+T7k8LvA==
+   dependencies:
+     "@types/node" "^14.0.1"
+@@ -2018,7 +2018,7 @@
+ 
+ "@lancedb/lancedb-darwin-arm64@0.15.0":
+   version "0.15.0"
+-  resolved "https://registry.npmjs.org/@lancedb/lancedb-darwin-arm64/-/lancedb-darwin-arm64-0.15.0.tgz"
++  resolved "https://registry.yarnpkg.com/@lancedb/lancedb-darwin-arm64/-/lancedb-darwin-arm64-0.15.0.tgz#62b82d3ba76b489d9beab8db966b606b670371df"
+   integrity sha512-e6eiS1dUdSx3G3JXFEn5bk6I26GR7UM2QwQ1YMrTsg7IvGDqKmXc/s5j4jpJH0mzm7rwqh+OAILPIjr7DoUCDA==
+ 
+ "@lancedb/lancedb-darwin-x64@0.15.0":
+@@ -2038,12 +2038,12 @@
+ 
+ "@lancedb/lancedb-linux-x64-gnu@0.15.0":
+   version "0.15.0"
+-  resolved "https://registry.yarnpkg.com/@lancedb/lancedb-linux-x64-gnu/-/lancedb-linux-x64-gnu-0.15.0.tgz#5e4ddce1b8cae80fdac9c24cc3d755a13a524292"
++  resolved "https://registry.npmjs.org/@lancedb/lancedb-linux-x64-gnu/-/lancedb-linux-x64-gnu-0.15.0.tgz"
+   integrity sha512-0lKEc3M06ax3RozBbxHuNN9qWqhJUiKDnRC3ttsbmo4VrOUBvAO3fKoaRkjZhAA8q4+EdhZnCaQZezsk60f7Ag==
+ 
+ "@lancedb/lancedb-linux-x64-musl@0.15.0":
+   version "0.15.0"
+-  resolved "https://registry.yarnpkg.com/@lancedb/lancedb-linux-x64-musl/-/lancedb-linux-x64-musl-0.15.0.tgz#d33bf662ebef2881c9256e7ad4cb1b0f6a91685f"
++  resolved "https://registry.npmjs.org/@lancedb/lancedb-linux-x64-musl/-/lancedb-linux-x64-musl-0.15.0.tgz"
+   integrity sha512-ls+ikV7vWyVnqVT7bMmuqfGCwVR5JzPIfJ5iZ4rkjU4iTIQRpY7u/cTe9rGKt/+psliji8x6PPZHpfdGXHmleQ==
+ 
+ "@lancedb/lancedb-win32-arm64-msvc@0.15.0":
+@@ -2229,12 +2229,12 @@
+ 
+ "@mintplex-labs/mdpdf-linux-x64-gnu@0.1.9":
+   version "0.1.9"
+-  resolved "https://registry.yarnpkg.com/@mintplex-labs/mdpdf-linux-x64-gnu/-/mdpdf-linux-x64-gnu-0.1.9.tgz#b816fcd071fcb5158c0c73516a6ffe486198b17c"
++  resolved "https://registry.npmjs.org/@mintplex-labs/mdpdf-linux-x64-gnu/-/mdpdf-linux-x64-gnu-0.1.9.tgz"
+   integrity sha512-7NwBhKjNjpX54n4CLhx/yNT+mrSEwRurC07fy9+GXT0BXPqyinBNwnT0r2iabMPJ+p98zcc3op9JeTKpSqE6iA==
+ 
+ "@mintplex-labs/mdpdf-linux-x64-musl@0.1.9":
+   version "0.1.9"
+-  resolved "https://registry.yarnpkg.com/@mintplex-labs/mdpdf-linux-x64-musl/-/mdpdf-linux-x64-musl-0.1.9.tgz#8c294af85fb9fc75e5c85048484691fe320daaf5"
++  resolved "https://registry.npmjs.org/@mintplex-labs/mdpdf-linux-x64-musl/-/mdpdf-linux-x64-musl-0.1.9.tgz"
+   integrity sha512-sqaLe1ANYdLul8V6u8BMHkx6RahRW+LkMZDrBELlz+LBC6IhgOTV1VPXrgLv6C1nK9ZIAuBlm3tyDA1OpW/iXA==
+ 
+ "@mintplex-labs/mdpdf-win32-arm64-msvc@0.1.9":
+@@ -2249,7 +2249,7 @@
+ 
+ "@mintplex-labs/mdpdf@^0.1.9":
+   version "0.1.9"
+-  resolved "https://registry.yarnpkg.com/@mintplex-labs/mdpdf/-/mdpdf-0.1.9.tgz#a5f8a04e355195214c6492c47bdc650fa5d6b29c"
++  resolved "https://registry.npmjs.org/@mintplex-labs/mdpdf/-/mdpdf-0.1.9.tgz"
+   integrity sha512-EyJfgzZisEETrTg85KgtUQJ2CijzWkKidpfep3zsaFEY2x11yQeEyQeH4QmN34cWm1Xpk6cCjmvrJ8RixnNn9A==
+   optionalDependencies:
+     "@mintplex-labs/mdpdf-darwin-arm64" "0.1.9"
+@@ -2282,14 +2282,14 @@
+ 
+ "@pdf-lib/standard-fonts@^1.0.0":
+   version "1.0.0"
+-  resolved "https://registry.yarnpkg.com/@pdf-lib/standard-fonts/-/standard-fonts-1.0.0.tgz#8ba691c4421f71662ed07c9a0294b44528af2d7f"
++  resolved "https://registry.npmjs.org/@pdf-lib/standard-fonts/-/standard-fonts-1.0.0.tgz"
+   integrity sha512-hU30BK9IUN/su0Mn9VdlVKsWBS6GyhVfqjwl1FjZN4TxP6cCw0jP2w7V3Hf5uX7M0AZJ16vey9yE0ny7Sa59ZA==
+   dependencies:
+     pako "^1.0.6"
+ 
+ "@pdf-lib/upng@^1.0.1":
+   version "1.0.1"
+-  resolved "https://registry.yarnpkg.com/@pdf-lib/upng/-/upng-1.0.1.tgz#7dc9c636271aca007a9df4deaf2dd7e7960280cb"
++  resolved "https://registry.npmjs.org/@pdf-lib/upng/-/upng-1.0.1.tgz"
+   integrity sha512-dQK2FUMQtowVP00mtIksrlZhdFXQZPC+taih1q4CvPZ5vqdxR/LKBaFg0oAfzd1GlHZXXSPdQfzQnt+ViGvEIQ==
+   dependencies:
+     pako "^1.0.10"
+@@ -3730,7 +3730,7 @@
+ 
+ "@types/node@^14.0.1":
+   version "14.18.63"
+-  resolved "https://registry.yarnpkg.com/@types/node/-/node-14.18.63.tgz#1788fa8da838dbb5f9ea994b834278205db6ca2b"
++  resolved "https://registry.npmjs.org/@types/node/-/node-14.18.63.tgz"
+   integrity sha512-fAtCfv4jJg+ExtXhvCkCqUKZ+4ok/JQk01qDKhL5BDDoS3AxKXhV5/MAVUZyQnSEd2GT92fkgZl0pz0Q0AzcIQ==
+ 
+ "@types/node@^18.11.18":
+@@ -3756,7 +3756,7 @@
+ 
+ "@types/node@^25.2.3":
+   version "25.5.0"
+-  resolved "https://registry.yarnpkg.com/@types/node/-/node-25.5.0.tgz#5c99f37c443d9ccc4985866913f1ed364217da31"
++  resolved "https://registry.npmjs.org/@types/node/-/node-25.5.0.tgz"
+   integrity sha512-jp2P3tQMSxWugkCUKLRPVUpGaL5MVFwF8RDuSRztfwgN1wmqJeMSbKlnEtQqU8UrhTmzEmZdu2I6v2dpp7XIxw==
+   dependencies:
+     undici-types "~7.18.0"
+@@ -3781,7 +3781,7 @@
+ 
+ "@types/trusted-types@^2.0.7":
+   version "2.0.7"
+-  resolved "https://registry.yarnpkg.com/@types/trusted-types/-/trusted-types-2.0.7.tgz#baccb07a970b91707df3a3e8ba6896c57ead2d11"
++  resolved "https://registry.npmjs.org/@types/trusted-types/-/trusted-types-2.0.7.tgz"
+   integrity sha512-ScaPdn1dQczgbl0QFTeTOmVHFULt394XJgOQNoyVhZ6r2vLnMLJfBPd53SB52T/3G36VI1/g2MZaX0cwDuXsfw==
+ 
+ "@types/uuid@^10.0.0":
+@@ -3996,7 +3996,7 @@ append-field@^1.0.0:
+ 
+ archiver-utils@^2.1.0:
+   version "2.1.0"
+-  resolved "https://registry.yarnpkg.com/archiver-utils/-/archiver-utils-2.1.0.tgz#e8a460e94b693c3e3da182a098ca6285ba9249e2"
++  resolved "https://registry.npmjs.org/archiver-utils/-/archiver-utils-2.1.0.tgz"
+   integrity sha512-bEL/yUb/fNNiNTuUz979Z0Yg5L+LzLxGJz8x79lYmR54fmTIb6ob/hNQgkQnIUDWIFjZVQwl9Xs356I6BAMHfw==
+   dependencies:
+     glob "^7.1.4"
+@@ -4012,7 +4012,7 @@ archiver-utils@^2.1.0:
+ 
+ archiver-utils@^3.0.4:
+   version "3.0.4"
+-  resolved "https://registry.yarnpkg.com/archiver-utils/-/archiver-utils-3.0.4.tgz#a0d201f1cf8fce7af3b5a05aea0a337329e96ec7"
++  resolved "https://registry.npmjs.org/archiver-utils/-/archiver-utils-3.0.4.tgz"
+   integrity sha512-KVgf4XQVrTjhyWmx6cte4RxonPLR9onExufI1jhvw/MQ4BB6IsZD5gT8Lq+u/+pRkWna/6JoHpiQioaqFP5Rzw==
+   dependencies:
+     glob "^7.2.3"
+@@ -4028,7 +4028,7 @@ archiver-utils@^3.0.4:
+ 
+ archiver@^5.0.0:
+   version "5.3.2"
+-  resolved "https://registry.yarnpkg.com/archiver/-/archiver-5.3.2.tgz#99991d5957e53bd0303a392979276ac4ddccf3b0"
++  resolved "https://registry.npmjs.org/archiver/-/archiver-5.3.2.tgz"
+   integrity sha512-+25nxyyznAXF7Nef3y0EbBeqmGZgeN/BxHX29Rs39djAfaFalmQ89SE6CWyDCHzGL0yt/ycBtNOmGTW0FyGWNw==
+   dependencies:
+     archiver-utils "^2.1.0"
+@@ -4208,7 +4208,7 @@ async@^3.2.3:
+ 
+ async@^3.2.4:
+   version "3.2.6"
+-  resolved "https://registry.yarnpkg.com/async/-/async-3.2.6.tgz#1b0728e14929d51b85b449b7f06e27c1145e38ce"
++  resolved "https://registry.npmjs.org/async/-/async-3.2.6.tgz"
+   integrity sha512-htCUDlxyyCLMgaM3xXg0C0LW2xqfuQ6p05pCEIsXuyQ+a1koYKTuBMzRNwmybfLgvJDMd0r1LTn4+E0Ti6C2AA==
+ 
+ asynckit@^0.4.0:
+@@ -4314,7 +4314,7 @@ bcryptjs@^3.0.3:
+ 
+ big-integer@^1.6.17:
+   version "1.6.52"
+-  resolved "https://registry.yarnpkg.com/big-integer/-/big-integer-1.6.52.tgz#60a887f3047614a8e1bffe5d7173490a97dc8c85"
++  resolved "https://registry.npmjs.org/big-integer/-/big-integer-1.6.52.tgz"
+   integrity sha512-QxD8cf2eVqJOOz63z6JIN9BzvVs/dlySa5HGSBH5xtR8dPteIRQnBxxKqkNTiT6jbDTF6jAfrd4oMcND9RGbQg==
+ 
+ binary-extensions@^2.0.0, binary-extensions@^2.2.0:
+@@ -4329,7 +4329,7 @@ binary-search@^1.3.5:
+ 
+ binary@~0.3.0:
+   version "0.3.0"
+-  resolved "https://registry.yarnpkg.com/binary/-/binary-0.3.0.tgz#9f60553bc5ce8c3386f3b553cff47462adecaa79"
++  resolved "https://registry.npmjs.org/binary/-/binary-0.3.0.tgz"
+   integrity sha512-D4H1y5KYwpJgK8wk1Cue5LLPgmwHKYSChkbspQg5JtVuR5ulGckxfR62H3AE9UDkdMC8yyXlqYihuz3Aqg2XZg==
+   dependencies:
+     buffers "~0.1.1"
+@@ -4369,7 +4369,7 @@ bluebird@^3.5.0:
+ 
+ bluebird@~3.4.1:
+   version "3.4.7"
+-  resolved "https://registry.yarnpkg.com/bluebird/-/bluebird-3.4.7.tgz#f72d760be09b7f76d08ed8fae98b289a8d05fab3"
++  resolved "https://registry.npmjs.org/bluebird/-/bluebird-3.4.7.tgz"
+   integrity sha512-iD3898SR7sWVRHbiQv+sHUtHnMvC1o3nW5rAcqnq3uOn07DSAppZYUkIGslDz6gXC7HfunPe7YVBgoEJASPcHA==
+ 
+ bn.js@^4.0.0:
+@@ -4435,7 +4435,7 @@ brace-expansion@^1.1.7:
+ 
+ brace-expansion@^2.0.1:
+   version "2.0.3"
+-  resolved "https://registry.yarnpkg.com/brace-expansion/-/brace-expansion-2.0.3.tgz#0493338bdd58e319b1039c67cf7ee439892c01d9"
++  resolved "https://registry.npmjs.org/brace-expansion/-/brace-expansion-2.0.3.tgz"
+   integrity sha512-MCV/fYJEbqx68aE58kv2cA/kiky1G8vux3OR6/jbS+jIMe/6fJWa0DTzJU7dqijOWYwHi1t29FlfYI9uytqlpA==
+   dependencies:
+     balanced-match "^1.0.0"
+@@ -4469,7 +4469,7 @@ buffer-from@^1.0.0:
+ 
+ buffer-indexof-polyfill@~1.0.0:
+   version "1.0.2"
+-  resolved "https://registry.yarnpkg.com/buffer-indexof-polyfill/-/buffer-indexof-polyfill-1.0.2.tgz#d2732135c5999c64b277fcf9b1abe3498254729c"
++  resolved "https://registry.npmjs.org/buffer-indexof-polyfill/-/buffer-indexof-polyfill-1.0.2.tgz"
+   integrity sha512-I7wzHwA3t1/lwXQh+A5PbNvJxgfo5r3xulgpYDB5zckTu/Z9oUK9biouBKQUjEqzaz3HnAT6TYoovmE+GqSf7A==
+ 
+ buffer@^5.5.0:
+@@ -4490,7 +4490,7 @@ buffer@^6.0.3:
+ 
+ buffers@~0.1.1:
+   version "0.1.1"
+-  resolved "https://registry.yarnpkg.com/buffers/-/buffers-0.1.1.tgz#b24579c3bed4d6d396aeee6d9a8ae7f5482ab7bb"
++  resolved "https://registry.npmjs.org/buffers/-/buffers-0.1.1.tgz"
+   integrity sha512-9q/rDEGSb/Qsvv2qvzIzdluL5k7AaJOTrw23z9reQthrbF7is4CtlT0DXyO1oei2DCp4uojjzQ7igaSHp1kAEQ==
+ 
+ busboy@^1.0.0:
+@@ -4567,7 +4567,7 @@ caseless@~0.12.0:
+ 
+ chainsaw@~0.1.0:
+   version "0.1.0"
+-  resolved "https://registry.yarnpkg.com/chainsaw/-/chainsaw-0.1.0.tgz#5eab50b28afe58074d0d58291388828b5e5fbc98"
++  resolved "https://registry.npmjs.org/chainsaw/-/chainsaw-0.1.0.tgz"
+   integrity sha512-75kWfWt6MEKNC8xYXIdRpDehRYY/tNSgwKaJq+dbbDcxORuVrrQ+SEHoWsniVn9XPYfP4gmdWIeDk/4YNp1rNQ==
+   dependencies:
+     traverse ">=0.3.0 <0.4"
+@@ -4895,7 +4895,7 @@ commander@^8.0.0:
+ 
+ compress-commons@^4.1.2:
+   version "4.1.2"
+-  resolved "https://registry.yarnpkg.com/compress-commons/-/compress-commons-4.1.2.tgz#6542e59cb63e1f46a8b21b0e06f9a32e4c8b06df"
++  resolved "https://registry.npmjs.org/compress-commons/-/compress-commons-4.1.2.tgz"
+   integrity sha512-D3uMHtGc/fcO1Gt1/L7i1e33VOvD4A9hfQLP+6ewd+BvG/gQ84Yh4oftEhAdjSMgBgwGL+jsppT7JYNpo6MHHg==
+   dependencies:
+     buffer-crc32 "^0.2.13"
+@@ -4978,12 +4978,12 @@ cors@^2.8.5:
+ 
+ crc-32@^1.2.0:
+   version "1.2.2"
+-  resolved "https://registry.yarnpkg.com/crc-32/-/crc-32-1.2.2.tgz#3cad35a934b8bf71f25ca524b6da51fb7eace2ff"
++  resolved "https://registry.npmjs.org/crc-32/-/crc-32-1.2.2.tgz"
+   integrity sha512-ROmzCKrTnOwybPcJApAA6WBWij23HVfGVNKqqrZpuyZOHqK2CwHSvpGuyt/UNNvaIjEd8X5IFGp4Mh+Ie1IHJQ==
+ 
+ crc32-stream@^4.0.2:
+   version "4.0.3"
+-  resolved "https://registry.yarnpkg.com/crc32-stream/-/crc32-stream-4.0.3.tgz#85dd677eb78fa7cad1ba17cc506a597d41fc6f33"
++  resolved "https://registry.npmjs.org/crc32-stream/-/crc32-stream-4.0.3.tgz"
+   integrity sha512-NT7w2JVU7DFroFdYkeq8cywxrgjPHWkdX1wjpRQXPX5Asews3tA+Ght6lddQO5Mkumffp3X7GEqku3epj2toIw==
+   dependencies:
+     crc-32 "^1.2.0"
+@@ -5042,7 +5042,7 @@ css-what@^6.1.0:
+ 
+ cssstyle@^4.2.1:
+   version "4.6.0"
+-  resolved "https://registry.yarnpkg.com/cssstyle/-/cssstyle-4.6.0.tgz#ea18007024e3167f4f105315f3ec2d982bf48ed9"
++  resolved "https://registry.npmjs.org/cssstyle/-/cssstyle-4.6.0.tgz"
+   integrity sha512-2z+rWdzbbSZv6/rhtvzvqeZQHrBaqgogqt85sqFNbabZOuFbCVFb8kPeEtZjiKkbrm395irpNKiYeFeLiQnFPg==
+   dependencies:
+     "@asamuzakjp/css-color" "^3.2.0"
+@@ -5062,7 +5062,7 @@ dashdash@^1.12.0:
+ 
+ data-urls@^5.0.0:
+   version "5.0.0"
+-  resolved "https://registry.yarnpkg.com/data-urls/-/data-urls-5.0.0.tgz#2f76906bce1824429ffecb6920f45a0b30f00dde"
++  resolved "https://registry.npmjs.org/data-urls/-/data-urls-5.0.0.tgz"
+   integrity sha512-ZYP5VBHshaDAiVZxjbRVcFJpc+4xGgT0bK3vzy1HLN8jTO975HEbuYzZJcHoQEY5K1a0z8YayJkyVETa08eNTg==
+   dependencies:
+     whatwg-mimetype "^4.0.0"
+@@ -5129,7 +5129,7 @@ dayjs@^1.11.7:
+ 
+ dayjs@^1.8.34:
+   version "1.11.20"
+-  resolved "https://registry.yarnpkg.com/dayjs/-/dayjs-1.11.20.tgz#88d919fd639dc991415da5f4cb6f1b6650811938"
++  resolved "https://registry.npmjs.org/dayjs/-/dayjs-1.11.20.tgz"
+   integrity sha512-YbwwqR/uYpeoP4pu043q+LTDLFBLApUP6VxRihdfNTqu4ubqMlGDLd6ErXhEgsyvY0K6nCs7nggYumAN+9uEuQ==
+ 
+ debug@2.6.9:
+@@ -5167,7 +5167,7 @@ decamelize@1.2.0:
+ 
+ decimal.js@^10.5.0:
+   version "10.6.0"
+-  resolved "https://registry.yarnpkg.com/decimal.js/-/decimal.js-10.6.0.tgz#e649a43e3ab953a72192ff5983865e509f37ed9a"
++  resolved "https://registry.npmjs.org/decimal.js/-/decimal.js-10.6.0.tgz"
+   integrity sha512-YpgQiITW3JXGntzdUmyUR1V812Hn8T1YVXhCu+wO3OpS4eU9l4YdD3qjyiKdV6mvV29zapkMeD390UVEf2lkUg==
+ 
+ decompress-response@^6.0.0:
+@@ -5267,7 +5267,7 @@ doctrine@^2.1.0:
+ 
+ docx@9.6.1:
+   version "9.6.1"
+-  resolved "https://registry.yarnpkg.com/docx/-/docx-9.6.1.tgz#c3f173b46be5de455bc5a8eb108923e2e46224e3"
++  resolved "https://registry.npmjs.org/docx/-/docx-9.6.1.tgz"
+   integrity sha512-ZJja9/KBUuFC109sCMzovoq2GR2wCG/AuxivjA+OHj/q0TEgJIm3S7yrlUxIy3B+bV8YDj/BiHfWyrRFmyWpDQ==
+   dependencies:
+     "@types/node" "^25.2.3"
+@@ -5300,7 +5300,7 @@ domhandler@^5.0.2, domhandler@^5.0.3:
+ 
+ dompurify@3.3.3:
+   version "3.3.3"
+-  resolved "https://registry.yarnpkg.com/dompurify/-/dompurify-3.3.3.tgz#680cae8af3e61320ddf3666a3bc843f7b291b2b6"
++  resolved "https://registry.npmjs.org/dompurify/-/dompurify-3.3.3.tgz"
+   integrity sha512-Oj6pzI2+RqBfFG+qOaOLbFXLQ90ARpcGG6UePL82bJLtdsa6CYJD7nmiU8MW9nQNOtCHV3lZ/Bzq1X0QYbBZCA==
+   optionalDependencies:
+     "@types/trusted-types" "^2.0.7"
+@@ -5339,7 +5339,7 @@ dunder-proto@^1.0.0, dunder-proto@^1.0.1:
+ 
+ duplexer2@~0.1.4:
+   version "0.1.4"
+-  resolved "https://registry.yarnpkg.com/duplexer2/-/duplexer2-0.1.4.tgz#8b12dab878c0d69e3e7891051662a32fc6bddcc1"
++  resolved "https://registry.npmjs.org/duplexer2/-/duplexer2-0.1.4.tgz"
+   integrity sha512-asLFVfWWtJ90ZyOUHMqk7/S2w2guQKxUI2itj3d92ADHhxUSbCMGi1f1cBcJ7xM1To+pE/Khbwo1yuNbMEPKeA==
+   dependencies:
+     readable-stream "^2.0.2"
+@@ -5430,7 +5430,7 @@ entities@^4.2.0, entities@^4.5.0:
+ 
+ entities@^6.0.0:
+   version "6.0.1"
+-  resolved "https://registry.yarnpkg.com/entities/-/entities-6.0.1.tgz#c28c34a43379ca7f61d074130b2f5f7020a30694"
++  resolved "https://registry.npmjs.org/entities/-/entities-6.0.1.tgz"
+   integrity sha512-aN97NXWF6AWBTahfVOIrB/NShkzi5H7F9r1s9mD3cDj4Ko5f2qhhVoYMibXF7GlLveb/D2ioWay8lxI97Ven3g==
+ 
+ es-abstract@^1.22.1, es-abstract@^1.22.3, es-abstract@^1.23.0, es-abstract@^1.23.1, es-abstract@^1.23.2, es-abstract@^1.23.3:
+@@ -5845,7 +5845,7 @@ eventsource@^3.0.2:
+ 
+ exceljs@4.4.0:
+   version "4.4.0"
+-  resolved "https://registry.yarnpkg.com/exceljs/-/exceljs-4.4.0.tgz#cfb1cb8dcc82c760a9fc9faa9e52dadab66b0156"
++  resolved "https://registry.npmjs.org/exceljs/-/exceljs-4.4.0.tgz"
+   integrity sha512-XctvKaEMaj1Ii9oDOqbW/6e1gXknSY4g/aLCDicOXqBE4M0nRWkUu0PTp++UPNzoFY12BNHMfs/VadKIS6llvg==
+   dependencies:
+     archiver "^5.0.0"
+@@ -5873,6 +5873,11 @@ execa@^5.1.1:
+     signal-exit "^3.0.3"
+     strip-final-newline "^2.0.0"
+ 
++exifr@^7.1.3:
++  version "7.1.3"
++  resolved "https://registry.npmjs.org/exifr/-/exifr-7.1.3.tgz"
++  integrity sha512-g/aje2noHivrRSLbAUtBPWFbxKdKhgj/xr1vATDdUXPOFYJlQ62Ft0oy+72V6XLIpDJfHs6gXLbBLAolqOXYRw==
++
+ expand-template@^2.0.3:
+   version "2.0.3"
+   resolved "https://registry.npmjs.org/expand-template/-/expand-template-2.0.3.tgz"
+@@ -5995,7 +6000,7 @@ extsprintf@^1.2.0:
+ 
+ fast-csv@^4.3.1:
+   version "4.3.6"
+-  resolved "https://registry.yarnpkg.com/fast-csv/-/fast-csv-4.3.6.tgz#70349bdd8fe4d66b1130d8c91820b64a21bc4a63"
++  resolved "https://registry.npmjs.org/fast-csv/-/fast-csv-4.3.6.tgz"
+   integrity sha512-2RNSpuwwsJGP0frGsOmTb9oUF+VkFSM4SyLTDgwf2ciHWTarN0lQTC+F2f/t5J9QjW+c65VFIAAu85GsvMIusw==
+   dependencies:
+     "@fast-csv/format" "4.3.5"
+@@ -6297,12 +6302,12 @@ fs.realpath@^1.0.0:
+ 
+ fsevents@~2.3.2:
+   version "2.3.3"
+-  resolved "https://registry.npmjs.org/fsevents/-/fsevents-2.3.3.tgz"
++  resolved "https://registry.yarnpkg.com/fsevents/-/fsevents-2.3.3.tgz#cac6407785d03675a2a5e1a5305c697b347d90d6"
+   integrity sha512-5xoDfX+fL7faATnagmWPpbFtwh/R77WmMMqqHGS65C3vvB0YHrgF+B1YmZ3441tMj5n63k0212XNoJwzlhffQw==
+ 
+ fstream@^1.0.12:
+   version "1.0.12"
+-  resolved "https://registry.yarnpkg.com/fstream/-/fstream-1.0.12.tgz#4e8ba8ee2d48be4f7d0de505455548eae5932045"
++  resolved "https://registry.npmjs.org/fstream/-/fstream-1.0.12.tgz"
+   integrity sha512-WvJ193OHa0GHPEL+AycEJgxvBEwyfRkN1vhjca23OaPVMCaLCXTd5qAu82AjTcgP1UJmytkOKb63Ypde7raDIg==
+   dependencies:
+     graceful-fs "^4.1.2"
+@@ -6480,7 +6485,7 @@ gopd@^1.0.1, gopd@^1.2.0:
+ 
+ graceful-fs@^4.1.2, graceful-fs@^4.2.0, graceful-fs@^4.2.2:
+   version "4.2.11"
+-  resolved "https://registry.yarnpkg.com/graceful-fs/-/graceful-fs-4.2.11.tgz#4183e4e8bf08bb6e05bbb2f7d2e0c8f712ca40e3"
++  resolved "https://registry.npmjs.org/graceful-fs/-/graceful-fs-4.2.11.tgz"
+   integrity sha512-RbJ5/jmFcNNCcDV5o9eTnBLJ/HszWV0P73bc+Ff4nS/rJj+YaS6IGyiOL0VoBYX+l1Wrl3k63h/KrH+nhJ0XvQ==
+ 
+ graphql-request@^5.2.0:
+@@ -6556,7 +6561,7 @@ has-tostringtag@^1.0.0, has-tostringtag@^1.0.2:
+ 
+ hash.js@^1.1.7:
+   version "1.1.7"
+-  resolved "https://registry.yarnpkg.com/hash.js/-/hash.js-1.1.7.tgz#0babca538e8d4ee4a0f8988d68866537a003cf42"
++  resolved "https://registry.npmjs.org/hash.js/-/hash.js-1.1.7.tgz"
+   integrity sha512-taOaskGt4z4SOANNseOviYDvjEJinIkRgmp7LbKP2YTTmVxWBl87s/uzK9r+44BclBSp2X7K1hqeNfz9JbBeXA==
+   dependencies:
+     inherits "^2.0.3"
+@@ -6609,7 +6614,7 @@ hermes-parser@0.20.1:
+ 
+ html-encoding-sniffer@^4.0.0:
+   version "4.0.0"
+-  resolved "https://registry.yarnpkg.com/html-encoding-sniffer/-/html-encoding-sniffer-4.0.0.tgz#696df529a7cfd82446369dc5193e590a3735b448"
++  resolved "https://registry.npmjs.org/html-encoding-sniffer/-/html-encoding-sniffer-4.0.0.tgz"
+   integrity sha512-Y22oTqIU4uuPgEemfz7NDJz6OeKf12Lsu+QC+s3BVpda64lTiMYCyGwg5ki4vFxkMwQdeZDl2adZoqUgdFuTgQ==
+   dependencies:
+     whatwg-encoding "^3.1.1"
+@@ -6648,7 +6653,7 @@ http-errors@^2.0.0, http-errors@~2.0.0, http-errors@~2.0.1:
+ 
+ http-proxy-agent@^7.0.0, http-proxy-agent@^7.0.2:
+   version "7.0.2"
+-  resolved "https://registry.yarnpkg.com/http-proxy-agent/-/http-proxy-agent-7.0.2.tgz#9a8b1f246866c028509486585f62b8f2c18c270e"
++  resolved "https://registry.npmjs.org/http-proxy-agent/-/http-proxy-agent-7.0.2.tgz"
+   integrity sha512-T1gkAiYYDWYx3V5Bmyu7HcfcvL7mUrTWiM6yOfa3PIphViJ/gFPbvidQ+veqSOHci/PxBcDabeUNCzpOODJZig==
+   dependencies:
+     agent-base "^7.1.0"
+@@ -7028,7 +7033,7 @@ is-number@^7.0.0:
+ 
+ is-potential-custom-element-name@^1.0.1:
+   version "1.0.1"
+-  resolved "https://registry.yarnpkg.com/is-potential-custom-element-name/-/is-potential-custom-element-name-1.0.1.tgz#171ed6f19e3ac554394edf78caa05784a45bebb5"
++  resolved "https://registry.npmjs.org/is-potential-custom-element-name/-/is-potential-custom-element-name-1.0.1.tgz"
+   integrity sha512-bCYeRA2rVibKZd+s2625gGnGF/t7DSqDs4dP7CrLA1m7jKWz6pps0LpYLJN8Q64HtmPKJ1hrN3nzPNKFEKOUiQ==
+ 
+ is-promise@^4.0.0:
+@@ -7306,7 +7311,7 @@ jsbn@~0.1.0:
+ 
+ jsdom@26.1.0:
+   version "26.1.0"
+-  resolved "https://registry.yarnpkg.com/jsdom/-/jsdom-26.1.0.tgz#ab5f1c1cafc04bd878725490974ea5e8bf0c72b3"
++  resolved "https://registry.npmjs.org/jsdom/-/jsdom-26.1.0.tgz"
+   integrity sha512-Cvc9WUhxSMEo4McES3P7oK3QaXldCfNWp7pl2NNeiIFlCoLr3kfq9kb1fxftiwk1FLV7CvpvDfonxtzUDeSOPg==
+   dependencies:
+     cssstyle "^4.2.1"
+@@ -7542,7 +7547,7 @@ langsmith@~0.1.39:
+ 
+ lazystream@^1.0.0:
+   version "1.0.1"
+-  resolved "https://registry.yarnpkg.com/lazystream/-/lazystream-1.0.1.tgz#494c831062f1f9408251ec44db1cba29242a2638"
++  resolved "https://registry.npmjs.org/lazystream/-/lazystream-1.0.1.tgz"
+   integrity sha512-b94GiNHQNy6JNTrt5w6zNyffMrNkXZb3KTkCZJb2V1xaEGCk093vkZ2jk3tpaeP33/OiXC+WvK9AxUebnf5nbw==
+   dependencies:
+     readable-stream "^2.0.5"
+@@ -7569,7 +7574,7 @@ lil-http-terminator@^1.2.2:
+ 
+ listenercount@~1.0.1:
+   version "1.0.1"
+-  resolved "https://registry.yarnpkg.com/listenercount/-/listenercount-1.0.1.tgz#84c8a72ab59c4725321480c975e6508342e70937"
++  resolved "https://registry.npmjs.org/listenercount/-/listenercount-1.0.1.tgz"
+   integrity sha512-3mk/Zag0+IJxeDrxSgaDPy4zZ3w05PRZeJNnlWhzFz5OkX49J4krc+A8X2d2M69vGMBEX0uyl8M+W+8gH+kBqQ==
+ 
+ locate-path@^6.0.0:
+@@ -7633,27 +7638,27 @@ lodash.clonedeep@^4.5.0:
+ 
+ lodash.defaults@^4.2.0:
+   version "4.2.0"
+-  resolved "https://registry.yarnpkg.com/lodash.defaults/-/lodash.defaults-4.2.0.tgz#d09178716ffea4dde9e5fb7b37f6f0802274580c"
++  resolved "https://registry.npmjs.org/lodash.defaults/-/lodash.defaults-4.2.0.tgz"
+   integrity sha512-qjxPLHd3r5DnsdGacqOMU6pb/avJzdh9tFX2ymgoZE27BmjXrNy/y4LoaiTeAb+O3gL8AfpJGtqfX/ae2leYYQ==
+ 
+ lodash.difference@^4.5.0:
+   version "4.5.0"
+-  resolved "https://registry.yarnpkg.com/lodash.difference/-/lodash.difference-4.5.0.tgz#9ccb4e505d486b91651345772885a2df27fd017c"
++  resolved "https://registry.npmjs.org/lodash.difference/-/lodash.difference-4.5.0.tgz"
+   integrity sha512-dS2j+W26TQ7taQBGN8Lbbq04ssV3emRw4NY58WErlTO29pIqS0HmoT5aJ9+TUQ1N3G+JOZSji4eugsWwGp9yPA==
+ 
+ lodash.escaperegexp@^4.1.2:
+   version "4.1.2"
+-  resolved "https://registry.yarnpkg.com/lodash.escaperegexp/-/lodash.escaperegexp-4.1.2.tgz#64762c48618082518ac3df4ccf5d5886dae20347"
++  resolved "https://registry.npmjs.org/lodash.escaperegexp/-/lodash.escaperegexp-4.1.2.tgz"
+   integrity sha512-TM9YBvyC84ZxE3rgfefxUWiQKLilstD6k7PTGt6wfbtXF8ixIJLOL3VYyV/z+ZiPLsVxAsKAFVwWlWeb2Y8Yyw==
+ 
+ lodash.flatten@^4.4.0:
+   version "4.4.0"
+-  resolved "https://registry.yarnpkg.com/lodash.flatten/-/lodash.flatten-4.4.0.tgz#f31c22225a9632d2bbf8e4addbef240aa765a61f"
++  resolved "https://registry.npmjs.org/lodash.flatten/-/lodash.flatten-4.4.0.tgz"
+   integrity sha512-C5N2Z3DgnnKr0LOpv/hKCgKdb7ZZwafIrsesve6lmzvZIRZRGaZ/l6Q8+2W7NaT+ZwO3fFlSCzCzrDCFdJfZ4g==
+ 
+ lodash.groupby@^4.6.0:
+   version "4.6.0"
+-  resolved "https://registry.yarnpkg.com/lodash.groupby/-/lodash.groupby-4.6.0.tgz#0b08a1dcf68397c397855c3239783832df7403d1"
++  resolved "https://registry.npmjs.org/lodash.groupby/-/lodash.groupby-4.6.0.tgz"
+   integrity sha512-5dcWxm23+VAoz+awKmBaiBvzox8+RqMgFhi7UvX9DHZr2HdxHXM/Wrf8cfKpsW37RNrvtPn6hSwNqurSILbmJw==
+ 
+ lodash.includes@^4.3.0:
+@@ -7668,12 +7673,12 @@ lodash.isboolean@^3.0.3:
+ 
+ lodash.isequal@^4.5.0:
+   version "4.5.0"
+-  resolved "https://registry.yarnpkg.com/lodash.isequal/-/lodash.isequal-4.5.0.tgz#415c4478f2bcc30120c22ce10ed3226f7d3e18e0"
++  resolved "https://registry.npmjs.org/lodash.isequal/-/lodash.isequal-4.5.0.tgz"
+   integrity sha512-pDo3lu8Jhfjqls6GkMgpahsF9kCyayhgykjyLMNFTKWrpVdAQtYyB4muAMWozBB4ig/dtWAmsMxLEI8wuz+DYQ==
+ 
+ lodash.isfunction@^3.0.9:
+   version "3.0.9"
+-  resolved "https://registry.yarnpkg.com/lodash.isfunction/-/lodash.isfunction-3.0.9.tgz#06de25df4db327ac931981d1bdb067e5af68d051"
++  resolved "https://registry.npmjs.org/lodash.isfunction/-/lodash.isfunction-3.0.9.tgz"
+   integrity sha512-AirXNj15uRIMMPihnkInB4i3NHeb4iBtNg9WRWuK2o31S+ePwwNmDPaTL3o7dTJ+VXNZim7rFs4rxN4YU1oUJw==
+ 
+ lodash.isinteger@^4.0.4:
+@@ -7683,7 +7688,7 @@ lodash.isinteger@^4.0.4:
+ 
+ lodash.isnil@^4.0.0:
+   version "4.0.0"
+-  resolved "https://registry.yarnpkg.com/lodash.isnil/-/lodash.isnil-4.0.0.tgz#49e28cd559013458c814c5479d3c663a21bfaa6c"
++  resolved "https://registry.npmjs.org/lodash.isnil/-/lodash.isnil-4.0.0.tgz"
+   integrity sha512-up2Mzq3545mwVnMhTDMdfoG1OurpA/s5t88JmQX809eH3C8491iu2sfKhTfhQtKY78oPNhiaHJUpT/dUDAAtng==
+ 
+ lodash.isnumber@^3.0.3:
+@@ -7703,7 +7708,7 @@ lodash.isstring@^4.0.1:
+ 
+ lodash.isundefined@^3.0.1:
+   version "3.0.1"
+-  resolved "https://registry.yarnpkg.com/lodash.isundefined/-/lodash.isundefined-3.0.1.tgz#23ef3d9535565203a66cefd5b830f848911afb48"
++  resolved "https://registry.npmjs.org/lodash.isundefined/-/lodash.isundefined-3.0.1.tgz"
+   integrity sha512-MXB1is3s899/cD8jheYYE2V9qTHwKvt+npCwpD+1Sxm3Q3cECXCiYHjeHWXNwr6Q0SOBPrYUDxendrO6goVTEA==
+ 
+ lodash.merge@^4.6.2:
+@@ -7718,12 +7723,12 @@ lodash.once@^4.0.0:
+ 
+ lodash.union@^4.6.0:
+   version "4.6.0"
+-  resolved "https://registry.yarnpkg.com/lodash.union/-/lodash.union-4.6.0.tgz#48bb5088409f16f1821666641c44dd1aaae3cd88"
++  resolved "https://registry.npmjs.org/lodash.union/-/lodash.union-4.6.0.tgz"
+   integrity sha512-c4pB2CdGrGdjMKYLA+XiRDO7Y0PRQbm/Gzg8qMj+QH+pFVAoTp5sBpO0odL3FjoPCGjK96p6qsP+yQoiLoOBcw==
+ 
+ lodash.uniq@^4.5.0:
+   version "4.5.0"
+-  resolved "https://registry.yarnpkg.com/lodash.uniq/-/lodash.uniq-4.5.0.tgz#d0225373aeb652adc1bc82e4945339a842754773"
++  resolved "https://registry.npmjs.org/lodash.uniq/-/lodash.uniq-4.5.0.tgz"
+   integrity sha512-xfBaXQd9ryd9dlSDvnvI0lvxfLJlYAZzXomUYzLKtUeOQvOP5piqAWuGtrhWeqaXK9hhoM/iyJc5AV+XfsX3HQ==
+ 
+ lodash.uniqby@4.5.0:
+@@ -7775,7 +7780,7 @@ loose-envify@^1.4.0:
+ 
+ lru-cache@^10.4.3:
+   version "10.4.3"
+-  resolved "https://registry.yarnpkg.com/lru-cache/-/lru-cache-10.4.3.tgz#410fc8a17b70e598013df257c2446b7f3383f119"
++  resolved "https://registry.npmjs.org/lru-cache/-/lru-cache-10.4.3.tgz"
+   integrity sha512-JNAzZcXrCt42VGLuYz0zfAzDfAvJWW6AfYlDBQyDV5DClI2m5sAmK+OIO7s59XfsRsWHp02jAJrRadPRGTt6SQ==
+ 
+ lru-cache@^6.0.0:
+@@ -7802,7 +7807,7 @@ lru-cache@^9.1.2:
+ 
+ marked@15.0.12:
+   version "15.0.12"
+-  resolved "https://registry.yarnpkg.com/marked/-/marked-15.0.12.tgz#30722c7346e12d0a2d0207ab9b0c4f0102d86c4e"
++  resolved "https://registry.npmjs.org/marked/-/marked-15.0.12.tgz"
+   integrity sha512-8dD6FusOQSrpv9Z1rdNMdlSgQOIP880DHqnohobOmYLElGEqAL/JvxvuxZO16r4HtjTlfPRDC1hbvxC9dPN2nA==
+ 
+ math-intrinsics@^1.1.0:
+@@ -7914,7 +7919,7 @@ minimatch@^3.1.3:
+ 
+ minimatch@^5.1.0:
+   version "5.1.9"
+-  resolved "https://registry.yarnpkg.com/minimatch/-/minimatch-5.1.9.tgz#1293ef15db0098b394540e8f9f744f9fda8dee4b"
++  resolved "https://registry.npmjs.org/minimatch/-/minimatch-5.1.9.tgz"
+   integrity sha512-7o1wEA2RyMP7Iu7GNba9vc0RWWGACJOCZBJX2GJWip0ikV+wcOsgVuY9uE8CPiyQhkGFSlhuSkZPavN7u1c2Fw==
+   dependencies:
+     brace-expansion "^2.0.1"
+@@ -8056,7 +8061,7 @@ nanoclone@^0.2.1:
+ 
+ nanoid@^5.1.3:
+   version "5.1.7"
+-  resolved "https://registry.yarnpkg.com/nanoid/-/nanoid-5.1.7.tgz#a9f09a4ce73ba0b88830af36ee49666bad7827b6"
++  resolved "https://registry.npmjs.org/nanoid/-/nanoid-5.1.7.tgz"
+   integrity sha512-ua3NDgISf6jdwezAheMOk4mbE1LXjm1DfMUDMuJf4AqxLFK3ccGpgWizwa5YV7Yz9EpXwEaWoRXSb/BnV0t5dQ==
+ 
+ napi-build-utils@^1.0.1:
+@@ -8212,7 +8217,7 @@ numbered@^1.1.0:
+ 
+ nwsapi@^2.2.16:
+   version "2.2.23"
+-  resolved "https://registry.yarnpkg.com/nwsapi/-/nwsapi-2.2.23.tgz#59712c3a88e6de2bb0b6ccc1070397267019cf6c"
++  resolved "https://registry.npmjs.org/nwsapi/-/nwsapi-2.2.23.tgz"
+   integrity sha512-7wfH4sLbt4M0gCDzGE6vzQBo0bfTKjU7Sfpqy/7gs1qBfYz2vEJH6vXcBKpO3+6Yu1telwd0t9HpyOoLEQQbIQ==
+ 
+ object-assign@^4, object-assign@^4.1.1:
+@@ -8533,7 +8538,7 @@ parse5@^7.0.0, parse5@^7.1.2:
+ 
+ parse5@^7.2.1:
+   version "7.3.0"
+-  resolved "https://registry.yarnpkg.com/parse5/-/parse5-7.3.0.tgz#d7e224fa72399c7a175099f45fc2ad024b05ec05"
++  resolved "https://registry.npmjs.org/parse5/-/parse5-7.3.0.tgz"
+   integrity sha512-IInvU7fabl34qmi9gY8XOVxhYyMyuH2xUNpb2q8/Y+7552KlejkRvqvD19nMoUW/uQGGbqNpA6Tufu5FL5BZgw==
+   dependencies:
+     entities "^6.0.0"
+@@ -8575,7 +8580,7 @@ path-to-regexp@~0.1.12:
+ 
+ pdf-lib@1.17.1:
+   version "1.17.1"
+-  resolved "https://registry.yarnpkg.com/pdf-lib/-/pdf-lib-1.17.1.tgz#9e7dd21261a0c1fb17992580885b39e7d08f451f"
++  resolved "https://registry.npmjs.org/pdf-lib/-/pdf-lib-1.17.1.tgz"
+   integrity sha512-V/mpyJAoTsN4cnP31vc0wfNA1+p20evqqnap0KLoRUN0Yk/p3wN52DOEsL4oBFcLdb76hlpKPtzJIgo67j/XLw==
+   dependencies:
+     "@pdf-lib/standard-fonts" "^1.0.0"
+@@ -8654,6 +8659,11 @@ picomatch@^2.0.4, picomatch@^2.2.1:
+   resolved "https://registry.npmjs.org/picomatch/-/picomatch-2.3.1.tgz"
+   integrity sha512-JU3teHTNjmE2VCGFzuY8EXzCDVwEqB2a8fsIvwaStHhAWJEeVd1o1QD80CU6+ZdEXXSLbSsuLwJjkCBWqRQUVA==
+ 
++piexifjs@^1.0.6:
++  version "1.0.6"
++  resolved "https://registry.yarnpkg.com/piexifjs/-/piexifjs-1.0.6.tgz#883811d73f447218d0d06e9ed7866d04533e59e0"
++  integrity sha512-0wVyH0cKohzBQ5Gi2V1BuxYpxWfxF3cSqfFXfPIpl5tl9XLS5z4ogqhUCD20AbHi0h9aJkqXNJnkVev6gwh2ag==
++
+ pinecone-client@^1.1.0:
+   version "1.1.2"
+   resolved "https://registry.npmjs.org/pinecone-client/-/pinecone-client-1.1.2.tgz"
+@@ -8720,7 +8730,7 @@ posthog-node@^3.1.1:
+ 
+ pptxgenjs@4.0.1:
+   version "4.0.1"
+-  resolved "https://registry.yarnpkg.com/pptxgenjs/-/pptxgenjs-4.0.1.tgz#cd0f202f62f74d950bcd217e90b766da8f73742e"
++  resolved "https://registry.npmjs.org/pptxgenjs/-/pptxgenjs-4.0.1.tgz"
+   integrity sha512-TeJISr8wouAuXw4C1F/mC33xbZs/FuEG6nH9FG1Zj+nuPcGMP5YRHl6X+j3HSUnS1f3at6k75ZZXPMZlA5Lj9A==
+   dependencies:
+     "@types/node" "^22.8.1"
+@@ -9019,7 +9029,7 @@ readable-stream@^4.5.2, readable-stream@^4.7.0:
+ 
+ readdir-glob@^1.1.2:
+   version "1.1.3"
+-  resolved "https://registry.yarnpkg.com/readdir-glob/-/readdir-glob-1.1.3.tgz#c3d831f51f5e7bfa62fa2ffbe4b508c640f09584"
++  resolved "https://registry.npmjs.org/readdir-glob/-/readdir-glob-1.1.3.tgz"
+   integrity sha512-v05I2k7xN8zXvPD9N+z/uhXPaj0sUFCe2rcWZIpBsqxfP7xXFQ0tipAd/wjj1YxWyWtUS5IDJpOG82JKt2EAVA==
+   dependencies:
+     minimatch "^5.1.0"
+@@ -9138,7 +9148,7 @@ rfdc@^1.3.0:
+ 
+ rimraf@2:
+   version "2.7.1"
+-  resolved "https://registry.yarnpkg.com/rimraf/-/rimraf-2.7.1.tgz#35797f13a7fdadc566142c29d4f07ccad483e3ec"
++  resolved "https://registry.npmjs.org/rimraf/-/rimraf-2.7.1.tgz"
+   integrity sha512-uWjbaKIK3T1OSVptzX7Nl6PvQ3qAGtKEtVRjRuazjfL3Bx5eI409VZSqgND+4UNnmzLVdPj9FqFJNPqBZFve4w==
+   dependencies:
+     glob "^7.1.3"
+@@ -9156,7 +9166,7 @@ router@^2.2.0:
+ 
+ rrweb-cssom@^0.8.0:
+   version "0.8.0"
+-  resolved "https://registry.yarnpkg.com/rrweb-cssom/-/rrweb-cssom-0.8.0.tgz#3021d1b4352fbf3b614aaeed0bc0d5739abe0bc2"
++  resolved "https://registry.npmjs.org/rrweb-cssom/-/rrweb-cssom-0.8.0.tgz"
+   integrity sha512-guoltQEx+9aMf2gDZ0s62EcV8lsXR+0w8915TC3ITdn2YueuNjdAYh/levpU9nFaoChh9RUS5ZdQMrKfVEN9tw==
+ 
+ rusha@^0.8.14:
+@@ -9238,19 +9248,19 @@ safe-timers@^1.1.0:
+ 
+ sax@^1.2.4:
+   version "1.6.0"
+-  resolved "https://registry.yarnpkg.com/sax/-/sax-1.6.0.tgz#da59637629307b97e7c4cb28e080a7bc38560d5b"
++  resolved "https://registry.npmjs.org/sax/-/sax-1.6.0.tgz"
+   integrity sha512-6R3J5M4AcbtLUdZmRv2SygeVaM7IhrLXu9BmnOGmmACak8fiUtOsYNWUS4uK7upbmHIBbLBeFeI//477BKLBzA==
+ 
+ saxes@^5.0.1:
+   version "5.0.1"
+-  resolved "https://registry.yarnpkg.com/saxes/-/saxes-5.0.1.tgz#eebab953fa3b7608dbe94e5dadb15c888fa6696d"
++  resolved "https://registry.npmjs.org/saxes/-/saxes-5.0.1.tgz"
+   integrity sha512-5LBh1Tls8c9xgGjw3QrMwETmTMVk0oFgvrFSvWx62llR2hcEInrKNZ2GZCCuuy2lvWrdl5jhbpeqc5hRYKFOcw==
+   dependencies:
+     xmlchars "^2.2.0"
+ 
+ saxes@^6.0.0:
+   version "6.0.0"
+-  resolved "https://registry.yarnpkg.com/saxes/-/saxes-6.0.0.tgz#fe5b4a4768df4f14a201b1ba6a65c1f3d9988cc5"
++  resolved "https://registry.npmjs.org/saxes/-/saxes-6.0.0.tgz"
+   integrity sha512-xAg7SOnEhrm5zI3puOOKyy1OMcMlIJZYNJY7xLBwSze0UjhPLnWfj2GF2EpT0jmzaJKIWKHLsaSSajf35bcYnA==
+   dependencies:
+     xmlchars "^2.2.0"
+@@ -9800,7 +9810,7 @@ swagger-ui-express@^5.0.0:
+ 
+ symbol-tree@^3.2.4:
+   version "3.2.4"
+-  resolved "https://registry.yarnpkg.com/symbol-tree/-/symbol-tree-3.2.4.tgz#430637d248ba77e078883951fb9aa0eed7c63fa2"
++  resolved "https://registry.npmjs.org/symbol-tree/-/symbol-tree-3.2.4.tgz"
+   integrity sha512-9QNk5KwDF+Bvz+PyObkmSYjI5ksVUYtjW7AU22r2NKcfLJcXp96hkDWU3+XndOsUb+AQ9QhfzfCT2O+CNWT5Tw==
+ 
+ synckit@^0.8.6:
+@@ -9921,7 +9931,7 @@ tmp@^0.0.33:
+ 
+ tmp@^0.2.0:
+   version "0.2.5"
+-  resolved "https://registry.yarnpkg.com/tmp/-/tmp-0.2.5.tgz#b06bcd23f0f3c8357b426891726d16015abfd8f8"
++  resolved "https://registry.npmjs.org/tmp/-/tmp-0.2.5.tgz"
+   integrity sha512-voyz6MApa1rQGUxT3E+BK7/ROe8itEx7vD8/HEvt4xwXucvQ5G5oeEiHkmHZJuBO21RpOf+YYm9MOivj709jow==
+ 
+ to-regex-range@^5.0.1:
+@@ -9960,14 +9970,14 @@ tough-cookie@^4.1.3:
+ 
+ tough-cookie@^5.0.0, tough-cookie@^5.1.1:
+   version "5.1.2"
+-  resolved "https://registry.yarnpkg.com/tough-cookie/-/tough-cookie-5.1.2.tgz#66d774b4a1d9e12dc75089725af3ac75ec31bed7"
++  resolved "https://registry.npmjs.org/tough-cookie/-/tough-cookie-5.1.2.tgz"
+   integrity sha512-FVDYdxtnj0G6Qm/DhNPSb8Ju59ULcup3tuJxkFb5K8Bv2pUXILbf0xZWU8PX8Ov19OXljbUyveOFwRMwkXzO+A==
+   dependencies:
+     tldts "^6.1.32"
+ 
+ tr46@^5.1.0:
+   version "5.1.1"
+-  resolved "https://registry.yarnpkg.com/tr46/-/tr46-5.1.1.tgz#96ae867cddb8fdb64a49cc3059a8d428bcf238ca"
++  resolved "https://registry.npmjs.org/tr46/-/tr46-5.1.1.tgz"
+   integrity sha512-hdF5ZgjTqgAntKkklYw0R03MG2x/bSzTtkxmIRw/sTNV8YXsCJ1tfLAX23lhxhHJlEf3CRCOCGGWw3vI3GaSPw==
+   dependencies:
+     punycode "^2.3.1"
+@@ -9979,7 +9989,7 @@ tr46@~0.0.3:
+ 
+ "traverse@>=0.3.0 <0.4":
+   version "0.3.9"
+-  resolved "https://registry.yarnpkg.com/traverse/-/traverse-0.3.9.tgz#717b8f220cc0bb7b44e40514c22b2e8bbc70d8b9"
++  resolved "https://registry.npmjs.org/traverse/-/traverse-0.3.9.tgz"
+   integrity sha512-iawgk0hLP3SxGKDfnDJf8wTz4p2qImnyihM5Hh/sGvQ3K37dPi/w8sRhdNIxYA1TwFwc5mDhIJq+O0RsvXBKdQ==
+ 
+ triple-beam@^1.3.0:
+@@ -9994,7 +10004,7 @@ truncate@^3.0.0:
+ 
+ tslib@^1.11.1:
+   version "1.14.1"
+-  resolved "https://registry.yarnpkg.com/tslib/-/tslib-1.14.1.tgz#cf2d38bdc34a134bcaf1091c41f6619e2f672d00"
++  resolved "https://registry.npmjs.org/tslib/-/tslib-1.14.1.tgz"
+   integrity sha512-Xni35NKzjgMrwevysHTCArtLDpPvye8zV/0E4EyYn43P7/7qvQwPh9BGkHewbMulVntbigmcT7rdX3BNo9wRJg==
+ 
+ tslib@^2.2.0, tslib@^2.6.2:
+@@ -10199,7 +10209,7 @@ undici-types@~6.21.0:
+ 
+ undici-types@~7.18.0:
+   version "7.18.2"
+-  resolved "https://registry.yarnpkg.com/undici-types/-/undici-types-7.18.2.tgz#29357a89e7b7ca4aef3bf0fd3fd0cd73884229e9"
++  resolved "https://registry.npmjs.org/undici-types/-/undici-types-7.18.2.tgz"
+   integrity sha512-AsuCzffGHJybSaRrmr5eHr81mwJU3kjw6M+uprWvCXiNeN9SOGwQ3Jn8jb8m3Z6izVgknn1R0FTCEAP2QrLY/w==
+ 
+ undici@^6.19.5:
+@@ -10226,7 +10236,7 @@ unpipe@~1.0.0:
+ 
+ unzipper@^0.10.11:
+   version "0.10.14"
+-  resolved "https://registry.yarnpkg.com/unzipper/-/unzipper-0.10.14.tgz#d2b33c977714da0fbc0f82774ad35470a7c962b1"
++  resolved "https://registry.npmjs.org/unzipper/-/unzipper-0.10.14.tgz"
+   integrity sha512-ti4wZj+0bQTiX2KmKWuwj7lhV+2n//uXEotUmGuQqrbVZSEGFMbI68+c6JCQ8aAmUWYvtHEz2A8K6wXvueR/6g==
+   dependencies:
+     big-integer "^1.6.17"
+@@ -10334,7 +10344,7 @@ voyageai@^0.0.3-1:
+ 
+ w3c-xmlserializer@^5.0.0:
+   version "5.0.0"
+-  resolved "https://registry.yarnpkg.com/w3c-xmlserializer/-/w3c-xmlserializer-5.0.0.tgz#f925ba26855158594d907313cedd1476c5967f6c"
++  resolved "https://registry.npmjs.org/w3c-xmlserializer/-/w3c-xmlserializer-5.0.0.tgz"
+   integrity sha512-o8qghlI8NZHU1lLPrpi2+Uq7abh4GGPpYANlalzWxyWteJOCsr/P+oPBA49TOLu5FTZO4d3F9MnWJfiMo4BkmA==
+   dependencies:
+     xml-name-validator "^5.0.0"
+@@ -10376,7 +10386,7 @@ webidl-conversions@^3.0.0:
+ 
+ webidl-conversions@^7.0.0:
+   version "7.0.0"
+-  resolved "https://registry.yarnpkg.com/webidl-conversions/-/webidl-conversions-7.0.0.tgz#256b4e1882be7debbf01d05f0aa2039778ea080a"
++  resolved "https://registry.npmjs.org/webidl-conversions/-/webidl-conversions-7.0.0.tgz"
+   integrity sha512-VwddBukDzu71offAQR975unBIGqfKZpM+8ZX6ySk8nYhVoo5CYaZyzt3YBvYtRtO+aoGlqxPg/B87NGVZ/fu6g==
+ 
+ whatwg-encoding@^3.1.1:
+@@ -10398,7 +10408,7 @@ whatwg-mimetype@^4.0.0:
+ 
+ whatwg-url@^14.0.0, whatwg-url@^14.1.1:
+   version "14.2.0"
+-  resolved "https://registry.yarnpkg.com/whatwg-url/-/whatwg-url-14.2.0.tgz#4ee02d5d725155dae004f6ae95c73e7ef5d95663"
++  resolved "https://registry.npmjs.org/whatwg-url/-/whatwg-url-14.2.0.tgz"
+   integrity sha512-De72GdQZzNTUBBChsXueQUnPKDkg/5A5zp7pFDuQAj5UFoENpiACU0wlCvzpAGnTkj++ihpKwKyYewn/XNUbKw==
+   dependencies:
+     tr46 "^5.1.0"
+@@ -10578,29 +10588,29 @@ ws@^7.5.10:
+ 
+ ws@^8.18.0:
+   version "8.20.0"
+-  resolved "https://registry.yarnpkg.com/ws/-/ws-8.20.0.tgz#4cd9532358eba60bc863aad1623dfb045a4d4af8"
++  resolved "https://registry.npmjs.org/ws/-/ws-8.20.0.tgz"
+   integrity sha512-sAt8BhgNbzCtgGbt2OxmpuryO63ZoDk/sqaB/znQm94T4fCEsy/yV+7CdC1kJhOU9lboAEU7R3kquuycDoibVA==
+ 
+ xml-js@^1.6.8:
+   version "1.6.11"
+-  resolved "https://registry.yarnpkg.com/xml-js/-/xml-js-1.6.11.tgz#927d2f6947f7f1c19a316dd8eea3614e8b18f8e9"
++  resolved "https://registry.npmjs.org/xml-js/-/xml-js-1.6.11.tgz"
+   integrity sha512-7rVi2KMfwfWFl+GpPg6m80IVMWXLRjO+PxTq7V2CDhoGak0wzYzFgUY2m4XJ47OGdXd8eLE8EmwfAmdjw7lC1g==
+   dependencies:
+     sax "^1.2.4"
+ 
+ xml-name-validator@^5.0.0:
+   version "5.0.0"
+-  resolved "https://registry.yarnpkg.com/xml-name-validator/-/xml-name-validator-5.0.0.tgz#82be9b957f7afdacf961e5980f1bf227c0bf7673"
++  resolved "https://registry.npmjs.org/xml-name-validator/-/xml-name-validator-5.0.0.tgz"
+   integrity sha512-EvGK8EJ3DhaHfbRlETOWAS5pO9MZITeauHKJyb8wyajUfQUenkIg2MvLDTZ4T/TgIcm3HU0TFBgWWboAZ30UHg==
+ 
+ xml@^1.0.1:
+   version "1.0.1"
+-  resolved "https://registry.yarnpkg.com/xml/-/xml-1.0.1.tgz#78ba72020029c5bc87b8a81a3cfcd74b4a2fc1e5"
++  resolved "https://registry.npmjs.org/xml/-/xml-1.0.1.tgz"
+   integrity sha512-huCv9IH9Tcf95zuYCsQraZtWnJvBtLVE0QHMOs8bWyZAFZNDcYjsPq1nEx8jKA9y+Beo9v+7OBPRisQTjinQMw==
+ 
+ xmlchars@^2.2.0:
+   version "2.2.0"
+-  resolved "https://registry.yarnpkg.com/xmlchars/-/xmlchars-2.2.0.tgz#060fe1bcb7f9c76fe2a17db86a9bc3ab894210cb"
++  resolved "https://registry.npmjs.org/xmlchars/-/xmlchars-2.2.0.tgz"
+   integrity sha512-JZnDKK8B0RCDw84FNdDAIpZK+JuJw+s7Lz8nksI7SIuU3UXJJslUthsi+uWBUYOwPFwW7W7PRLRfUKpxjtjFCw==
+ 
+ xtend@^4.0.0:
+@@ -10674,7 +10684,7 @@ yup@0.32.9:
+ 
+ zip-stream@^4.1.0:
+   version "4.1.1"
+-  resolved "https://registry.yarnpkg.com/zip-stream/-/zip-stream-4.1.1.tgz#1337fe974dbaffd2fa9a1ba09662a66932bd7135"
++  resolved "https://registry.npmjs.org/zip-stream/-/zip-stream-4.1.1.tgz"
+   integrity sha512-9qv4rlDiopXg4E69k+vMHjNN63YFMe9sZMrdlvKnCjlCRWeCBswPPMPUfx+ipsAWq1LXHe70RcbaHdJJpS6hyQ==
+   dependencies:
+     archiver-utils "^3.0.4"

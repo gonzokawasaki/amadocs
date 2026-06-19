@@ -1,0 +1,1067 @@
+<!DOCTYPE html>
+<html data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AMAdocs — Phase 2 Prototype</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+    /*
+     * SCALING NOTE
+     * All sizes are in rem. html { font-size } is the single knob:
+     *   - Change it here to tune global density
+     *   - In Electron: webContents.setZoomFactor() scales on top of this
+     *   - System/browser font-size preferences flow through automatically
+     */
+
+    html { font-size: 18px; }   /* ← the one number to tune */
+
+    /* ── THEME TOKENS ─────────────────────────────────────────────────── */
+    :root, [data-theme="dark"] {
+      --bg:               #0c0f15;
+      --bg-alt:           #0a0d12;
+      --bg-desk:          #11151c;
+      --bg-hover:         #111620;
+      --bg-sel:           #15351f;
+      --border:           #1a202b;
+      --text:             #c4ccd6;
+      --text-muted:       #7b8696;
+      --text-faint:       #8a94a3;
+      --text-xfaint:      rgba(70,80,97,0.45);
+      --accent:           #5ec26a;
+      --accent-bg:        #0e1a13;
+      --accent-text:      #9cdca8;
+      --accent-sel-text:  #d6ffe0;
+      --blue:             #5aa9e6;
+      --amber:            #d9b14a;
+      --red:              #e2553f;
+      --tab-active-bg:    #0c0f15;
+      --page-bg:          #fdfdfb;
+      --page-rule:        #ececf0;
+      --page-h:           #2a2b30;
+      --page-p:           #42434b;
+      --page-faint:       #a4a5ad;
+      --scrollbar-thumb:  #1e2632;
+
+      --badge-pdf-bg:  rgba(226,85,63,0.14);  --badge-pdf-fg:  #e2553f;
+      --badge-doc-bg:  rgba(90,169,230,0.14); --badge-doc-fg:  #5aa9e6;
+      --badge-xls-bg:  rgba(94,194,106,0.14); --badge-xls-fg:  #5ec26a;
+      --badge-img-bg:  rgba(217,177,74,0.14); --badge-img-fg:  #d9b14a;
+      --badge-txt-bg:  rgba(123,134,150,0.12);--badge-txt-fg:  #7b8696;
+    }
+    [data-theme="light"] {
+      --bg:               #f4f5f7;
+      --bg-alt:           #eaecef;
+      --bg-desk:          #dfe1e6;
+      --bg-hover:         #e3e5e9;
+      --bg-sel:           #ddf0e2;
+      --border:           #d2d5dc;
+      --text:             #1e2028;
+      --text-muted:       #55606e;
+      --text-faint:       #8892a0;
+      --text-xfaint:      #b8c2cc;
+      --accent:           #2a7836;
+      --accent-bg:        #edf7ef;
+      --accent-text:      #1a5826;
+      --accent-sel-text:  #134d1e;
+      --blue:             #1870a8;
+      --amber:            #7a5c10;
+      --red:              #b83018;
+      --tab-active-bg:    #f4f5f7;
+      --page-bg:          #ffffff;
+      --page-rule:        #e8e8ec;
+      --page-h:           #2a2b30;
+      --page-p:           #42434b;
+      --page-faint:       #a4a5ad;
+      --scrollbar-thumb:  #c4c8d0;
+
+      --badge-pdf-bg:  rgba(184,48,24,0.10);  --badge-pdf-fg:  #b83018;
+      --badge-doc-bg:  rgba(24,112,168,0.10); --badge-doc-fg:  #1870a8;
+      --badge-xls-bg:  rgba(42,120,54,0.10);  --badge-xls-fg:  #2a7836;
+      --badge-img-bg:  rgba(122,92,16,0.10);  --badge-img-fg:  #7a5c10;
+      --badge-txt-bg:  rgba(85,96,110,0.10);  --badge-txt-fg:  #55606e;
+    }
+
+    /* ── RESET ────────────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body { height: 100%; overflow: hidden; }
+    body {
+      background: var(--bg);
+      color: var(--text);
+      font-family: 'IBM Plex Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      font-size: 1rem;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+    }
+    ::-webkit-scrollbar { width: 0.43rem; height: 0.43rem; }
+    ::-webkit-scrollbar-track { background: transparent; }
+    ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 0.21rem; }
+    .hidden { display: none !important; }
+
+    /* ── APP SHELL ────────────────────────────────────────────────────── */
+    .app { display: flex; flex-direction: column; height: 100vh; }
+
+    /* ── TOP BAR ──────────────────────────────────────────────────────── */
+    .topbar {
+      height: 2.86rem;          /* 40px */
+      flex: none;
+      display: flex; align-items: center; gap: 0.86rem;
+      padding: 0 1rem;
+      background: var(--bg-alt);
+      border-bottom: 1px solid var(--border);
+      user-select: none;
+    }
+    .topbar__dots { display: flex; gap: 0.5rem; }
+    .topbar__dot  { width: 0.71rem; height: 0.71rem; border-radius: 50%; background: var(--border); }
+
+    .topbar__search {
+      flex: 1; height: 1.86rem;
+      background: var(--bg); border: 1px solid var(--border); border-radius: 0.43rem;
+      display: flex; align-items: center; gap: 0.5rem; padding: 0 0.79rem;
+    }
+    .topbar__path  { color: var(--accent);     font-size: 0.82rem; white-space: nowrap; }
+    .topbar__arrow { color: var(--text-xfaint); font-size: 0.82rem; }
+    .topbar__verb  { color: var(--text-muted); font-size: 0.82rem; }
+    .topbar__term  { color: var(--amber);      font-size: 0.82rem; }
+    .topbar__cursor {
+      display: inline-block; width: 0.5rem; height: 1rem;
+      background: var(--accent); opacity: 0.85; vertical-align: middle;
+      animation: blink 1.1s step-end infinite;
+    }
+    @keyframes blink { 0%,100%{opacity:.85} 50%{opacity:0} }
+    .topbar__hint { flex:1; font-size:0.71rem; color:var(--text-faint); text-align:right; white-space:nowrap; }
+    .topbar__actions { display:flex; gap:0.71rem; align-items:center; color:var(--text-faint); font-size:0.75rem; }
+
+    .theme-btn {
+      background: none; border: 1px solid var(--border);
+      color: var(--text-faint); font-family: inherit; font-size: 0.71rem;
+      padding: 0.14rem 0.64rem; border-radius: 0.29rem; cursor: pointer; letter-spacing:.06em;
+    }
+    .theme-btn:hover { color: var(--text); border-color: var(--text-muted); }
+
+    /* ── MAIN ─────────────────────────────────────────────────────────── */
+    .main { flex:1; display:flex; min-height:0; }
+
+    /* ── LEFT: FILE TREE ──────────────────────────────────────────────── */
+    .left {
+      width: 18.7rem;           /* 262px */
+      flex: none;
+      background: var(--bg-alt); border-right: 1px solid var(--border);
+      display: flex; flex-direction: column;
+    }
+    .left__head {
+      padding: 0.71rem 1rem 0.36rem; flex: none;
+      display: flex; justify-content: space-between;
+      font-size: 0.71rem; letter-spacing:.1em; text-transform:uppercase;
+      color: var(--text-xfaint);
+    }
+    .tree { flex:1; overflow-y:auto; padding: 0.14rem 0.57rem 0.86rem; font-size: 0.86rem; line-height:1; }
+    .tree-row {
+      display: flex; align-items: center; gap: 0.29rem;
+      padding: 0.29rem 0.43rem; border-radius: 0.29rem;
+      cursor: pointer; white-space: nowrap; min-height: 1.71rem;
+      transition: background .08s;
+    }
+    .tree-row:hover:not(.sel) { background: var(--bg-hover); }
+    .tree-row.sel { background: var(--bg-sel); color: var(--accent-sel-text); }
+    .tree-row.sel .tree-dir { color: var(--accent-sel-text); }
+
+    .chev     { font-size:0.71rem; min-width:0.93rem; color:var(--accent); flex:none; }
+    .chev.off { color: var(--text-xfaint); }
+    .don  { color:var(--accent);     font-size:0.71rem; min-width:0.93rem; flex:none; }
+    .doff { color:var(--text-faint); font-size:0.71rem; min-width:0.93rem; flex:none; }
+    .tree-dir   { color: var(--blue); }
+    .tree-dim   { color: var(--text-muted); }
+    .tree-ghost { color: var(--text-faint); }
+    .tree-sec {
+      margin: 0.71rem 0 0.21rem 0.43rem;
+      font-size:0.71rem; letter-spacing:.1em; text-transform:uppercase; color:var(--text-xfaint);
+    }
+    .tree-mnt { display:flex; width:100%; justify-content:space-between; }
+    .tree-mnt-pct { font-size:0.71rem; color:var(--text-faint); }
+
+    .left__foot {
+      flex:none; padding:0.5rem 1rem; border-top:1px solid var(--border);
+      font-size:0.75rem; color:var(--text-faint);
+      display:flex; justify-content:space-between;
+    }
+
+    /* ── MIDDLE ───────────────────────────────────────────────────────── */
+    .middle { flex:1; min-width:0; display:flex; flex-direction:column; }
+    .view { flex:1; display:flex; flex-direction:column; min-height:0; }
+
+    /* ── FOLDER HEADER ────────────────────────────────────────────────── */
+    .folder-hdr {
+      height: 2.43rem;
+      flex:none; display:flex; align-items:center; gap:0.71rem; padding:0 1rem;
+      background:var(--bg-alt); border-bottom:1px solid var(--border);
+      font-size:0.82rem; user-select:none;
+    }
+    .folder-hdr__path strong { color:var(--text); font-weight:500; }
+    .folder-hdr__path span   { color:var(--text-faint); }
+    .folder-hdr__fill { flex:1; }
+    .folder-hdr__count { font-size:0.75rem; color:var(--text-faint); }
+
+    .view-toggle { display:flex; gap:0.21rem; margin-left:0.71rem; }
+    .vtbtn {
+      width: 1.86rem; height: 1.57rem;
+      background:none; border:1px solid var(--border);
+      color:var(--text-faint); font-family:inherit; font-size:0.93rem;
+      border-radius:0.29rem; cursor:pointer;
+      display:flex; align-items:center; justify-content:center;
+      transition: all .1s;
+    }
+    .vtbtn:hover  { color:var(--text); border-color:var(--text-muted); }
+    .vtbtn.active { color:var(--accent); border-color:var(--accent); background:var(--accent-bg); }
+
+    /* ── SORT STRIP ───────────────────────────────────────────────────── */
+    .sort-strip {
+      flex:none; height:2.14rem;
+      display:flex; align-items:center; gap:1.14rem; padding:0 1rem;
+      background:var(--bg-alt); border-bottom:1px solid var(--border);
+      font-size:0.75rem; color:var(--text-faint);
+    }
+    .sort-strip__sel { color:var(--text-muted); cursor:pointer; }
+    .sort-strip__sel:hover { color:var(--text); }
+    .sort-strip__fill { flex:1; }
+    .sort-strip__counts { font-size:0.71rem; }
+
+    /* ── FILE LIST ────────────────────────────────────────────────────── */
+    .folder-body { flex:1; overflow-y:auto; }
+
+    .file-list { width:100%; border-collapse:collapse; font-size:0.82rem; }
+    .file-list thead tr {
+      background: var(--bg-alt); border-bottom: 1px solid var(--border);
+      position: sticky; top: 0; z-index: 1;
+    }
+    .fl-th {
+      padding: 0.36rem 0.57rem;
+      font-size:0.71rem; letter-spacing:.06em; text-transform:uppercase;
+      color:var(--text-faint); font-weight:500; text-align:left; white-space:nowrap;
+    }
+    .fl-th.r { text-align:right; }
+
+    .fl-col-st { width:2rem; }
+    .fl-col-ty { width:3.71rem; }
+    .fl-col-nm { /* flex */ }
+    .fl-col-sz { width:4.86rem; }
+    .fl-col-dt { width:6.57rem; }
+    .fl-col-ai { width:6.14rem; }
+
+    .fl-row { border-bottom:1px solid var(--border); cursor:pointer; transition:background .07s; }
+    .fl-row:hover { background:var(--bg-hover); }
+    .fl-row td { padding: 0.5rem 0.57rem; white-space:nowrap; }
+    .fl-row td.nm { max-width:0; overflow:hidden; text-overflow:ellipsis; }
+
+    .fl-on  { color:var(--accent);     font-size:0.79rem; }
+    .fl-off { color:var(--text-faint); font-size:0.79rem; }
+    .fl-name        { color:var(--text); }
+    .fl-name.pending{ color:var(--text-muted); }
+    .fl-size { color:var(--text-faint); text-align:right; font-size:0.75rem; }
+    .fl-date { color:var(--text-faint); text-align:right; font-size:0.75rem; }
+
+    /* ── TYPE BADGES ──────────────────────────────────────────────────── */
+    .badge {
+      display:inline-block; font-size:0.64rem; font-weight:600; letter-spacing:.04em;
+      padding:0.14rem 0.36rem; border-radius:0.21rem; min-width:2.71rem; text-align:center;
+    }
+    .b-pdf { background:var(--badge-pdf-bg); color:var(--badge-pdf-fg); }
+    .b-doc { background:var(--badge-doc-bg); color:var(--badge-doc-fg); }
+    .b-xls { background:var(--badge-xls-bg); color:var(--badge-xls-fg); }
+    .b-img { background:var(--badge-img-bg); color:var(--badge-img-fg); }
+    .b-txt { background:var(--badge-txt-bg); color:var(--badge-txt-fg); }
+    .b-md  { background:var(--badge-doc-bg); color:var(--badge-doc-fg); }
+
+    /* ── AI STATE CHIPS ───────────────────────────────────────────────── */
+    .ai-chip {
+      display:inline-block; font-size:0.68rem; font-weight:500;
+      padding:0.07rem 0.43rem; border-radius:0.21rem;
+      letter-spacing:.03em; white-space:nowrap;
+    }
+    .ai-deep    { background:var(--accent-bg);           color:var(--accent);     border:1px solid rgba(94,194,106,0.2); }
+    .ai-catalog { background:rgba(94,194,106,0.07);      color:var(--accent-text);border:1px solid rgba(94,194,106,0.12); }
+    .ai-analyse { background:rgba(217,177,74,0.1);       color:var(--amber);      border:1px solid rgba(217,177,74,0.2); }
+    .ai-pending { background:transparent;                color:var(--text-faint); border:1px solid var(--border); }
+
+    /* ── FILE GRID ────────────────────────────────────────────────────── */
+    .file-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(14rem, 1fr));
+      gap: 0.71rem;
+      padding: 1rem;
+    }
+    .fc {
+      background: var(--bg-alt); border: 1px solid var(--border); border-radius: 0.43rem;
+      overflow:hidden; cursor:pointer;
+      display:flex; flex-direction:column;
+      transition: border-color .1s, background .1s;
+    }
+    .fc:hover { border-color: var(--text-muted); background: var(--bg-hover); }
+
+    .fc-head {
+      padding: 0.71rem 0.71rem 0.57rem;
+      display:flex; align-items:flex-start; justify-content:space-between; gap:0.43rem;
+    }
+    .fc-badge-wrap { display:flex; flex-direction:column; gap:0.43rem; }
+    .fc-badge { font-size:0.71rem; padding:0.21rem 0.5rem; min-width:3.14rem; }
+    .fc-name {
+      font-size:0.79rem; color:var(--text); line-height:1.4; word-break:break-all;
+      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+    }
+    .fc-name.pending { color:var(--text-muted); }
+    .fc-dot { font-size:0.71rem; flex:none; margin-top:0.07rem; }
+
+    .fc-divider { height:1px; background:var(--border); }
+
+    .fc-summary {
+      padding:0.57rem 0.71rem; flex:1;
+      font-size:0.75rem; line-height:1.6; color:var(--text-muted);
+      display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden;
+    }
+    .fc-summary.empty   { color:var(--text-faint); font-style:italic; }
+    .fc-summary.analyse { color:var(--amber); }
+
+    .fc-foot {
+      padding: 0.43rem 0.71rem; border-top:1px solid var(--border);
+      display:flex; align-items:center; justify-content:space-between;
+      font-size:0.71rem; color:var(--text-faint);
+    }
+
+    /* ── PREVIEW: tabs ────────────────────────────────────────────────── */
+    .tabs {
+      height:2.43rem; flex:none;
+      display:flex; align-items:stretch;
+      background:var(--bg-alt); border-bottom:1px solid var(--border);
+      font-size:0.82rem; overflow:hidden; user-select:none;
+    }
+    .back-btn {
+      display:flex; align-items:center; gap:0.43rem; padding:0 0.86rem;
+      border-right:1px solid var(--border); color:var(--text-faint);
+      cursor:pointer; font-size:0.79rem; white-space:nowrap; transition:color .1s;
+    }
+    .back-btn:hover { color:var(--text); }
+    .tab {
+      display:flex; align-items:center; gap:0.5rem; padding:0 0.93rem;
+      border-right:1px solid var(--border); color:var(--text-faint);
+      cursor:pointer; white-space:nowrap; transition:color .1s;
+    }
+    .tab:hover:not(.tab-active) { color:var(--text-muted); }
+    .tab.tab-active { background:var(--tab-active-bg); border-top:2px solid var(--accent); color:var(--text); }
+    .tab__x { font-size:0.71rem; color:var(--text-xfaint); margin-left:0.14rem; }
+    .icon-pdf { color:var(--red); }
+    .icon-md  { color:var(--blue); }
+    .icon-xl  { color:var(--accent); }
+    .tabs__fill { flex:1; }
+    .tabs__meta {
+      display:flex; align-items:center; gap:1rem; padding:0 1rem;
+      color:var(--text-faint); font-size:0.75rem;
+    }
+
+    /* ── PREVIEW: meta strip ──────────────────────────────────────────── */
+    .metastrip {
+      flex:none; display:flex; gap:1.43rem; padding:0.36rem 1.29rem;
+      background:var(--bg-alt); border-bottom:1px solid var(--border);
+      font-size:0.75rem; color:var(--text-faint); overflow:hidden; white-space:nowrap;
+    }
+    .mk { color:var(--text-muted); }
+    .mv-green { color:var(--accent); }
+
+    /* ── PREVIEW: document area ───────────────────────────────────────── */
+    .docarea {
+      flex:1; overflow-y:auto;
+      padding: 2rem 0 2.86rem;
+      display:flex; flex-direction:column; align-items:center; gap:1.29rem;
+      background:var(--bg-desk);
+    }
+    .page {
+      width: 36.4rem;           /* 510px */
+      min-height: 48.6rem;      /* 680px */
+      background:var(--page-bg); box-shadow:0 0.57rem 2.14rem -0.57rem rgba(0,0,0,0.45);
+      padding: 3.43rem 3.71rem; flex:none;
+      font-family:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,sans-serif;
+    }
+    .p-eye  { font-size:0.64rem; letter-spacing:.16em; text-transform:uppercase; color:#9a8f6a; font-weight:600; font-family:'IBM Plex Mono',monospace; }
+    .p-title{ font-size:1.57rem; font-weight:700; color:#1d1e24; margin-top:0.79rem; line-height:1.18; letter-spacing:-.01em; }
+    .p-sub  { font-size:0.93rem; color:#73747c; margin-top:0.43rem; }
+    .p-meta { font-size:0.75rem; color:var(--page-faint); margin-top:0.79rem; padding-bottom:1.07rem; border-bottom:1px solid var(--page-rule); font-family:'IBM Plex Mono',monospace; }
+    .p-h2   { font-size:0.89rem; font-weight:700; color:var(--page-h); margin-top:1.57rem; }
+    .p-p    { font-size:0.79rem; line-height:1.85; color:var(--page-p); margin-top:0.57rem; text-align:justify; }
+    .p-hl   { background:#fff3b0; padding:0 0.14rem; border-radius:0.14rem; }
+    .p-folio{ margin-top:2.14rem; font-size:0.71rem; color:#c0c1c8; text-align:center; font-family:'IBM Plex Mono',monospace; }
+
+    /* ── RIGHT: AI REPL ───────────────────────────────────────────────── */
+    .right {
+      width: 25.4rem;           /* 356px */
+      flex:none; background:var(--bg-alt); border-left:1px solid var(--border);
+      display:flex; flex-direction:column;
+    }
+    .repl-head {
+      padding: 0.64rem 1rem; flex:none;
+      display:flex; align-items:center; gap:0.57rem;
+      border-bottom:1px solid var(--border); font-size:0.79rem;
+    }
+    .rh-dot   { color:var(--accent); }
+    .rh-name  { color:var(--text); font-weight:500; }
+    .rh-scope { color:var(--text-faint); }
+    .rh-fill  { flex:1; }
+    .rh-ctx   { color:var(--text-faint); font-size:0.71rem; }
+
+    .repl-body { flex:1; overflow-y:auto; padding:1rem; font-size:0.86rem; line-height:1.7; }
+
+    .cmd      { color:var(--text-faint); margin-bottom:0.14rem; }
+    .cmd-verb { color:var(--amber); }
+    .cmd-flag { color:var(--text-muted); }
+    .cmd-str  { color:var(--text); }
+
+    .sum-block {
+      margin:0.43rem 0 0.14rem; border-left:2px solid var(--accent);
+      padding:0.29rem 0 0.29rem 0.86rem; background:var(--accent-bg);
+    }
+    .sum-label { font-size:0.68rem; letter-spacing:.1em; text-transform:uppercase; color:var(--accent); margin-bottom:0.36rem; }
+    .sum-text  { color:var(--accent-text); line-height:1.75; font-size:0.79rem; }
+    .sum-hi    { color:var(--accent); }
+    .sum-warn  { color:var(--amber); }
+    .sum-tags  { display:flex; gap:0.43rem; margin-top:0.57rem; flex-wrap:wrap; font-size:0.71rem; }
+    .sum-tag   { color:var(--blue); }
+
+    .provenance { color:var(--text-xfaint); font-size:0.71rem; margin:0.21rem 0 1rem; }
+    .prov-link  { color:var(--blue); cursor:pointer; }
+    .prov-link:hover { text-decoration:underline; }
+
+    .answer       { color:var(--text); margin:0.36rem 0 0.14rem; padding-left:0.86rem; font-size:0.79rem; }
+    .answer-aside { color:var(--text-faint); }
+    .grep-line    { color:var(--text-muted); margin:0.21rem 0; padding-left:0.86rem; font-size:0.75rem; }
+    .grep-hi      { color:var(--accent-text); }
+
+    .repl-folder-intro { color:var(--text-faint); font-size:0.79rem; margin-bottom:1rem; line-height:1.6; }
+
+    .repl-folder-result {
+      margin:0.43rem 0 0.14rem; padding:0.43rem 0.71rem;
+      border:1px solid var(--border); border-radius:0.29rem;
+      cursor:pointer; transition: border-color .1s, background .1s;
+    }
+    .repl-folder-result:hover { border-color:var(--text-muted); background:var(--bg-hover); }
+    .rfr-name { color:var(--text); font-size:0.79rem; }
+    .rfr-snip { color:var(--text-muted); font-size:0.75rem; margin-top:0.14rem; }
+    .rfr-snip em { color:var(--accent-text); font-style:normal; }
+    .rfr-meta { color:var(--text-faint); font-size:0.71rem; margin-top:0.29rem; }
+
+    .repl-input-wrap { flex:none; padding:0.71rem 0.86rem 0.93rem; border-top:1px solid var(--border); }
+    .repl-input-row {
+      height: 2.57rem;
+      background:var(--bg); border:1px solid var(--border); border-radius:0.43rem;
+      display:flex; align-items:center; gap:0.64rem; padding:0 0.79rem; cursor:text;
+    }
+    .repl-prompt { color:var(--accent); }
+    .repl-ph     { flex:1; color:var(--text-faint); }
+    .repl-run    { font-size:0.71rem; color:var(--text-xfaint); }
+
+    /* ── CONTEXT MENU ─────────────────────────────────────────────────── */
+    .ctx-menu {
+      position: fixed; z-index: 9999;
+      min-width: 17rem;
+      background: var(--bg-alt);
+      border: 1px solid var(--border);
+      border-radius: 0.43rem;
+      box-shadow: 0 0.57rem 2rem -0.14rem rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.2);
+      font-family: 'IBM Plex Mono','JetBrains Mono',ui-monospace,monospace;
+      font-size: 0.79rem;
+      overflow: hidden;
+      user-select: none;
+    }
+    .ctx-header {
+      padding: 0.57rem 0.79rem 0.5rem;
+      border-bottom: 1px solid var(--border);
+    }
+    .ctx-filename { color: var(--text); font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ctx-filemeta { color: var(--text-faint); font-size: 0.68rem; margin-top: 0.14rem; }
+
+    .ctx-section { padding: 0.29rem 0; border-bottom: 1px solid var(--border); }
+    .ctx-section:last-child { border-bottom: none; }
+
+    .ctx-item {
+      display: flex; align-items: center; gap: 0.64rem;
+      padding: 0.43rem 0.79rem;
+      cursor: pointer; color: var(--text-muted);
+      transition: background .07s, color .07s;
+      white-space: nowrap;
+    }
+    .ctx-item:hover { background: var(--bg-hover); color: var(--text); }
+    .ctx-item.primary { color: var(--amber); }
+    .ctx-item.primary:hover { background: rgba(217,177,74,0.08); color: var(--amber); }
+    .ctx-icon { width: 1rem; text-align: center; flex: none; font-size: 0.82rem; }
+    .ctx-label { flex: 1; }
+    .ctx-hint { font-size: 0.64rem; color: var(--text-faint); margin-left: auto; padding-left: 1rem; }
+    .ctx-item:hover .ctx-hint { color: var(--text-muted); }
+  </style>
+</head>
+<body>
+<div class="app">
+
+  <!-- ── TOP BAR ── -->
+  <div class="topbar">
+    <div class="topbar__dots">
+      <span class="topbar__dot"></span>
+      <span class="topbar__dot"></span>
+      <span class="topbar__dot"></span>
+    </div>
+    <div class="topbar__search">
+      <span class="topbar__path" id="searchPath">~/Documents/Reports</span>
+      <span class="topbar__arrow">❯</span>
+      <span class="topbar__verb">find</span>
+      <span class="topbar__term">&nbsp;infrastructure</span>
+      <span class="topbar__cursor"></span>
+      <span class="topbar__hint">filename · regex off</span>
+    </div>
+    <div class="topbar__actions">
+      <span>⌘P</span>
+      <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">light</button>
+    </div>
+  </div>
+
+  <!-- ── MAIN ── -->
+  <div class="main">
+
+    <!-- ── LEFT: FILE TREE ── -->
+    <div class="left">
+      <div class="left__head">
+        <span>TREE</span><span>idx 1,284 / 1,291</span>
+      </div>
+      <div class="tree">
+        <div class="tree-row" onclick="toggleChev(this)">
+          <span class="chev">▾</span><span class="tree-dim">~/</span><span>Home</span>
+        </div>
+        <div class="tree-row" onclick="toggleChev(this)" style="padding-left:1.14rem">
+          <span class="chev">▾</span><span class="tree-dir">Documents/</span>
+        </div>
+        <div class="tree-row sel" id="treeReports" onclick="showFolder()" style="padding-left:2.14rem">
+          <span class="chev">▾</span><span class="tree-dir" style="color:inherit">Reports/</span>
+        </div>
+        <div id="treeFiles">
+          <div class="tree-row" id="treeFile1" onclick="showFile()" style="padding-left:3rem">
+            <span class="don">●</span><span>Annual-Infrastructure-Review-2025.pdf</span>
+          </div>
+          <div class="tree-row" onclick="showFile()" style="padding-left:3rem">
+            <span class="don">●</span><span class="tree-dim">Q2-Budget.xlsx</span>
+          </div>
+          <div class="tree-row" onclick="showFile()" style="padding-left:3rem">
+            <span class="don">●</span><span class="tree-dim">Roadmap.md</span>
+          </div>
+          <div class="tree-row" onclick="showFile()" style="padding-left:3rem">
+            <span class="don">●</span><span class="tree-dim">Meeting-Notes-Dec-2025.docx</span>
+          </div>
+          <div class="tree-row" onclick="showFile()" style="padding-left:3rem">
+            <span class="don">●</span><span class="tree-dim">architecture-diagram.png</span>
+          </div>
+          <div class="tree-row" onclick="showFile()" style="padding-left:3rem">
+            <span class="doff">○</span><span class="tree-ghost">draft-notes.txt</span>
+          </div>
+          <div class="tree-row" onclick="showFile()" style="padding-left:3rem">
+            <span class="don">●</span><span class="tree-dim">Q3-Infrastructure-Update.pdf</span>
+          </div>
+        </div>
+        <div class="tree-row" onclick="toggleChev(this)" style="padding-left:2.14rem">
+          <span class="chev off">▸</span><span class="tree-dim tree-dir">Contracts/</span>
+        </div>
+        <div class="tree-row" onclick="toggleChev(this)" style="padding-left:2.14rem">
+          <span class="chev off">▸</span><span class="tree-dim tree-dir">Invoices/</span>
+        </div>
+        <div class="tree-row" onclick="toggleChev(this)" style="padding-left:1.14rem">
+          <span class="chev off">▸</span><span class="tree-dim tree-dir">Projects/</span>
+        </div>
+        <div class="tree-row" onclick="toggleChev(this)" style="padding-left:1.14rem">
+          <span class="chev off">▸</span><span class="tree-dim tree-dir">Pictures/</span>
+        </div>
+        <div class="tree-row" onclick="toggleChev(this)" style="padding-left:1.14rem">
+          <span class="chev off">▸</span><span class="tree-dim tree-dir">Downloads/</span>
+        </div>
+        <div class="tree-sec">MOUNTS</div>
+        <div class="tree-row">
+          <div class="tree-mnt">
+            <span class="tree-dir">/dev/sda2</span>
+            <span class="tree-mnt-pct">82%</span>
+          </div>
+        </div>
+        <div class="tree-row">
+          <div class="tree-mnt">
+            <span class="tree-dir">/mnt/backup</span>
+            <span class="tree-mnt-pct">41%</span>
+          </div>
+        </div>
+      </div>
+      <div class="left__foot">
+        <span><span style="color:var(--accent)">●</span> indexed</span>
+        <span><span style="color:var(--text-faint)">○</span> pending</span>
+      </div>
+    </div>
+
+    <!-- ── MIDDLE ── -->
+    <div class="middle">
+
+      <!-- FOLDER VIEW -->
+      <div class="view" id="viewFolder">
+        <div class="folder-hdr">
+          <span class="folder-hdr__path"><span>~/Documents/</span><strong>Reports/</strong></span>
+          <div class="folder-hdr__fill"></div>
+          <span class="folder-hdr__count">7 files · 6 indexed · 1 pending</span>
+          <div class="view-toggle">
+            <button class="vtbtn active" id="btnList" onclick="setView('list')" title="List">≡</button>
+            <button class="vtbtn"        id="btnGrid" onclick="setView('grid')" title="Grid">⊞</button>
+          </div>
+        </div>
+        <div class="sort-strip">
+          <span>sort <span class="sort-strip__sel">name ▾</span></span>
+          <span>type <span class="sort-strip__sel">all ▾</span></span>
+          <div class="sort-strip__fill"></div>
+          <span class="sort-strip__counts">
+            <span style="color:var(--accent)">●</span> 6 indexed &nbsp;·&nbsp;
+            <span style="color:var(--text-faint)">○</span> 1 pending
+          </span>
+        </div>
+
+        <!-- LIST VIEW -->
+        <div class="folder-body" id="listView">
+          <table class="file-list">
+            <thead>
+              <tr>
+                <th class="fl-th fl-col-st"></th>
+                <th class="fl-th fl-col-ty">type</th>
+                <th class="fl-th fl-col-nm">name</th>
+                <th class="fl-th fl-col-sz r">size</th>
+                <th class="fl-th fl-col-dt r">modified</th>
+                <th class="fl-th fl-col-ai r">ai</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr class="fl-row" onclick="showFile()">
+                <td><span class="fl-on">●</span></td>
+                <td><span class="badge b-pdf">PDF</span></td>
+                <td class="nm fl-name">Annual-Infrastructure-Review-2025.pdf</td>
+                <td class="fl-size">1.4 MB</td>
+                <td class="fl-date">2025-12-18</td>
+                <td style="text-align:right"><span class="ai-chip ai-deep">✓ deep</span></td>
+              </tr>
+              <tr class="fl-row" onclick="showFile()">
+                <td><span class="fl-on">●</span></td>
+                <td><span class="badge b-xls">XLSX</span></td>
+                <td class="nm fl-name">Q2-Budget.xlsx</td>
+                <td class="fl-size">64 KB</td>
+                <td class="fl-date">2025-11-02</td>
+                <td style="text-align:right"><span class="ai-chip ai-catalog">✓ catalog</span></td>
+              </tr>
+              <tr class="fl-row" onclick="showFile()">
+                <td><span class="fl-on">●</span></td>
+                <td><span class="badge b-md">MD</span></td>
+                <td class="nm fl-name">Roadmap.md</td>
+                <td class="fl-size">12 KB</td>
+                <td class="fl-date">2025-12-01</td>
+                <td style="text-align:right"><span class="ai-chip ai-catalog">✓ catalog</span></td>
+              </tr>
+              <tr class="fl-row" onclick="showFile()">
+                <td><span class="fl-on">●</span></td>
+                <td><span class="badge b-doc">DOCX</span></td>
+                <td class="nm fl-name">Meeting-Notes-Dec-2025.docx</td>
+                <td class="fl-size">28 KB</td>
+                <td class="fl-date">2025-12-12</td>
+                <td style="text-align:right"><span class="ai-chip ai-catalog">✓ catalog</span></td>
+              </tr>
+              <tr class="fl-row" onclick="showFile()">
+                <td><span class="fl-on">●</span></td>
+                <td><span class="badge b-img">PNG</span></td>
+                <td class="nm fl-name">architecture-diagram.png</td>
+                <td class="fl-size">340 KB</td>
+                <td class="fl-date">2025-10-15</td>
+                <td style="text-align:right"><span class="ai-chip ai-analyse">⚡ analyse</span></td>
+              </tr>
+              <tr class="fl-row" onclick="showFile()">
+                <td><span class="fl-off">○</span></td>
+                <td><span class="badge b-txt">TXT</span></td>
+                <td class="nm fl-name pending">draft-notes.txt</td>
+                <td class="fl-size">2 KB</td>
+                <td class="fl-date">2025-12-20</td>
+                <td style="text-align:right"><span class="ai-chip ai-pending">○ pending</span></td>
+              </tr>
+              <tr class="fl-row" onclick="showFile()">
+                <td><span class="fl-on">●</span></td>
+                <td><span class="badge b-pdf">PDF</span></td>
+                <td class="nm fl-name">Q3-Infrastructure-Update.pdf</td>
+                <td class="fl-size">880 KB</td>
+                <td class="fl-date">2025-09-14</td>
+                <td style="text-align:right"><span class="ai-chip ai-catalog">✓ catalog</span></td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        <!-- GRID VIEW -->
+        <div class="folder-body hidden" id="gridView">
+          <div class="file-grid">
+            <div class="fc" onclick="showFile()">
+              <div class="fc-head">
+                <div class="fc-badge-wrap">
+                  <span class="badge b-pdf fc-badge">PDF</span>
+                  <span class="fc-name">Annual-Infrastructure-Review-2025.pdf</span>
+                </div>
+                <span class="fc-dot fl-on">●</span>
+              </div>
+              <div class="fc-divider"></div>
+              <div class="fc-summary">24-page engineering report on platform reliability &amp; capacity, FY2025. 99.98% uptime, +31% compute at −12% unit cost. Primary risk: eu-west-2 capacity.</div>
+              <div class="fc-foot"><span>1.4 MB · Dec 18</span><span class="ai-chip ai-deep">✓ deep</span></div>
+            </div>
+            <div class="fc" onclick="showFile()">
+              <div class="fc-head">
+                <div class="fc-badge-wrap">
+                  <span class="badge b-xls fc-badge">XLSX</span>
+                  <span class="fc-name">Q2-Budget.xlsx</span>
+                </div>
+                <span class="fc-dot fl-on">●</span>
+              </div>
+              <div class="fc-divider"></div>
+              <div class="fc-summary">Q2 2025 departmental budget breakdown. Infrastructure spend 12% under target. Headcount costs on track. Flagged overspend in cloud egress line.</div>
+              <div class="fc-foot"><span>64 KB · Nov 2</span><span class="ai-chip ai-catalog">✓ catalog</span></div>
+            </div>
+            <div class="fc" onclick="showFile()">
+              <div class="fc-head">
+                <div class="fc-badge-wrap">
+                  <span class="badge b-md fc-badge">MD</span>
+                  <span class="fc-name">Roadmap.md</span>
+                </div>
+                <span class="fc-dot fl-on">●</span>
+              </div>
+              <div class="fc-divider"></div>
+              <div class="fc-summary">Platform engineering roadmap for 2026. Key themes: autoscaling tier 2, EU-West-2 AZ expansion, runbook automation phase 2, and on-call tooling refresh.</div>
+              <div class="fc-foot"><span>12 KB · Dec 1</span><span class="ai-chip ai-catalog">✓ catalog</span></div>
+            </div>
+            <div class="fc" onclick="showFile()">
+              <div class="fc-head">
+                <div class="fc-badge-wrap">
+                  <span class="badge b-doc fc-badge">DOCX</span>
+                  <span class="fc-name">Meeting-Notes-Dec-2025.docx</span>
+                </div>
+                <span class="fc-dot fl-on">●</span>
+              </div>
+              <div class="fc-divider"></div>
+              <div class="fc-summary">Notes from the December infrastructure review meeting. Action items: provision eu-west-2 AZ by end of Q1, review egress pricing with cloud vendor.</div>
+              <div class="fc-foot"><span>28 KB · Dec 12</span><span class="ai-chip ai-catalog">✓ catalog</span></div>
+            </div>
+            <div class="fc" onclick="showFile()">
+              <div class="fc-head">
+                <div class="fc-badge-wrap">
+                  <span class="badge b-img fc-badge">PNG</span>
+                  <span class="fc-name">architecture-diagram.png</span>
+                </div>
+                <span class="fc-dot fl-on">●</span>
+              </div>
+              <div class="fc-divider"></div>
+              <div class="fc-summary analyse">⚡ Right-click → Analyse with AI to make this image searchable.</div>
+              <div class="fc-foot"><span>340 KB · Oct 15</span><span class="ai-chip ai-analyse">⚡ analyse</span></div>
+            </div>
+            <div class="fc" onclick="showFile()">
+              <div class="fc-head">
+                <div class="fc-badge-wrap">
+                  <span class="badge b-txt fc-badge">TXT</span>
+                  <span class="fc-name pending">draft-notes.txt</span>
+                </div>
+                <span class="fc-dot fl-off">○</span>
+              </div>
+              <div class="fc-divider"></div>
+              <div class="fc-summary empty">Not yet indexed.</div>
+              <div class="fc-foot"><span>2 KB · Dec 20</span><span class="ai-chip ai-pending">○ pending</span></div>
+            </div>
+            <div class="fc" onclick="showFile()">
+              <div class="fc-head">
+                <div class="fc-badge-wrap">
+                  <span class="badge b-pdf fc-badge">PDF</span>
+                  <span class="fc-name">Q3-Infrastructure-Update.pdf</span>
+                </div>
+                <span class="fc-dot fl-on">●</span>
+              </div>
+              <div class="fc-divider"></div>
+              <div class="fc-summary">Mid-year infrastructure update covering Q3 capacity trends, the July eu-west-2 spike incident, and revised year-end projections.</div>
+              <div class="fc-foot"><span>880 KB · Sep 14</span><span class="ai-chip ai-catalog">✓ catalog</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PREVIEW VIEW -->
+      <div class="view hidden" id="viewPreview">
+        <div class="tabs">
+          <div class="back-btn" onclick="showFolder()">‹ Reports/</div>
+          <div class="tab tab-active">
+            <span class="icon-pdf">▤</span>
+            Annual-Infrastructure-Review-2025.pdf
+            <span class="tab__x">✕</span>
+          </div>
+          <div class="tab"><span class="icon-md">▤</span>Roadmap.md</div>
+          <div class="tab"><span class="icon-xl">▤</span>Q2-Budget.xlsx</div>
+          <div class="tabs__fill"></div>
+          <div class="tabs__meta"><span>p.1 / 24</span><span>1.4 MB</span><span>⤢</span></div>
+        </div>
+        <div class="metastrip">
+          <span><span class="mk">type</span>&nbsp;application/pdf</span>
+          <span><span class="mk">mtime</span>&nbsp;2025-12-18 09:42</span>
+          <span><span class="mk">sha</span>&nbsp;3f9a…e21c</span>
+          <span><span class="mk">indexed</span>&nbsp;<span class="mv-green">true</span></span>
+          <span><span class="mk">tokens</span>&nbsp;18,402</span>
+          <span><span class="mk">summary</span>&nbsp;<span class="mv-green">ready</span></span>
+        </div>
+        <div class="docarea">
+          <div class="page">
+            <div class="p-eye">Infrastructure Engineering</div>
+            <div class="p-title">Annual Infrastructure<br>Review 2025</div>
+            <div class="p-sub">Platform Reliability &amp; Capacity Planning</div>
+            <div class="p-meta">Rev. 2.1 · 24 pages · Confidential</div>
+            <div class="p-h2">1. Executive Summary</div>
+            <p class="p-p">Over the 2025 fiscal year the platform sustained
+              <span class="p-hl">99.98% availability</span> across all primary regions,
+              a 0.04 point improvement over the prior year. Total compute footprint grew
+              31% while unit cost per request fell 12%, driven largely by the migration
+              of stateless services to the new autoscaling tier.</p>
+            <p class="p-p">This document reviews capacity headroom by region, summarises
+              the year's incident trends, and presents the proposed investment plan for
+              the coming year.</p>
+            <div class="p-h2">2. Capacity &amp; Utilisation</div>
+            <p class="p-p">Aggregate CPU utilisation averaged 58% at peak, leaving
+              comfortable headroom in every region except eu-west-2, which crossed the
+              80% threshold during three separate demand spikes in Q3.</p>
+            <div class="p-h2">3. Reliability &amp; Incidents</div>
+            <p class="p-p">Four Sev-1 incidents were recorded over the year, compared to
+              seven in 2024. Mean time to recovery improved from 41 minutes to 23 minutes,
+              attributable to the new runbook automation deployed in Q1. No incidents
+              resulted in customer data loss.</p>
+            <div class="p-folio">— 1 —</div>
+          </div>
+        </div>
+      </div>
+
+    </div><!-- /.middle -->
+
+    <!-- ── RIGHT: AI REPL ── -->
+    <div class="right">
+      <div class="repl-head">
+        <span class="rh-dot">●</span>
+        <span class="rh-name">assistant.repl</span>
+        <span class="rh-scope" id="replScope">— Reports/ folder</span>
+        <span class="rh-fill"></span>
+        <span class="rh-ctx" id="replCtx">ctx 84k</span>
+      </div>
+
+      <div class="repl-body" id="replFolder">
+        <div class="repl-folder-intro">Searching <strong style="color:var(--text)">Reports/</strong> — 6 files indexed.</div>
+        <div class="cmd">▸ <span class="cmd-verb">ask</span> <span class="cmd-str">"infrastructure capacity risks"</span></div>
+        <div class="repl-folder-result" onclick="showFile()">
+          <div class="rfr-name">Annual-Infrastructure-Review-2025.pdf</div>
+          <div class="rfr-snip">…eu-west-2 crossed the <em>80% threshold</em> during three demand spikes in Q3…</div>
+          <div class="rfr-meta">PDF · p.2 · ✓ deep · score 0.98</div>
+        </div>
+        <div class="repl-folder-result" onclick="showFile()">
+          <div class="rfr-name">Q3-Infrastructure-Update.pdf</div>
+          <div class="rfr-snip">…revised <em>capacity</em> projections for eu-west-2 ahead of seasonal peak…</div>
+          <div class="rfr-meta">PDF · p.4 · ✓ catalog · score 0.87</div>
+        </div>
+        <div class="provenance" style="margin-top:0.29rem">↳ 2 results · 310ms</div>
+      </div>
+
+      <div class="repl-body hidden" id="replFile">
+        <div class="cmd">▸ <span class="cmd-verb">summarize</span> <span class="cmd-flag">--file</span> <span class="cmd-str">current</span></div>
+        <div class="sum-block">
+          <div class="sum-label">summary</div>
+          <div class="sum-text">24-page engineering report on platform reliability &amp; capacity, FY2025.
+            <span class="sum-hi">99.98% uptime</span>, +31% compute at −12% unit cost.
+            Primary risk: <span class="sum-warn">eu-west-2</span> capacity.</div>
+          <div class="sum-tags">
+            <span class="sum-tag">#reliability</span>
+            <span class="sum-tag">#capacity</span>
+            <span class="sum-tag">#budget</span>
+          </div>
+        </div>
+        <div class="provenance">↳ 412ms · 6 chunks · <span class="prov-link">pp.1,3,7,14,19,22</span></div>
+        <div class="cmd">▸ <span class="cmd-verb">ask</span> <span class="cmd-str">"how many sev-1 incidents?"</span></div>
+        <div class="answer">4 Sev-1 incidents in 2025 <span class="answer-aside">(7 in 2024)</span>. MTTR 23 min.</div>
+        <div class="provenance">↳ <span class="prov-link">page 3</span> · §3 Reliability</div>
+        <div class="cmd">▸ <span class="cmd-verb">grep</span> <span class="cmd-str">"cost"</span> <span class="cmd-flag">--in</span> <span class="cmd-str">current</span></div>
+        <div class="grep-line">p.1 · unit cost per request fell <span class="grep-hi">12%</span></div>
+        <div class="grep-line">p.1 · archival tiering → <span class="grep-hi">⅓</span> of savings</div>
+        <div class="grep-line">p.9 · projected cost savings <span class="grep-hi">£1.2M</span> FY2026</div>
+        <div class="provenance" style="margin-top:0.21rem">↳ 3 matches</div>
+      </div>
+
+      <div class="repl-input-wrap">
+        <div class="repl-input-row">
+          <span class="repl-prompt">❯</span>
+          <span class="repl-ph" id="replPh">ask about this folder…</span>
+          <span class="repl-run">⏎ run</span>
+        </div>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<!-- ── CONTEXT MENU ── -->
+<div class="ctx-menu hidden" id="ctxMenu">
+  <div class="ctx-header">
+    <div class="ctx-filename" id="ctxFilename">filename.pdf</div>
+    <div class="ctx-filemeta" id="ctxFilemeta">PDF · 1.4 MB</div>
+  </div>
+  <!-- primary action: analyse (shown for images / unanalysed; shown for all as re-analyse) -->
+  <div class="ctx-section" id="ctxAnalyseSection">
+    <div class="ctx-item primary" id="ctxAnalyse">
+      <span class="ctx-icon">⚡</span>
+      <span class="ctx-label" id="ctxAnalyseLabel">analyse with AI</span>
+    </div>
+  </div>
+  <div class="ctx-section">
+    <div class="ctx-item">
+      <span class="ctx-icon">✦</span>
+      <span class="ctx-label">summarise</span>
+      <span class="ctx-hint">refresh</span>
+    </div>
+    <div class="ctx-item">
+      <span class="ctx-icon">↑</span>
+      <span class="ctx-label">prioritise indexing</span>
+    </div>
+    <div class="ctx-item">
+      <span class="ctx-icon">↓</span>
+      <span class="ctx-label">save copy with AI notes</span>
+    </div>
+  </div>
+  <div class="ctx-section">
+    <div class="ctx-item">
+      <span class="ctx-icon">⤢</span>
+      <span class="ctx-label">show in file manager</span>
+    </div>
+  </div>
+</div>
+
+<script>
+  if (window.matchMedia('(prefers-color-scheme: light)').matches) {
+    document.documentElement.dataset.theme = 'light';
+    document.getElementById('themeBtn').textContent = 'dark';
+  }
+
+  function toggleTheme() {
+    const html = document.documentElement;
+    const btn  = document.getElementById('themeBtn');
+    html.dataset.theme = html.dataset.theme === 'dark' ? 'light' : 'dark';
+    btn.textContent = html.dataset.theme === 'dark' ? 'light' : 'dark';
+  }
+
+  function toggleChev(row) {
+    const c = row.querySelector('.chev');
+    if (!c) return;
+    c.classList.toggle('off');
+    c.textContent = c.classList.contains('off') ? '▸' : '▾';
+  }
+
+  function setView(v) {
+    const isList = v === 'list';
+    document.getElementById('listView').classList.toggle('hidden', !isList);
+    document.getElementById('gridView').classList.toggle('hidden', isList);
+    document.getElementById('btnList').classList.toggle('active', isList);
+    document.getElementById('btnGrid').classList.toggle('active', !isList);
+  }
+
+  function showFile() {
+    document.getElementById('viewFolder').classList.add('hidden');
+    document.getElementById('viewPreview').classList.remove('hidden');
+    document.getElementById('treeReports').classList.remove('sel');
+    document.getElementById('treeFile1').classList.add('sel');
+    document.getElementById('replFolder').classList.add('hidden');
+    document.getElementById('replFile').classList.remove('hidden');
+    document.getElementById('replScope').textContent = '— this file';
+    document.getElementById('replCtx').textContent = 'ctx 18.4k';
+    document.getElementById('replPh').textContent = 'query this file…';
+  }
+
+  /* ── CONTEXT MENU ── */
+  const ctxMenu = document.getElementById('ctxMenu');
+
+  /* file metadata for each entry — keyed by a label we embed on the element */
+  const fileData = {
+    'Annual-Infrastructure-Review-2025.pdf': { meta: 'PDF · 1.4 MB', isImage: false },
+    'Q2-Budget.xlsx':                        { meta: 'XLSX · 64 KB',  isImage: false },
+    'Roadmap.md':                            { meta: 'MD · 12 KB',    isImage: false },
+    'Meeting-Notes-Dec-2025.docx':           { meta: 'DOCX · 28 KB',  isImage: false },
+    'architecture-diagram.png':              { meta: 'PNG · 340 KB',  isImage: true  },
+    'draft-notes.txt':                       { meta: 'TXT · 2 KB',    isImage: false },
+    'Q3-Infrastructure-Update.pdf':          { meta: 'PDF · 880 KB',  isImage: false },
+  };
+
+  function openCtx(e, filename) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    const data = fileData[filename] || { meta: '', isImage: false };
+    document.getElementById('ctxFilename').textContent = filename;
+    document.getElementById('ctxFilemeta').textContent = data.meta;
+
+    /* images: "analyse" is the primary prominent action with full label;
+       other files: show it as "re-analyse / force" with muted styling */
+    const analyseItem  = document.getElementById('ctxAnalyse');
+    const analyseLabel = document.getElementById('ctxAnalyseLabel');
+    if (data.isImage) {
+      analyseItem.classList.add('primary');
+      analyseLabel.textContent = 'analyse with AI';
+      document.getElementById('ctxAnalyseSection').style.borderBottomWidth = '1px';
+    } else {
+      analyseItem.classList.remove('primary');
+      analyseLabel.textContent = 're-analyse with AI';
+    }
+
+    /* position — keep menu inside viewport */
+    const vw = window.innerWidth, vh = window.innerHeight;
+    ctxMenu.classList.remove('hidden');
+    const mw = ctxMenu.offsetWidth, mh = ctxMenu.offsetHeight;
+    let x = e.clientX, y = e.clientY;
+    if (x + mw > vw - 8) x = vw - mw - 8;
+    if (y + mh > vh - 8) y = vh - mh - 8;
+    ctxMenu.style.left = x + 'px';
+    ctxMenu.style.top  = y + 'px';
+  }
+
+  function closeCtx() { ctxMenu.classList.add('hidden'); }
+
+  document.addEventListener('click',       closeCtx);
+  document.addEventListener('contextmenu', closeCtx);  /* re-opens fresh on next right-click */
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCtx(); });
+
+  /* attach right-click to all file rows */
+  document.querySelectorAll('.fl-row').forEach(row => {
+    const nameEl = row.querySelector('.fl-name');
+    if (!nameEl) return;
+    row.addEventListener('contextmenu', e => openCtx(e, nameEl.textContent.trim()));
+  });
+
+  /* attach right-click to all grid cards */
+  document.querySelectorAll('.fc').forEach(card => {
+    const nameEl = card.querySelector('.fc-name');
+    if (!nameEl) return;
+    card.addEventListener('contextmenu', e => openCtx(e, nameEl.textContent.trim()));
+  });
+
+  /* attach right-click to tree file rows (those with .don or .doff) */
+  document.querySelectorAll('#treeFiles .tree-row').forEach(row => {
+    const spans = row.querySelectorAll('span');
+    const nameSpan = spans[spans.length - 1];
+    if (!nameSpan) return;
+    row.addEventListener('contextmenu', e => openCtx(e, nameSpan.textContent.trim()));
+  });
+
+  function showFolder() {
+    document.getElementById('viewPreview').classList.add('hidden');
+    document.getElementById('viewFolder').classList.remove('hidden');
+    document.getElementById('treeReports').classList.add('sel');
+    document.getElementById('treeFile1').classList.remove('sel');
+    document.getElementById('replFile').classList.add('hidden');
+    document.getElementById('replFolder').classList.remove('hidden');
+    document.getElementById('replScope').textContent = '— Reports/ folder';
+    document.getElementById('replCtx').textContent = 'ctx 84k';
+    document.getElementById('replPh').textContent = 'ask about this folder…';
+  }
+</script>
+</body>
+</html>
