@@ -1,0 +1,20 @@
+---
+name: k-base-photo-export
+description: "BUILT 2026-06-13 — export a photo + JSON sidecar (AI caption, OCR, EXIF, source) as a zip; sidecar form chosen over EXIF-embedding; one new dep exifr. UPDATED 2026-06-15: companion native-metadata embed expanded to FULL payload via shared amadocs: XMP namespace (PDF/JPG/PNG) + Office custom.xml; sidecar+embed both kept"
+metadata: 
+  node_type: memory
+  type: project
+  originSessionId: 44f63927-d2bd-49c9-bbe7-89fcb83dce90
+---
+
+**Export photo with metadata — BUILT 2026-06-13 (build-1 scope addition).** Take an image back OUT of AMAdocs with everything the app knows about it, so the AI's understanding travels with the file.
+
+**Decided form = SIDECAR (not embedding):** export a ZIP = original file (untouched) + `<base>.amadocs.json`. Sidecar chosen over writing into EXIF/XMP because format-agnostic (PNG/JPG/HEIC) + robust + no per-format limits. Sidecar holds (all user-selected): `aiDescription` (moondream caption), `extractedText` (OCR), original camera **EXIF**, `source` provenance (filename, collection, ingest date, docId, wordCount), basic `image` facts (sharp).
+
+**How:** server `GET /workspace/:slug/doc-export?path=` in `endpoints/workspaces.js` (mirrors `doc-original`): `fileData()` path-safe → find original by uuid-prefix → split aiDescription/extractedText from combined `pageContent` (the `"Image description:"`/`"Text found in image:"` labels [[k-base-image-analyser]] writes) → `exifr` EXIF + `sharp` facts (both best-effort) → `archiver` zip stream as attachment. Originals never modified (copy). UI (`amadocs-ui/index.html` → synced to desktop copy): `⬇️ Export with info` btn in viewer header, image-only (`curDoc.isImage`); anchor + `Content-Disposition:attachment` downloads — works in browser dev stack AND Electron, no folder picker.
+
+**One new dep: `exifr@7`** (pure-JS, no native build → dodges Node-18 native fragility; installed `--legacy-peer-deps`). Only runtime dep added across all AMAdocs work; `archiver` already present.
+
+**Verified live:** real phone photo IMG_5127.jpg → HTTP 200 application/zip; bundle = photo + sidecar; sidecar had correct caption, OCR, image facts, and **real parsed EXIF** (Software:Google, DateTimeOriginal 2025-11-22). Not done: literal in-browser button click (same human-eyeball class as citation render); data path fully proven via HTTP.
+
+**UPDATE 2026-06-15 — native-metadata embed EXPANDED from summary-only to FULL payload.** The companion `doc-export-embedded` endpoint (`MetadataEmbed/index.js`, formerly embedded only the summary) now writes the SAME full payload as the sidecar **into the file's own native metadata** via a shared schema: **`amadocs:` XMP namespace** (PDF=metadata stream, JPEG=APP1, PNG=iTXt `XML:com.adobe.xmp`) + **`docProps/custom.xml`** for Office, plus standard slots (`/Subject`, EXIF ImageDescription, `dc:description`) as a visible mirror, plus a lossless JSON blob in `amadocs:data`. New `embedMetadata({buffer,ext,metadata})` (old `embedSummary` = back-compat wrapper); shared `amadocsExtractMetadata()` feeds BOTH exports so they can't drift. **Decision: sidecar AND embed both stay** — sidecar = lossless full record (survives JPEG's 64 KB APP1 cap, unsupported formats, metadata-stripping tools); embed = gist visible in Explorer/Finder/exiftool. **3 robustness fixes from live testing:** JPEG APP1 ≤65535 (shed heaviest field), `EMBED_TEXT_CAP=16000` on extractedText (embedding a 500pg PDF's own text doubled the file 4→8.5 MB; sidecar keeps full text), and the real gotcha — **pdf-lib re-encodes a JS-string XMP as single-byte PDFDocEncoding, corrupting non-Latin1 chars (em-dash U+2014→0x14, curly quote U+2019→0x19, ☕/café)**; fix = pass `Buffer.from(xmp,"utf8")` to `context.stream`. No new deps. Verified live (PNG/JPEG/PDF 200, amadocs:data round-trips incl. Unicode, XMP = well-formed XML; standalone `tooling/test-metadata-embed.js` 26/26). **⬜ NEXT (user-requested): inspect+edit metadata UI before export** (review/correct summary/desc/OCR, then save back to `aiSummary`). UI label "Save copy with summary" → rename to "info" pending.

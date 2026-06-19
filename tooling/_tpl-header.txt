@@ -1,0 +1,133 @@
+AMAdocs — THIRD-PARTY LICENSES
+==============================================================================
+
+AMAdocs itself is released under the MIT License (see the top-level LICENSE
+file). AMAdocs is a packager: it bundles and distributes a number of
+third-party open-source components. This file collects their copyright and
+license notices, as required by those licenses when the software is
+distributed (including in binary form: AppImage, pacman, etc.).
+
+Every bundled component is under a permissive license (MIT, Apache-2.0, BSD,
+ISC, BlueOak) or a license that permits redistribution within a
+permissively-licensed application (LGPL/MPL, noted below). No strong-copyleft
+(GPL/AGPL) code is bundled.
+
+This file has three parts:
+  A. Major bundled components (runtimes, engine, models)
+  B. AI models (downloaded by the user at runtime, not bundled — listed for
+     transparency)
+  C. npm package dependencies (auto-generated, full notices)
+
+==============================================================================
+PART A — MAJOR BUNDLED COMPONENTS
+==============================================================================
+
+--- AnythingLLM (document RAG engine — server + collector) -------------------
+License: MIT — Copyright (c) Mintplex Labs Inc.
+Source:  https://github.com/Mintplex-Labs/anything-llm
+AMAdocs forks AnythingLLM as its ingestion/OCR/embedding/RAG engine. Full
+license text below (from the bundled engine):
+
+%%ANYTHINGLLM_LICENSE%%
+
+--- Ollama (local LLM runtime) -----------------------------------------------
+License: MIT — Copyright (c) Ollama
+Source:  https://github.com/ollama/ollama
+Bundled as a local inference sidecar (bin/ollama + lib/ollama runtime). The
+authoritative notice ships with the Ollama project; the standard MIT terms
+(identical to the text above) apply.
+
+--- llama.cpp / ggml (inference library inside the Ollama runtime) -----------
+License: MIT — Copyright (c) 2023-2024 The ggml authors
+Source:  https://github.com/ggml-org/llama.cpp
+Ollama runs models through llama.cpp / ggml (the llama-server + runner libs in
+lib/ollama/). Distributed under the MIT terms above.
+
+--- Electron (desktop application shell) -------------------------------------
+License: MIT — Copyright (c) Electron contributors / GitHub Inc.
+         Includes Chromium (BSD-3-Clause and others) and Node.js.
+Source:  https://github.com/electron/electron
+The full Electron and Chromium notices are shipped inside the application
+bundle as LICENSE.electron.txt and LICENSES.chromium.html.
+
+--- Node.js (bundled runtime for the engine) ---------------------------------
+License: MIT — Copyright Node.js contributors. Includes components under
+         Apache-2.0 (e.g. OpenSSL 3), MIT (libuv), and others.
+Source:  https://github.com/nodejs/node
+Node 18 is bundled to run the engine (server + collector) at its native ABI.
+
+--- Tesseract OCR ------------------------------------------------------------
+License: Apache-2.0
+  • tesseract.js (JS/WASM wrapper) — https://github.com/naptha/tesseract.js
+  • Tesseract OCR engine + 'eng' trained data — https://github.com/tesseract-ocr/tesseract
+Used to read scanned documents and text in images.
+
+--- ONNX Runtime + on-device embedding / reranking models --------------------
+  • onnxruntime-node — License: MIT — https://github.com/microsoft/onnxruntime
+  • Embedder: Xenova/all-MiniLM-L6-v2 — License: Apache-2.0
+    https://huggingface.co/sentence-transformers/all-MiniLM-L6-v2
+  • Reranker: Xenova/ms-marco-MiniLM-L-6-v2 — License: Apache-2.0
+    https://huggingface.co/cross-encoder/ms-marco-MiniLM-L-6-v2
+These run locally for semantic search and result reranking. The model weights
+are bundled in storage-seed/models.
+
+--- Document viewer libraries (vendored in the UI) ---------------------------
+  • PDF.js — License: Apache-2.0 — https://github.com/mozilla/pdf.js
+  • Mammoth (.docx) — see ui/vendor/mammoth-LICENSE.txt
+  • SheetJS / xlsx (.xlsx) — License: Apache-2.0 — see ui/vendor/xlsx-LICENSE.txt
+Full texts of the vendored libraries follow:
+
+%%PDFJS_LICENSE%%
+
+%%MAMMOTH_LICENSE%%
+
+%%XLSX_LICENSE%%
+
+--- libvips (via the 'sharp' image library) ----------------------------------
+License: LGPL-3.0-or-later — Copyright (c) libvips contributors
+Source:  https://github.com/libvips/libvips
+AMAdocs bundles 'sharp', which ships a prebuilt libvips shared library
+(@img/sharp-libvips-*). libvips is licensed under the LGPL. It is dynamically
+loaded and may be replaced by a compatible build; its complete source is
+available at the URL above. This use within AMAdocs (MIT) is permitted by the
+LGPL. The LGPL license text is included with the @img/sharp-libvips-* packages
+in PART C.
+
+==============================================================================
+PART B — AI MODELS (DOWNLOADED AT RUNTIME, NOT BUNDLED)
+==============================================================================
+
+AMAdocs ships with NO AI model. On first run the user downloads one. Only
+permissively-licensed models are offered (the in-app catalog is an MIT/Apache
+allowlist). Listed here for transparency:
+
+  • Phi-3.5-mini   — License: MIT        (Microsoft)   [default chat model]
+  • Phi-4-mini     — License: MIT        (Microsoft)
+  • Qwen3 (1.7b/4b)— License: Apache-2.0 (Alibaba)
+  • Mistral        — License: Apache-2.0 (Mistral AI)
+  • Moondream      — License: Apache-2.0 (vision / image understanding)
+
+Each model's license travels with the model when downloaded by Ollama.
+
+==============================================================================
+PART C — npm PACKAGE DEPENDENCIES
+==============================================================================
+
+The following notices cover all npm packages bundled in the engine (server +
+collector) and the Electron desktop app. A few license-resolution notes:
+
+  • Dual-licensed packages are used under their permissive option:
+      jszip (MIT OR GPL-3.0)            -> MIT
+      @zone-eu/mailsplit (MIT OR EUPL)  -> MIT
+      dompurify (MPL-2.0 OR Apache-2.0) -> Apache-2.0
+  • web-push is MPL-2.0 (file-level copyleft; source at its repository).
+  • A few legacy packages declare no SPDX id or license file:
+      buffers (substack) and combine-errors (Matthew Mueller) follow their
+      authors' standard MIT licensing; voyageai is the Voyage AI TypeScript
+      SDK (https://github.com/voyage-ai/typescript-sdk). These, along with
+      some optional provider SDKs (cohere-ai, @zilliz/milvus2-sdk-node), are
+      transitive dependencies of the upstream engine that AMAdocs does not
+      invoke (AMAdocs uses Ollama + the native embedder + LanceDB).
+
+------------------------------------------------------------------------------
+
