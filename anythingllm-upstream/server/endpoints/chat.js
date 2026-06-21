@@ -27,7 +27,7 @@ function chatEndpoints(app) {
       try {
         const user = await userFromSession(request, response);
         // AMAdocs: sessionId scopes chat history to the current launch session.
-        const { message, attachments = [], sessionId = null } = reqBody(request);
+        const { message, attachments = [], sessionId = null, scopePath = null } = reqBody(request);
         const workspace = response.locals.workspace;
 
         if (typeof message !== "string" || message.trim().length === 0) {
@@ -68,7 +68,8 @@ function chatEndpoints(app) {
           user,
           null,
           attachments,
-          sessionId // AMAdocs: per-launch session id
+          sessionId,  // AMAdocs: per-launch session id
+          scopePath   // AMAdocs: optional LanceDB path pre-filter
         );
         await Telemetry.sendTelemetry("sent_chat", {
           multiUserMode: multiUserMode(response),

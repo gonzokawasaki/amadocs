@@ -88,7 +88,7 @@ class CollectorApi {
         model:
           process.env.SUMMARY_MODEL_PREF ||
           process.env.OLLAMA_MODEL_PREF ||
-          "phi3.5",
+          "granite4.1:3b",
         ollamaBasePath: process.env.OLLAMA_BASE_PATH || null,
       },
       runtimeSettings: {

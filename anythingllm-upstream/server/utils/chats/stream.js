@@ -44,7 +44,8 @@ async function streamChatWithWorkspace(
   user = null,
   thread = null,
   attachments = [],
-  sessionId = null // AMAdocs: per-launch session id → scopes chat history to one sitting
+  sessionId = null, // AMAdocs: per-launch session id → scopes chat history to one sitting
+  scopePath = null  // AMAdocs: LanceDB pre-filter — folder prefix (trailing /) or exact file path
 ) {
   const uuid = uuidv4();
   const updatedMessage = await grepCommand(message, user);
@@ -215,6 +216,7 @@ async function streamChatWithWorkspace(
           topN: workspace?.topN,
           filterIdentifiers: pinnedDocIdentifiers,
           rerank: workspace?.vectorSearchMode === "rerank",
+          scopePath,
         })
       : {
           contextTexts: [],

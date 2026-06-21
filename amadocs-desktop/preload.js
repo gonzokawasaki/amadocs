@@ -30,6 +30,10 @@ contextBridge.exposeInMainWorld("amadocs", {
   // Phase 2 file tree: resolves to the user's home directory path string.
   homePath: () => ipcRenderer.invoke("home-path"),
 
+  // Phase 2 preview: read a local file's raw bytes so the UI can preview ANY file,
+  // indexed or not. Resolves to {ok, data:<base64>, mime} or {ok:false, error}.
+  readFile: (filePath) => ipcRenderer.invoke("read-file", filePath),
+
   // Resolve the real filesystem path of a dropped/chosen File.
   // webUtils.getPathForFile is the sandbox-safe replacement for the old File.path.
   pathForFile: (file) => {

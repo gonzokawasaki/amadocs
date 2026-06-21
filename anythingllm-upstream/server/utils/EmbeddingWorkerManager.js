@@ -10,6 +10,26 @@ const sseConnections = new Map();
 /** @type {Map<string, object[]>} Buffered events per workspace for SSE replay */
 const eventHistory = new Map();
 
+// AMAdocs (THE #1 RULE): a global STOP must *stay* stopped. The hard STOP suspends
+// all ingest; if the background cadence scheduler ([[k-base-ingest-safety]]) just
+// re-dispatched a delta-sync seconds later it would defeat the kill switch. So
+// stopAll() latches this flag and the cadence scheduler skips while it is set. It is
+// cleared only by an EXPLICIT user-driven sync (real, non-dryRun gnome-sync run) or a
+// fresh app launch (the flag is in-memory) — never silently by the scheduler itself.
+let ingestPaused = false;
+function isIngestPaused() {
+  return ingestPaused;
+}
+function setIngestPaused(value) {
+  ingestPaused = !!value;
+}
+// Is ANY embedding worker currently running? The cadence scheduler uses this to stay
+// strictly serial machine-wide — it won't dispatch a new folder's embed while another
+// workspace is still embedding.
+function hasRunningWorker() {
+  return runningWorkers.size > 0;
+}
+
 /**
  * Write an SSE event payload to all connected clients for a workspace.
  * Also called by Document.addDocuments for the non-native embedder path.
@@ -213,6 +233,10 @@ function stopWorkspace(slug) {
  * @returns {string[]} the slugs that had a running worker
  */
 function stopAll() {
+  // Latch the global pause so the background cadence scheduler doesn't quietly
+  // resume embedding right after the user hit STOP. Cleared only by an explicit
+  // user-driven sync or the next app launch.
+  ingestPaused = true;
   const slugs = [...runningWorkers.keys()];
   for (const slug of slugs) stopWorkspace(slug);
   return slugs;
@@ -273,4 +297,7 @@ module.exports = {
   isNativeEmbedder,
   stopWorkspace,
   stopAll,
+  isIngestPaused,
+  setIngestPaused,
+  hasRunningWorker,
 };

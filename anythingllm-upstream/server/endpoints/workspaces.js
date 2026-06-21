@@ -61,6 +61,130 @@ function amadocsRetainedOriginal(docId) {
   return match ? path.resolve(dir, match) : null;
 }
 
+// AMAdocs: root of AMAdocs' storage dir (mirrors amadocsOriginalsDir's resolution).
+function amadocsStorageRoot() {
+  return process.env.NODE_ENV === "development"
+    ? path.resolve(__dirname, `../storage`)
+    : path.resolve(process.env.STORAGE_DIR);
+}
+
+// AMAdocs: the status document. A single source-of-truth Markdown the app opens
+// to on launch — index, database, model and version at a glance, generated live
+// from the engine. Kept renderer-friendly (headings + short paragraph blocks)
+// so it reads cleanly both in AMAdocs' preview pane and any plain Markdown viewer.
+async function buildAmadocsStatus() {
+  const Gnome = require("../utils/GnomeBridge");
+  const fmtDate = (d) => {
+    try {
+      return new Date(d).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+    } catch (_) {
+      return "—";
+    }
+  };
+
+  // ---- database / workspaces ----
+  let wsRows = [];
+  let totalDocs = 0;
+  try {
+    const workspaces = await Workspace.where();
+    for (const ws of workspaces) {
+      const n = await Document.count({ workspaceId: ws.id });
+      totalDocs += n;
+      wsRows.push({ slug: ws.slug, docs: n });
+    }
+  } catch (_) {
+    /* leave wsRows empty on any model error */
+  }
+
+  // ---- GNOME index / synced folders ----
+  let gnomeUp = false;
+  try {
+    gnomeUp = Gnome.available();
+  } catch (_) {
+    gnomeUp = false;
+  }
+  const synced = [];
+  try {
+    for (const slug of Gnome.listSyncedSlugs()) {
+      const st = Gnome.loadState(slug);
+      if (!st) continue;
+      synced.push({
+        slug,
+        folder: st.folder || "?",
+        lastSync: st.lastSync,
+        files: st.files ? Object.keys(st.files).length : 0,
+      });
+    }
+  } catch (_) {
+    /* no synced folders */
+  }
+
+  // ---- model / engine ----
+  const chatModel = process.env.OLLAMA_MODEL_PREF || "(system default)";
+  const embedder = process.env.EMBEDDING_MODEL_PREF || "Xenova/all-MiniLM-L6-v2";
+  const llmProvider = process.env.LLM_PROVIDER || "ollama";
+  const vectorDb = process.env.VECTOR_DB || "lancedb";
+  let engineVersion = "?";
+  try {
+    engineVersion = require("../package.json").version;
+  } catch (_) {
+    /* ignore */
+  }
+
+  // ---- structured data (consumed by the homepage; mirrors the markdown below) ----
+  const data = {
+    generatedAt: Date.now(),
+    engine: { version: engineVersion, node: process.version, llmProvider, vectorDb },
+    model: { chat: chatModel, embedder },
+    gnome: { connected: gnomeUp },
+    library: { totalDocs, workspaces: wsRows.length, wsRows },
+    synced,
+  };
+
+  // ---- assemble ----
+  const lines = [];
+  lines.push(`# AMAdocs`);
+  lines.push("");
+  lines.push(`Status generated ${fmtDate(Date.now())}.`);
+  lines.push("");
+
+  lines.push(`## Index`);
+  lines.push("");
+  lines.push(`GNOME indexer (LocalSearch / TinySPARQL): **${gnomeUp ? "connected" : "unavailable"}**`);
+  lines.push("");
+  if (synced.length) {
+    lines.push(`Synced folders:`);
+    for (const s of synced)
+      lines.push(`- \`${s.folder}\` → **${s.files}** files · ${s.slug} · last sync ${fmtDate(s.lastSync)}`);
+  } else {
+    lines.push(`No folders synced yet. Use **⟳ index** on a folder, or right-click → analyse a file.`);
+  }
+  lines.push("");
+
+  lines.push(`## Database`);
+  lines.push("");
+  lines.push(`Vector store: **${vectorDb}** · **${totalDocs}** documents across **${wsRows.length}** workspaces`);
+  lines.push("");
+  if (wsRows.length) {
+    for (const w of wsRows) lines.push(`- ${w.slug}: **${w.docs}** documents`);
+    lines.push("");
+  }
+
+  lines.push(`## Model`);
+  lines.push("");
+  lines.push(`Chat model: **${chatModel}** (via ${llmProvider})`);
+  lines.push("");
+  lines.push(`Embedder: **${embedder}**`);
+  lines.push("");
+
+  lines.push(`## Version`);
+  lines.push("");
+  lines.push(`Engine: **${engineVersion}** · Node ${process.version}`);
+  lines.push("");
+
+  return { markdown: lines.join("\n"), data };
+}
+
 // AMAdocs: single source of truth for the "everything AMAdocs understands about a
 // document" payload — the AI summary, the AI vision description, any OCR'd text, source
 // provenance, and (for photos) the original EXIF + basic image facts. Used by BOTH the
@@ -396,184 +520,48 @@ function workspaceEndpoints(app) {
           dryRun = false,
           reconcile = false,
         } = reqBody(request);
-        const currWorkspace = await Workspace.get({ slug });
-        if (!currWorkspace) return response.sendStatus(400).end();
-        if (!folder)
-          return response.status(400).json({ error: "Missing 'folder'." });
 
+        // AMAdocs: the whole durable PLAN/EXECUTE/finalize-on-confirm orchestration now
+        // lives in GnomeBridge.runSync so the background cadence scheduler shares ONE
+        // code path with this endpoint (see utils/GnomeBridge). It returns the
+        // HTTP-style status + body we relay verbatim (400/503/200-dryRun/202-execute).
         const Gnome = require("../utils/GnomeBridge");
-        // AMAdocs: only poke the OS indexer when the caller explicitly asks
-        // (reconcile) — never restart a system service silently. On a non-GNOME box
-        // inotify doesn't fire, so this is what wakes LocalSearch + forces a re-crawl
-        // so the delta actually sees new/changed/deleted files. See [[k-base-ingest-safety]].
-        if (reconcile) await Gnome.ensureIndexer({ restart: true });
-        if (!Gnome.available())
-          return response.status(503).json({
-            error:
-              "GNOME LocalSearch (TinySPARQL) is not running or reachable. Start the indexer and retry.",
-          });
-
-        const current = Gnome.queryFileList({ folder, exclude });
-        const prevState = Gnome.loadState(slug);
-
-        // ---- PLAN (no side effects, so dryRun is truly read-only) ----
-        // toEmbed: [{url,mtime}] to (re)embed; toDelete: old docpaths to drop;
-        // nextFiles: the state map we'll persist. Entries for the files we're about
-        // to embed are deliberately left ABSENT here and only added once a doc is
-        // CONFIRMED embedded (see EXECUTE) — so state never claims a file is indexed
-        // before it actually is, and a crash mid-batch is retried next sync.
-        let mode;
-        let toEmbed = [];
-        let toDelete = [];
-        let nextFiles = {};
-        if (!prevState) {
-          // FULL INDEX — embed the whole folder (bounded below by `cap`).
-          mode = "index";
-          toEmbed = current;
-        } else {
-          // DELTA — re-embed only changes; cost scales with changes, not corpus.
-          mode = "sync";
-          nextFiles = { ...(prevState.files || {}) };
-          const { news, changed, deleted } = Gnome.computeDelta(nextFiles, current);
-          const changedManaged = changed.filter((c) => c.prev.docpath);
-          for (const c of changed.filter((c) => !c.prev.docpath)) // dormant: refresh mtime only
-            nextFiles[c.url] = { docpath: c.prev.docpath, mtime: c.mtime };
-          toDelete = [
-            ...changedManaged.map((c) => c.prev.docpath), // re-embed: drop old vectors
-            ...deleted.map((d) => d.prev.docpath),
-          ];
-          // Changed-managed first: their old vectors are about to be dropped, so they
-          // must win the cap over brand-new files (else they'd be left de-indexed).
-          toEmbed = [
-            ...changedManaged.map((c) => ({ url: c.url, mtime: c.mtime })),
-            ...news,
-          ];
-          for (const d of deleted) delete nextFiles[d.url];
-        }
-
-        // ---- BOUND the per-call work (THE #1 RULE — "don't kill their machine") ----
-        // An explicit `limit` is the user's deliberate cap: embed the first `limit`
-        // and record the rest as a DORMANT baseline (docpath:null) so they are NOT
-        // auto-pulled later. With no limit we still refuse unbounded work — cap at
-        // GNOME_SYNC_CAP (default 200) and report `remaining`, but leave the overflow
-        // ABSENT from state so the next sync re-sees it and continues (the "continue"
-        // contract). This also bounds the materialize() loop below (2 SPARQL + a JSON
-        // write per file) to at most `cap` files of synchronous request-thread work.
-        let remaining = 0;
-        const explicitLimit = limit > 0;
-        const cap = explicitLimit ? limit : Number(process.env.GNOME_SYNC_CAP) || 200;
-        if (toEmbed.length > cap) {
-          const overflow = toEmbed.slice(cap);
-          toEmbed = toEmbed.slice(0, cap);
-          remaining = overflow.length;
-          if (explicitLimit)
-            for (const { url, mtime } of overflow)
-              nextFiles[url] = { docpath: null, mtime }; // dormant baseline
-          // no-limit overflow: intentionally NOT recorded → retried next sync.
-        }
-
-        if (dryRun)
-          return response.status(200).json({
-            dryRun: true,
-            mode,
-            indexed: current.length,
-            queued: toEmbed.length,
-            deleted: toDelete.length,
-            remaining,
-          });
-
-        // ---- EXECUTE (async, durable, finalize-on-confirm) ----
-        // 1) Apply deletes first (idempotent — a crash here just re-deletes next sync).
-        if (toDelete.length > 0)
-          await Document.removeDocuments(
-            currWorkspace,
-            toDelete,
-            response.locals?.user?.id
-          );
-
-        // 2) Materialize the (bounded) docs to embed; map docpath -> {url,mtime} so we
-        //    can finalize state as each one is confirmed embedded.
-        const pending = new Map();
-        const adds = [];
-        for (const { url, mtime } of toEmbed) {
-          const docpath = Gnome.materialize(slug, url);
-          if (docpath) {
-            adds.push(docpath);
-            pending.set(docpath, { url, mtime });
-          }
-          // else: text vanished mid-flight — leave ABSENT so it's retried next sync.
-        }
-
-        // 3) Persist the PRE-EMBED baseline NOW (deletes + dormant refreshes applied;
-        //    the about-to-embed files deliberately absent). Durable: die mid-batch and
-        //    the next sync re-sees those files as new/changed and retries them.
-        const persist = () =>
-          Gnome.saveState(slug, {
-            folder,
-            exclude,
-            slug,
-            lastSync: new Date().toISOString(),
-            files: nextFiles,
-          });
-        persist();
-
-        // 4) Kick off embedding. Finalize state per CONFIRMED doc — NOT at dispatch,
-        //    because embedFiles() is fire-and-forget (returns before any embedding).
-        const {
-          isNativeEmbedder,
-          embedFiles,
-        } = require("../utils/EmbeddingWorkerManager");
-        if (adds.length > 0 && isNativeEmbedder()) {
-          await embedFiles(
-            currWorkspace.slug,
-            adds,
-            currWorkspace.id,
-            response.locals?.user?.id ?? null,
-            {
-              onDocComplete: (docpath) => {
-                const e = pending.get(docpath);
-                if (!e) return;
-                nextFiles[e.url] = { docpath, mtime: e.mtime };
-                try {
-                  persist();
-                } catch (err) {
-                  console.error("[gnome-sync] persist:", err.message);
-                }
-              },
-              onComplete: () => {
-                try {
-                  persist();
-                } catch (err) {
-                  console.error("[gnome-sync] persist:", err.message);
-                }
-              },
-            }
-          );
-        } else if (adds.length > 0) {
-          // Non-native embedder: addDocuments is synchronous — confirm all, persist.
-          await Document.addDocuments(
-            currWorkspace,
-            adds,
-            response.locals?.user?.id
-          );
-          for (const [docpath, e] of pending)
-            nextFiles[e.url] = { docpath, mtime: e.mtime };
-          persist();
-        }
-
-        // 5) Respond with the PLAN (202 Accepted). Embedding continues async over the
-        //    existing SSE channel; we do NOT report `added` because it may still run.
-        response.status(202).json({
-          mode,
-          indexed: current.length,
-          queued: adds.length,
-          deleted: toDelete.length,
-          remaining,
-          tracked: Object.keys(nextFiles).length,
+        const { status, body } = await Gnome.runSync({
+          slug,
+          folder,
+          exclude,
+          limit,
+          dryRun,
+          reconcile,
+          userId: response.locals?.user?.id ?? null,
         });
+        return response.status(status).json(body);
       } catch (e) {
         console.error("[gnome-sync] error:", e);
         response.status(500).json({ error: e.message });
+      }
+    }
+  );
+
+  // AMAdocs: on-demand single-file backstop — run AMAdocs' OWN extractor (OCR + vision
+  // for images, mammoth for office docs, OCR for scanned PDFs) over ONE file GNOME
+  // couldn't read, then embed it. This is the right-click "analyse with AI" path for
+  // images / image-only PDFs that bulk folder sync deliberately skips. Body: { path }.
+  app.post(
+    "/workspace/:slug/analyse-file",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { slug = null } = request.params;
+        const { path: filePath = null } = reqBody(request);
+        const Gnome = require("../utils/GnomeBridge");
+        const result = await Gnome.backstopFile(slug, filePath, {
+          userId: response.locals?.user?.id ?? null,
+        });
+        return response.status(result.ok ? 200 : 400).json(result);
+      } catch (e) {
+        console.error("[analyse-file] error:", e);
+        response.status(500).json({ ok: false, error: e.message });
       }
     }
   );
@@ -1733,12 +1721,12 @@ function workspaceEndpoints(app) {
         }
         if (match) return streamFile(path.resolve(originalsPath, match));
 
-        // AMAdocs: bridged "ride on GNOME" (TinySPARQL) docs have no retained
-        // original — they reference the user's real file in place via sourcePath.
-        // Stream that so bridged docs are first-class for the viewer + citation
-        // loop (passage-highlight works via PDF.js text-match; only the page-number
-        // chip label is unavailable, since flat OS-extracted text has no page ranges).
-        if (data.amadocsSource === "tinysparql" && data.sourcePath) {
+        // AMAdocs: in-place docs (TinySPARQL ride-on OR collector-backstop) have no
+        // retained original — they reference the user's real file via sourcePath.
+        // Stream that so they're first-class for the viewer + citation loop
+        // (passage-highlight works via PDF.js text-match; only the page-number chip
+        // label is unavailable, since flat extracted text has no page ranges).
+        if (data.amadocsSource && data.sourcePath) {
           try {
             if (fs.statSync(data.sourcePath).isFile())
               return streamFile(data.sourcePath);
@@ -1988,11 +1976,11 @@ function workspaceEndpoints(app) {
   // research/non-commercial model. The pull endpoint refuses anything not here.
   // Sizes are approximate (4-bit quantised) and only used for display.
   const AMADOCS_MODEL_CATALOG = [
-    { id: "phi3.5", name: "Phi-3.5", license: "MIT", sizeGB: 2.2, desc: "Balanced all-rounder · the default" },
-    { id: "phi4-mini", name: "Phi-4 mini", license: "MIT", sizeGB: 2.5, desc: "Newer than Phi-3.5, a little sharper" },
+    { id: "granite4.1:3b", name: "Granite 4 (small)", license: "Apache-2.0", sizeGB: 2.1, desc: "IBM · tuned to answer from your documents, not guess · the default", default: true },
+    { id: "phi4-mini", name: "Phi-4 mini", license: "MIT", sizeGB: 2.5, desc: "Sharp all-rounder · Microsoft" },
+    { id: "phi3.5", name: "Phi-3.5", license: "MIT", sizeGB: 2.2, desc: "Older balanced all-rounder · Microsoft" },
     { id: "qwen3:1.7b", name: "Qwen 3 (small)", license: "Apache-2.0", sizeGB: 1.4, desc: "Light & fast · great on modest laptops" },
     { id: "qwen3:4b", name: "Qwen 3", license: "Apache-2.0", sizeGB: 2.6, desc: "Strong all-rounder · needs more memory" },
-    { id: "granite4.1:3b", name: "Granite 4 (small)", license: "Apache-2.0", sizeGB: 2.1, desc: "IBM · tuned to answer from your documents, not guess" },
     { id: "mistral", name: "Mistral", license: "Apache-2.0", sizeGB: 4.1, desc: "Larger · best on a powerful computer" },
     // type:"vision" — not a chat model. It lets AMAdocs "see" images so photos,
     // whiteboards, receipts and screenshots become searchable. The UI offers it
@@ -2088,6 +2076,34 @@ function workspaceEndpoints(app) {
         console.error("[pull-model] error:", e);
         send({ error: "Download failed. Check your internet connection." });
         response.end();
+      }
+    }
+  );
+
+  // AMAdocs: status document. The app opens to this on launch (rendered in the
+  // preview pane) so index/database/model/version live in one uncluttered place
+  // instead of a settings screen. Generated live, persisted to
+  // storage/AMADOCS-STATUS.md (a real Markdown file the app keeps current), and
+  // returned as { markdown } for the renderer.
+  app.get(
+    "/amadocs-status",
+    [validatedRequest, flexUserRoleValid([ROLES.all])],
+    async (_request, response) => {
+      try {
+        const { markdown, data } = await buildAmadocsStatus();
+        try {
+          fs.writeFileSync(
+            path.resolve(amadocsStorageRoot(), "AMADOCS-STATUS.md"),
+            markdown,
+            "utf8"
+          );
+        } catch (_) {
+          /* preview still works even if the file write fails */
+        }
+        response.status(200).json({ markdown, data });
+      } catch (e) {
+        console.error("[amadocs-status] error:", e);
+        response.status(500).json({ error: e.message });
       }
     }
   );

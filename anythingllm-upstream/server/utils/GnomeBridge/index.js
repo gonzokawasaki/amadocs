@@ -127,12 +127,59 @@ WHERE {
   ?do nie:url ?u .
   OPTIONAL { ?do nfo:fileLastModified ?m }
   FILTER(STRSTARTS(STR(?u), "file://${folder}/"))
+  FILTER(STR(?t) != "")
   ${excludeClause(exclude)}
 }
 GROUP BY ?u
 ORDER BY ?u`;
   return parseRows(sparql(q))
     .map((r) => { const [url, mtime] = r.split(US); return { url, mtime: mtime || "" }; })
+    .filter((x) => x.url);
+}
+
+// File extensions GNOME's own extractors silently drop (so they end up with NO
+// nie:plainTextContent) but AMAdocs' collector CAN read via its own parser/OCR:
+//  • OOXML office (docx/xlsx/pptx) — the WPS-mime content-sniffing blind spot, plus
+//    legacy binary office — GNOME mis-routes the extractor and stores no text.
+//  • PDFs with no text layer (scanned / image-only) — GNOME does poppler text only;
+//    the collector's asPDF falls back to OCR (ocrPDF).
+// Images are deliberately NOT here: they're the on-demand right-click path (vision
+// captioning is heavy), handled by backstopFile, not bulk folder sync.
+const BACKSTOP_EXTS = [
+  ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".pdf",
+];
+
+// Sibling of queryFileList for the GNOME blind spots: every file under `folder` with a
+// backstop extension that has NO usable extracted text. "No usable text" = no
+// nie:plainTextContent triple OR an empty-string one — GNOME sometimes stores an empty
+// plainTextContent for a file it mis-routed (e.g. an .xlsx or scanned PDF), which would
+// otherwise slip past queryFileList's non-empty filter AND a bare NOT EXISTS check,
+// leaving the file counted-but-never-embedded. The inner FILTER(?a != "") makes the
+// NOT EXISTS fire on empty text too, so the collector backstop picks these up.
+// Same GROUP BY ?u + MAX(?m) double-row guard. Returns [{ url, mtime, mime }].
+function queryBlindSpots({ folder, exclude }) {
+  const extFilter = BACKSTOP_EXTS
+    .map((e) => `STRENDS(LCASE(STR(?u)), "${e}")`)
+    .join(" || ");
+  const q = `
+SELECT (CONCAT(STR(?u), "${US}", COALESCE(MAX(STR(?m)), ""), "${US}", COALESCE(STR(?mime), "")) AS ?row)
+WHERE {
+  ?ie nie:isStoredAs ?do .
+  ?do nie:url ?u .
+  OPTIONAL { ?do nfo:fileLastModified ?m }
+  OPTIONAL { ?ie nie:mimeType ?mime }
+  FILTER(STRSTARTS(STR(?u), "file://${folder}/"))
+  FILTER NOT EXISTS { ?ie nie:plainTextContent ?anytext . FILTER(STR(?anytext) != "") }
+  FILTER(${extFilter})
+  ${excludeClause(exclude)}
+}
+GROUP BY ?u ?mime
+ORDER BY ?u`;
+  return parseRows(sparql(q))
+    .map((r) => {
+      const [url, mtime, mime] = r.split(US);
+      return { url, mtime: mtime || "", mime: mime || "" };
+    })
     .filter((x) => x.url);
 }
 
@@ -168,29 +215,46 @@ WHERE { ?do nie:url <${url}> . ?ie nie:isStoredAs ?do ; nie:plainTextContent ?t 
   return rows.join("").split(NL).join("\n");
 }
 
-// Build an AnythingLLM-shaped document JSON from TinySPARQL meta + text.
-// CRITICAL: emit an identical key set across ALL docs (pageCount:0 when unknown,
+// Build an AnythingLLM-shaped document JSON from meta + text. `source` records WHO
+// extracted the text: "tinysparql" (GNOME's own index, the default ride-on path) or
+// "collector-backstop" (AMAdocs' own parser/OCR/vision for files GNOME couldn't read —
+// docx/xlsx/pptx routing failures, scanned PDFs, images), served in place via
+// doc-original's sourcePath fallback. `pages` carries the asPDF per-page char ranges
+// ([{page,start,end}]) when the collector produced them (backstop PDFs); GNOME's flat
+// text has none, so it stays [] and the citation chip simply shows no p.N label (the
+// passage highlight still works via text-match). pages is a disk-only doc-JSON field
+// read by doc-view — it is NOT part of the LanceDB metadata schema, so it can differ
+// freely between docs (normal asPDF docs already mix pages-bearing + page-less docs in
+// one workspace).
+// CRITICAL: emit an identical LanceDB key set across ALL docs (pageCount:0 when unknown,
 // never undefined). LanceDB fixes the collection's Arrow schema from the first
 // embedded doc; a later single-chunk doc that OMITS a column makes .add() build a
 // malformed 0-byte Utf8 buffer and the whole insert throws.
-function buildDoc(meta, text) {
+function buildDoc(meta, text, source = "tinysparql", pages = null) {
   const fsPath = decodeURIComponent(meta.u.replace(/^file:\/\//, ""));
   const filename = path.basename(fsPath);
+  const backstop = source === "collector-backstop";
   return {
     id: crypto.randomUUID(),
     url: meta.u,
     title: meta.title || filename,
     docAuthor: meta.author || "Unknown",
-    description: "Full text indexed by GNOME LocalSearch (TinySPARQL).",
-    docSource: "GNOME LocalSearch (TinySPARQL) via AMAdocs hybrid bridge",
+    description: backstop
+      ? "Text extracted by AMAdocs (its own parser/OCR/vision backstop)."
+      : "Full text indexed by GNOME LocalSearch (TinySPARQL).",
+    docSource: backstop
+      ? "AMAdocs collector backstop (GNOME LocalSearch blind spot)"
+      : "GNOME LocalSearch (TinySPARQL) via AMAdocs hybrid bridge",
     chunkSource: "",
     published: meta.created || new Date().toISOString(),
     wordCount: meta.wc ? parseInt(meta.wc, 10) : text.split(/\s+/).length,
     pageContent: text,
-    // TinySPARQL text is flat — no per-page ranges. Citation passage highlighting
-    // still works (text-match in the rendered PDF, served via doc-original's
-    // sourcePath fallback); only the page-number chip label is unavailable.
-    amadocsSource: "tinysparql",
+    // Per-page char ranges for the citation jump-to-page label, when available
+    // (collector-backstop PDFs). [] for GNOME flat text — the passage highlight
+    // still works (text-match in the rendered PDF via doc-original's sourcePath
+    // fallback); only the p.N chip label is absent. Disk-only (doc-view), not Lance.
+    pages: Array.isArray(pages) ? pages : [],
+    amadocsSource: source,
     sourceMime: meta.mime,
     sourcePath: fsPath,
     pageCount: meta.pc ? parseInt(meta.pc, 10) : 0,
@@ -215,6 +279,54 @@ function materialize(slug, url) {
   const text = fetchText(url);
   if (!text.trim()) return null;
   return writeDoc(slug, buildDoc(fetchMeta(url), text));
+}
+
+// Fallback mime by extension, for files GNOME has no node for (e.g. an image
+// analysed on demand) — keeps the doc's sourceMime accurate so the UI preview
+// dispatches to the right renderer.
+const EXT_MIME = {
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  ".doc": "application/msword",
+  ".xls": "application/vnd.ms-excel",
+  ".ppt": "application/vnd.ms-powerpoint",
+  ".pdf": "application/pdf",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+  ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+  ".tif": "image/tiff", ".tiff": "image/tiff",
+};
+
+// A real file:// URL from an absolute path (per-segment encoded so decodeURIComponent
+// in buildDoc/writeDoc round-trips back to the exact path).
+function pathToFileUrl(fsPath) {
+  return "file://" + fsPath.split("/").map(encodeURIComponent).join("/");
+}
+
+// Backstop materialize: for a GNOME blind-spot file (office doc, scanned PDF, image),
+// run AMAdocs' OWN collector extractor over the real file IN PLACE — asDocx
+// (mammoth/officeparser), asPDF (OCR fallback), or asImage (OCR + vision caption) —
+// and build a doc JSON from the returned text. parseOnly+absolutePath means the
+// collector never touches/trashes the user's file. Async (collector is an HTTP call).
+// Returns a docpath, or null if nothing extractable (→ retried next sync, matching the
+// "text vanished mid-flight" contract).
+async function materializeViaCollector(slug, url) {
+  const fsPath = decodeURIComponent(url.replace(/^file:\/\//, ""));
+  const filename = path.basename(fsPath);
+  const { CollectorApi } = require("../collectorApi");
+  const res = await new CollectorApi().parseDocument(filename, {
+    absolutePath: fsPath,
+  });
+  const doc = res?.documents?.[0];
+  const text = doc?.pageContent || "";
+  if (!text.trim()) return null;
+  const meta = fetchMeta(url);
+  meta.u = url;
+  if (!meta.mime || meta.mime === "application/octet-stream")
+    meta.mime = EXT_MIME[path.extname(fsPath).toLowerCase()] || meta.mime;
+  // asPDF emits per-page char ranges; carry them so backstop PDFs (scanned / OCR'd /
+  // empty-text) get the p.N citation label. Other extractors omit pages → buildDoc []s it.
+  return writeDoc(slug, buildDoc(meta, text, "collector-backstop", doc?.pages));
 }
 
 function loadState(slug) {
@@ -249,7 +361,296 @@ function computeDelta(stateFiles, current) {
   return { news, changed, deleted };
 }
 
+// List the slugs that currently have a persisted sync state — i.e. folders that have
+// been indexed at least once. The cadence scheduler enumerates these to know what to
+// resume/keep fresh on relaunch (each state file carries its own folder + exclude).
+function listSyncedSlugs() {
+  try {
+    return fs
+      .readdirSync(syncStateDir)
+      .filter((f) => f.endsWith(".json"))
+      .map((f) => f.slice(0, -5));
+  } catch (_) {
+    return [];
+  }
+}
+
+// AMAdocs: the durable "ride on GNOME" sync orchestration, extracted so BOTH the
+// gnome-sync HTTP endpoint and the background cadence scheduler drive ONE code path
+// (no duplicated PLAN/EXECUTE/finalize-on-confirm logic to drift apart). Mirrors the
+// endpoint contract: returns { status, body } where status is the HTTP-style code the
+// endpoint relays verbatim (400/503/200-dryRun/202-execute/500). THE #1 RULE lives
+// here — bounded per call (GNOME_SYNC_CAP), serial worker + cool-down (the embedder),
+// durable finalize-on-confirm (state never claims a file embedded before it is).
+//
+// opts:
+//   slug, folder            (required identity + target)
+//   exclude="/novels/"      SPARQL substring filter
+//   limit=0                 explicit user cap (>0) → overflow recorded dormant
+//   dryRun=false            read-only plan (no side effects)
+//   reconcile=false         poke/restart the OS indexer first (explicit only)
+//   userId=null             for Document add/remove attribution
+//   fromScheduler=false     true = background cadence (do NOT clear the STOP pause)
+async function runSync(opts = {}) {
+  const {
+    slug = null,
+    folder = null,
+    exclude = "/novels/",
+    limit = 0,
+    dryRun = false,
+    reconcile = false,
+    userId = null,
+    fromScheduler = false,
+  } = opts;
+
+  const { Workspace } = require("../../models/workspace");
+  const { Document } = require("../../models/documents");
+  const Embed = require("../EmbeddingWorkerManager");
+
+  const currWorkspace = await Workspace.get({ slug });
+  if (!currWorkspace)
+    return { status: 400, body: { error: "Unknown workspace." } };
+  if (!folder) return { status: 400, body: { error: "Missing 'folder'." } };
+
+  // Only poke the OS indexer when the caller explicitly asks (reconcile) — never
+  // restart a system service silently. On a non-GNOME box inotify doesn't fire, so
+  // this is what wakes LocalSearch + forces a re-crawl so the delta sees changes.
+  if (reconcile) await ensureIndexer({ restart: true });
+  if (!available())
+    return {
+      status: 503,
+      body: {
+        error:
+          "GNOME LocalSearch (TinySPARQL) is not running or reachable. Start the indexer and retry.",
+      },
+    };
+
+  // `current` = files GNOME extracted text for (embed that text directly) PLUS the
+  // blind-spot office/PDF files GNOME dropped (re-extract via the collector backstop).
+  // Tag each with its source so EXECUTE dispatches to the right materializer; the
+  // delta/state machinery below is source-agnostic (keys on url + mtime + docpath).
+  const textFiles = queryFileList({ folder, exclude });
+  const textUrls = new Set(textFiles.map((t) => t.url));
+  const blindSpots = queryBlindSpots({ folder, exclude }).filter(
+    (b) => !textUrls.has(b.url)
+  );
+  const sourceByUrl = new Map([
+    ...textFiles.map((f) => [f.url, "gnome"]),
+    ...blindSpots.map((f) => [f.url, "collector"]),
+  ]);
+  const current = [
+    ...textFiles.map((f) => ({ url: f.url, mtime: f.mtime })),
+    ...blindSpots.map((f) => ({ url: f.url, mtime: f.mtime })),
+  ];
+  const prevState = loadState(slug);
+
+  // ---- PLAN (no side effects, so dryRun is truly read-only) ----
+  let mode;
+  let toEmbed = [];
+  let toDelete = [];
+  let nextFiles = {};
+  if (!prevState) {
+    mode = "index";
+    toEmbed = current;
+  } else {
+    mode = "sync";
+    nextFiles = { ...(prevState.files || {}) };
+    const { news, changed, deleted } = computeDelta(nextFiles, current);
+    const changedManaged = changed.filter((c) => c.prev.docpath);
+    for (const c of changed.filter((c) => !c.prev.docpath)) // dormant: refresh mtime only
+      nextFiles[c.url] = { docpath: c.prev.docpath, mtime: c.mtime };
+    toDelete = [
+      ...changedManaged.map((c) => c.prev.docpath),
+      ...deleted.map((d) => d.prev.docpath),
+    ];
+    toEmbed = [
+      ...changedManaged.map((c) => ({ url: c.url, mtime: c.mtime })),
+      ...news,
+    ];
+    for (const d of deleted) delete nextFiles[d.url];
+  }
+
+  // ---- BOUND the per-call work (THE #1 RULE) ----
+  let remaining = 0;
+  const explicitLimit = limit > 0;
+  const cap = explicitLimit ? limit : Number(process.env.GNOME_SYNC_CAP) || 200;
+  if (toEmbed.length > cap) {
+    const overflow = toEmbed.slice(cap);
+    toEmbed = toEmbed.slice(0, cap);
+    remaining = overflow.length;
+    if (explicitLimit)
+      for (const { url, mtime } of overflow)
+        nextFiles[url] = { docpath: null, mtime }; // dormant baseline
+    // no-limit overflow: intentionally NOT recorded → retried next sync.
+  }
+
+  if (dryRun)
+    return {
+      status: 200,
+      body: {
+        dryRun: true,
+        mode,
+        indexed: current.length,
+        queued: toEmbed.length,
+        deleted: toDelete.length,
+        remaining,
+      },
+    };
+
+  // A real (non-dryRun) run that the USER triggered is an explicit re-engagement of
+  // ingest — clear any STOP-latched pause so the cadence scheduler resumes too. The
+  // scheduler's own runs pass fromScheduler:true and must NOT clear it.
+  if (!fromScheduler) Embed.setIngestPaused(false);
+
+  // ---- EXECUTE (async, durable, finalize-on-confirm) ----
+  if (toDelete.length > 0)
+    await Document.removeDocuments(currWorkspace, toDelete, userId);
+
+  const pending = new Map();
+  const adds = [];
+  for (const { url, mtime } of toEmbed) {
+    // GNOME-text files read their extracted text directly; blind spots go through the
+    // collector backstop (its own parser/OCR). Source is resolved from the current
+    // listing (defaults to gnome for delta items whose source map entry is present).
+    const docpath =
+      sourceByUrl.get(url) === "collector"
+        ? await materializeViaCollector(slug, url)
+        : materialize(slug, url);
+    if (docpath) {
+      adds.push(docpath);
+      pending.set(docpath, { url, mtime });
+    }
+    // else: text vanished / not extractable — leave ABSENT so it's retried next sync.
+  }
+
+  const persist = () =>
+    saveState(slug, {
+      folder,
+      exclude,
+      slug,
+      lastSync: new Date().toISOString(),
+      files: nextFiles,
+    });
+  persist();
+
+  if (adds.length > 0 && Embed.isNativeEmbedder()) {
+    await Embed.embedFiles(currWorkspace.slug, adds, currWorkspace.id, userId, {
+      onDocComplete: (docpath) => {
+        const e = pending.get(docpath);
+        if (!e) return;
+        nextFiles[e.url] = { docpath, mtime: e.mtime };
+        try {
+          persist();
+        } catch (err) {
+          console.error("[gnome-sync] persist:", err.message);
+        }
+      },
+      onComplete: () => {
+        try {
+          persist();
+        } catch (err) {
+          console.error("[gnome-sync] persist:", err.message);
+        }
+      },
+    });
+  } else if (adds.length > 0) {
+    await Document.addDocuments(currWorkspace, adds, userId);
+    for (const [docpath, e] of pending)
+      nextFiles[e.url] = { docpath, mtime: e.mtime };
+    persist();
+  }
+
+  return {
+    status: 202,
+    body: {
+      mode,
+      indexed: current.length,
+      queued: adds.length,
+      deleted: toDelete.length,
+      remaining,
+      tracked: Object.keys(nextFiles).length,
+    },
+  };
+}
+
+// AMAdocs: on-demand single-file backstop for the right-click "analyse with AI" action.
+// Runs the collector extractor over ONE file and embeds it — the path that makes images
+// and image-only PDFs indexable without a folder sync (bulk sync excludes images as too
+// heavy). User-driven, so it clears the STOP pause like an explicit runSync. If the file
+// lives inside an already-synced folder AND is an office/PDF type (i.e. it would later
+// show up in that folder's blind-spot listing), it's recorded in the folder state with
+// its mtime so the cadence delta treats it as known — never re-embedding it, and never
+// (for images, deliberately NOT recorded) mistaking a standalone analysis for a deletion.
+async function backstopFile(slug, fsPath, { userId = null } = {}) {
+  const { Workspace } = require("../../models/workspace");
+  const { Document } = require("../../models/documents");
+  const Embed = require("../EmbeddingWorkerManager");
+
+  const currWorkspace = await Workspace.get({ slug });
+  if (!currWorkspace) return { ok: false, error: "Unknown workspace." };
+  if (!fsPath || typeof fsPath !== "string")
+    return { ok: false, error: "Missing 'path'." };
+  try {
+    if (!fs.statSync(fsPath).isFile()) return { ok: false, error: "Not a file." };
+  } catch (_) {
+    return { ok: false, error: "File not found." };
+  }
+
+  Embed.setIngestPaused(false); // explicit user re-engagement of ingest
+
+  // Idempotent by sourcePath: drop any doc already embedded for this exact file
+  // (a prior right-click analysis, or a copy the folder sync/cadence embedded) so
+  // re-analysing never leaves duplicate vectors for one on-disk file.
+  try {
+    const existing = await Document.forWorkspace(currWorkspace.id);
+    const dupes = (existing || [])
+      .filter((d) => {
+        try { return JSON.parse(d.metadata || "{}").sourcePath === fsPath; }
+        catch (_) { return false; }
+      })
+      .map((d) => d.docpath)
+      .filter(Boolean);
+    if (dupes.length)
+      await Document.removeDocuments(currWorkspace, dupes, userId);
+  } catch (e) {
+    console.error("[analyse-file] dedupe:", e.message);
+  }
+
+  const url = pathToFileUrl(fsPath);
+  const docpath = await materializeViaCollector(slug, url);
+  if (!docpath)
+    return {
+      ok: false,
+      error: "Could not extract any text or caption from this file.",
+    };
+
+  if (Embed.isNativeEmbedder())
+    await Embed.embedFiles(currWorkspace.slug, [docpath], currWorkspace.id, userId, {});
+  else await Document.addDocuments(currWorkspace, [docpath], userId);
+
+  const ext = path.extname(fsPath).toLowerCase();
+  const state = loadState(slug);
+  if (
+    state &&
+    state.folder &&
+    fsPath.startsWith(state.folder + "/") &&
+    BACKSTOP_EXTS.includes(ext)
+  ) {
+    let mtime = "";
+    try {
+      mtime = new Date(fs.statSync(fsPath).mtime).toISOString();
+    } catch (_) {}
+    state.files = state.files || {};
+    state.files[url] = { docpath, mtime };
+    saveState(slug, state);
+  }
+
+  return { ok: true, docpath };
+}
+
 module.exports = {
-  available, ensureIndexer, queryFileList, fetchMeta, fetchText, buildDoc, writeDoc,
-  materialize, loadState, saveState, computeDelta, docSubfolder,
+  available, ensureIndexer, queryFileList, queryBlindSpots, fetchMeta, fetchText,
+  buildDoc, writeDoc, materialize, materializeViaCollector, pathToFileUrl,
+  loadState, saveState, computeDelta, docSubfolder,
+  listSyncedSlugs, runSync, backstopFile,
 };

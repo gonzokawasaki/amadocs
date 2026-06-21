@@ -136,7 +136,7 @@ function packagedEngineEnv() {
     VECTOR_DB: "lancedb",
     LLM_PROVIDER: "ollama",
     OLLAMA_BASE_PATH: "http://127.0.0.1:11434",
-    OLLAMA_MODEL_PREF: "phi3.5",
+    OLLAMA_MODEL_PREF: "granite4.1:3b",
     OLLAMA_MODEL_TOKEN_LIMIT: "4096",
     OLLAMA_RESPONSE_TIMEOUT: "7200000",
     EMBEDDING_ENGINE: "native",
@@ -266,8 +266,82 @@ ipcMain.handle("read-dir", async (_e, dirPath) => {
   return { ok: true, entries: results };
 });
 
+// Phase 2 preview: read a file's raw bytes so the UI can preview ANY local file,
+// indexed or not. Preview = "let me see this file"; indexing = "make it searchable"
+// stays opt-in (right-click → analyse / folder ⟳ index). Returns {ok, data:<base64>,
+// mime} or {ok:false, error}. Path-guarded (must be an existing regular file) and
+// size-capped so a stray huge file can't OOM the renderer.
+const PREVIEW_MAX_BYTES = 100 * 1024 * 1024;
+const PREVIEW_MIME = {
+  ".pdf": "application/pdf",
+  ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+  ".gif": "image/gif", ".webp": "image/webp", ".bmp": "image/bmp",
+  ".tif": "image/tiff", ".tiff": "image/tiff", ".svg": "image/svg+xml",
+  ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ".csv": "text/csv",
+  ".txt": "text/plain", ".md": "text/markdown", ".markdown": "text/markdown",
+  ".log": "text/plain", ".json": "application/json", ".xml": "text/xml",
+  ".html": "text/html", ".htm": "text/html",
+  ".js": "text/plain", ".ts": "text/plain", ".css": "text/plain",
+  ".yml": "text/plain", ".yaml": "text/plain", ".sh": "text/plain",
+  ".py": "text/plain", ".c": "text/plain", ".cpp": "text/plain", ".h": "text/plain",
+};
+ipcMain.handle("read-file", async (_e, filePath) => {
+  if (!filePath || typeof filePath !== "string") return { ok: false, error: "no-path" };
+  let st;
+  try {
+    st = await fs.promises.stat(filePath);
+  } catch (err) {
+    return { ok: false, error: err.code || "not-found" };
+  }
+  if (!st.isFile()) return { ok: false, error: "not-a-file" };
+  if (st.size > PREVIEW_MAX_BYTES) return { ok: false, error: "too-large" };
+  let buf;
+  try {
+    buf = await fs.promises.readFile(filePath);
+  } catch (err) {
+    return { ok: false, error: err.code || err.message };
+  }
+  const mime =
+    PREVIEW_MIME[path.extname(filePath).toLowerCase()] || "application/octet-stream";
+  return { ok: true, data: buf.toString("base64"), mime };
+});
+
 // Phase 2 file tree: return the user's home directory path.
 ipcMain.handle("home-path", () => app.getPath("home"));
+
+// AMAdocs: browser-style zoom for the whole UI. The native menu bar is hidden,
+// so the default View-menu zoom accelerators don't run — wire zoom directly on
+// webContents instead. Page zoom scales everything in the renderer: context
+// menus, the homepage, file previews. Ctrl/Cmd +/-/0 (keyboard) + Ctrl+wheel.
+const ZOOM_MIN = 0.5, ZOOM_MAX = 3.0, ZOOM_STEP = 0.1;
+let zoomFactor = 1;
+const clampZoom = (z) =>
+  Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, Math.round(z * 100) / 100));
+function setupZoom(win) {
+  const wc = win.webContents;
+  const apply = (next) => { zoomFactor = clampZoom(next); wc.setZoomFactor(zoomFactor); };
+  // loadFile (loading.html → index.html) resets zoom; re-apply on each load.
+  wc.on("did-finish-load", () => wc.setZoomFactor(zoomFactor));
+  // Keyboard. preventDefault also suppresses any default-menu zoom role, so
+  // there's no double-stepping.
+  wc.on("before-input-event", (event, input) => {
+    if (input.type !== "keyDown" || !(input.control || input.meta)) return;
+    switch (input.key) {
+      case "+": case "=": apply(zoomFactor + ZOOM_STEP); event.preventDefault(); break;
+      case "-": case "_": apply(zoomFactor - ZOOM_STEP); event.preventDefault(); break;
+      case "0":           apply(1);                       event.preventDefault(); break;
+    }
+  });
+  // Ctrl + mouse wheel: Chromium applies the step, we clamp + keep the cache in
+  // sync so the keyboard path continues from wherever the wheel left off.
+  wc.on("zoom-changed", () => {
+    const f = wc.getZoomFactor();
+    zoomFactor = clampZoom(f);
+    if (f !== zoomFactor) wc.setZoomFactor(zoomFactor);
+  });
+}
 
 let win;
 function createWindow() {
@@ -287,6 +361,7 @@ function createWindow() {
     },
   });
   win.setMenuBarVisibility(false);
+  setupZoom(win);
   win.loadFile(path.join(__dirname, "loading.html"));
 }
 

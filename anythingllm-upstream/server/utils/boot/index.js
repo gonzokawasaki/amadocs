@@ -7,6 +7,10 @@ const eagerLoadContextWindows = require("./eagerLoadContextWindows");
 const markOnboarded = require("./markOnboarded");
 const { PushNotifications } = require("../PushNotifications");
 const { TelegramBotService } = require("../telegramBot");
+// AMAdocs: background indexing cadence — resumes pending "ride on GNOME" sync work on
+// relaunch + a light periodic tick. Safe to require on non-GNOME boxes (it no-ops when
+// the OS indexer is unreachable). See utils/GnomeBridge/cadence.
+const GnomeCadence = require("../GnomeBridge/cadence");
 
 // Testing SSL? You can make a self signed certificate and point the ENVs to that location
 // make a directory in server called 'sslcert' - cd into it
@@ -39,6 +43,7 @@ function bootSSL(app, port = 3001) {
         await eagerLoadContextWindows();
         await PushNotifications.setupPushNotificationService();
         await TelegramBotService.bootIfActive();
+        GnomeCadence.start();
         console.log(`Primary server in HTTPS mode listening on port ${port}`);
       })
       .on("error", catchSigTerms);
@@ -72,6 +77,7 @@ function bootHTTP(app, port = 3001) {
       await eagerLoadContextWindows();
       await PushNotifications.setupPushNotificationService();
       await TelegramBotService.bootIfActive();
+      GnomeCadence.start();
       console.log(`Primary server in HTTP mode listening on port ${port}`);
     })
     .on("error", catchSigTerms);

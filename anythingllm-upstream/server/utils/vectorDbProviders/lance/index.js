@@ -119,6 +119,7 @@ class LanceDb extends VectorDatabase {
     topN = 4,
     similarityThreshold = 0.25,
     filterIdentifiers = [],
+    scopePath = null,
   }) {
     const reranker = new NativeEmbeddingReranker();
     const collection = await client.openTable(namespace);
@@ -146,11 +147,13 @@ class LanceDb extends VectorDatabase {
       10,
       Math.min(50, Math.ceil(totalEmbeddings * 0.1))
     );
-    const vectorSearchResults = await collection
-      .vectorSearch(queryVector)
-      .distanceType("cosine")
-      .limit(searchLimit)
-      .toArray();
+    // AMAdocs: same quoting rule as similarityResponse.
+    let vQuery = collection.vectorSearch(queryVector).distanceType("cosine").limit(searchLimit);
+    if (scopePath) {
+      const escaped = String(scopePath).replace(/'/g, "''");
+      vQuery = vQuery.where(`starts_with(sourcePath, '${escaped}')`);
+    }
+    const vectorSearchResults = await vQuery.toArray();
 
     await reranker
       .rerank(query, vectorSearchResults, { topK: topN })
@@ -202,6 +205,7 @@ class LanceDb extends VectorDatabase {
     similarityThreshold = 0.25,
     topN = 4,
     filterIdentifiers = [],
+    scopePath = null,
   }) {
     const collection = await client.openTable(namespace);
     const result = {
@@ -210,11 +214,14 @@ class LanceDb extends VectorDatabase {
       scores: [],
     };
 
-    const response = await collection
-      .vectorSearch(queryVector)
-      .distanceType("cosine")
-      .limit(topN)
-      .toArray();
+    // AMAdocs: unquoted identifier resolves case-insensitively in DataFusion (lancedb 0.15.0).
+    // Quoted "sourcePath" resolves the column but returns 0 rows — keep unquoted.
+    let query = collection.vectorSearch(queryVector).distanceType("cosine").limit(topN);
+    if (scopePath) {
+      const escaped = String(scopePath).replace(/'/g, "''");
+      query = query.where(`starts_with(sourcePath, '${escaped}')`);
+    }
+    const response = await query.toArray();
 
     response.forEach((item) => {
       if (this.distanceToSimilarity(item._distance) < similarityThreshold)
@@ -439,6 +446,7 @@ class LanceDb extends VectorDatabase {
     topN = 4,
     filterIdentifiers = [],
     rerank = false,
+    scopePath = null,
   }) {
     if (!namespace || !input || !LLMConnector)
       throw new Error("Invalid request to performSimilaritySearch.");
@@ -462,6 +470,7 @@ class LanceDb extends VectorDatabase {
           similarityThreshold,
           topN,
           filterIdentifiers,
+          scopePath,
         })
       : await this.similarityResponse({
           client,
@@ -470,6 +479,7 @@ class LanceDb extends VectorDatabase {
           similarityThreshold,
           topN,
           filterIdentifiers,
+          scopePath,
         });
 
     const { contextTexts, sourceDocuments } = result;
