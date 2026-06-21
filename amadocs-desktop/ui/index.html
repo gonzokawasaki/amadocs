@@ -6,7 +6,7 @@
   <title>AMAdocs — semantic file manager</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     /*
      * SCALING NOTE
@@ -21,67 +21,119 @@
     /* ── THEME TOKENS ─────────────────────────────────────────────────── */
     :root, [data-theme="dark"] {
       --bg:               #0c0f15;
-      --bg-alt:           #0a0d12;
-      --bg-desk:          #11151c;
-      --bg-hover:         #111620;
-      --bg-sel:           #15351f;
-      --border:           #1a202b;
-      --text:             #c4ccd6;
-      --text-muted:       #7b8696;
-      --text-faint:       #8a94a3;
-      --text-xfaint:      rgba(70,80,97,0.45);
-      --accent:           #5ec26a;
-      --accent-bg:        #0e1a13;
-      --accent-text:      #9cdca8;
-      --accent-sel-text:  #d6ffe0;
-      --blue:             #5aa9e6;
-      --amber:            #d9b14a;
-      --red:              #e2553f;
+      --bg-alt:           #070a0e;
+      --bg-desk:          #161c25;
+      --bg-hover:         #1d2330;
+      --bg-sel:           #1d4a2b;
+      --border:           #3a4452;
+      --text:             #f1f5fa;
+      --text-muted:       #c0cad6;
+      --text-faint:       #a3aebc;
+      --text-xfaint:      #8893a2;
+      --accent:           #6ed879;
+      --accent-bg:        #122a18;
+      --accent-text:      #bdf2c6;
+      --accent-sel-text:  #e6ffec;
+      --blue:             #7cc0f5;
+      --amber:            #ecc25c;
+      --red:              #f0664f;
       --tab-active-bg:    #0c0f15;
       --page-bg:          #fdfdfb;
-      --page-rule:        #ececf0;
+      --page-rule:        #d2d2da;
       --page-h:           #2a2b30;
-      --page-p:           #42434b;
-      --page-faint:       #a4a5ad;
-      --scrollbar-thumb:  #1e2632;
+      --page-p:           #313238;
+      --page-faint:       #6f7079;
+      --scrollbar-thumb:  #3a4452;
 
-      --badge-pdf-bg:  rgba(226,85,63,0.14);  --badge-pdf-fg:  #e2553f;
-      --badge-doc-bg:  rgba(90,169,230,0.14); --badge-doc-fg:  #5aa9e6;
-      --badge-xls-bg:  rgba(94,194,106,0.14); --badge-xls-fg:  #5ec26a;
-      --badge-img-bg:  rgba(217,177,74,0.14); --badge-img-fg:  #d9b14a;
-      --badge-txt-bg:  rgba(123,134,150,0.12);--badge-txt-fg:  #7b8696;
+      /* feel: terminal — monospace, sharp corners */
+      --font-ui:    'IBM Plex Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      --radius:     0.43rem;
+      --radius-sm:  0.29rem;
+      --radius-xs:  0.21rem;
+
+      --badge-pdf-bg:  rgba(240,102,79,0.28);  --badge-pdf-fg:  #ff8a73;
+      --badge-doc-bg:  rgba(124,192,245,0.28); --badge-doc-fg:  #9fd0fa;
+      --badge-xls-bg:  rgba(110,216,121,0.28); --badge-xls-fg:  #8fe89a;
+      --badge-img-bg:  rgba(236,194,92,0.28);  --badge-img-fg:  #f2d27a;
+      --badge-txt-bg:  rgba(160,172,186,0.26); --badge-txt-fg:  #c0cad6;
     }
     [data-theme="light"] {
       --bg:               #f4f5f7;
       --bg-alt:           #eaecef;
       --bg-desk:          #dfe1e6;
-      --bg-hover:         #e3e5e9;
-      --bg-sel:           #ddf0e2;
-      --border:           #d2d5dc;
-      --text:             #1e2028;
-      --text-muted:       #55606e;
-      --text-faint:       #8892a0;
-      --text-xfaint:      #b8c2cc;
-      --accent:           #2a7836;
-      --accent-bg:        #edf7ef;
-      --accent-text:      #1a5826;
-      --accent-sel-text:  #134d1e;
-      --blue:             #1870a8;
-      --amber:            #7a5c10;
-      --red:              #b83018;
+      --bg-hover:         #dde0e6;
+      --bg-sel:           #c9e8d2;
+      --border:           #9aa1ad;
+      --text:             #0e1016;
+      --text-muted:       #353e4b;
+      --text-faint:       #565f6d;
+      --text-xfaint:      #7c8794;
+      --accent:           #1f6e2c;
+      --accent-bg:        #e1f3e5;
+      --accent-text:      #12491d;
+      --accent-sel-text:  #0d3c16;
+      --blue:             #115d8e;
+      --amber:            #654c0a;
+      --red:              #9e2812;
       --tab-active-bg:    #f4f5f7;
       --page-bg:          #ffffff;
-      --page-rule:        #e8e8ec;
+      --page-rule:        #d2d2da;
       --page-h:           #2a2b30;
-      --page-p:           #42434b;
-      --page-faint:       #a4a5ad;
-      --scrollbar-thumb:  #c4c8d0;
+      --page-p:           #313238;
+      --page-faint:       #6f7079;
+      --scrollbar-thumb:  #9aa1ad;
 
-      --badge-pdf-bg:  rgba(184,48,24,0.10);  --badge-pdf-fg:  #b83018;
-      --badge-doc-bg:  rgba(24,112,168,0.10); --badge-doc-fg:  #1870a8;
-      --badge-xls-bg:  rgba(42,120,54,0.10);  --badge-xls-fg:  #2a7836;
-      --badge-img-bg:  rgba(122,92,16,0.10);  --badge-img-fg:  #7a5c10;
-      --badge-txt-bg:  rgba(85,96,110,0.10);  --badge-txt-fg:  #55606e;
+      /* feel: desktop — sans-serif, generous rounding (Finder/Obsidian) */
+      --font-ui:    'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --radius:     0.71rem;
+      --radius-sm:  0.5rem;
+      --radius-xs:  0.36rem;
+
+      --badge-pdf-bg:  rgba(158,40,18,0.20);  --badge-pdf-fg:  #9e2812;
+      --badge-doc-bg:  rgba(17,93,142,0.20);  --badge-doc-fg:  #115d8e;
+      --badge-xls-bg:  rgba(31,110,44,0.20);  --badge-xls-fg:  #1f6e2c;
+      --badge-img-bg:  rgba(101,76,10,0.20);  --badge-img-fg:  #654c0a;
+      --badge-txt-bg:  rgba(53,62,75,0.20);   --badge-txt-fg:  #353e4b;
+    }
+    /* halfway between terminal and desktop: a dim slate shell, sans-serif
+       type, blue accent, medium rounding. Dark mood without the raw-mono TUI. */
+    [data-theme="slate"] {
+      --bg:               #181c24;
+      --bg-alt:           #12151c;
+      --bg-desk:          #1e232d;
+      --bg-hover:         #2c3340;
+      --bg-sel:           #1d4060;
+      --border:           #475160;
+      --text:             #eef3f9;
+      --text-muted:       #bcc6d3;
+      --text-faint:       #9aa5b4;
+      --text-xfaint:      #828d9d;
+      --accent:           #7cc0f5;
+      --accent-bg:        #1a3550;
+      --accent-text:      #b8dcfb;
+      --accent-sel-text:  #e6f2ff;
+      --blue:             #7cc0f5;
+      --amber:            #ecc25c;
+      --red:              #f0664f;
+      --tab-active-bg:    #181c24;
+      --page-bg:          #fdfdfb;
+      --page-rule:        #d2d2da;
+      --page-h:           #2a2b30;
+      --page-p:           #313238;
+      --page-faint:       #6f7079;
+      --scrollbar-thumb:  #475160;
+
+      /* feel: hybrid — sans-serif, medium rounding */
+      --font-ui:    'IBM Plex Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      --radius:     0.57rem;
+      --radius-sm:  0.43rem;
+      --radius-xs:  0.29rem;
+
+      --badge-pdf-bg:  rgba(240,102,79,0.30);  --badge-pdf-fg:  #ff8a73;
+      --badge-doc-bg:  rgba(124,192,245,0.30); --badge-doc-fg:  #9fd0fa;
+      --badge-xls-bg:  rgba(110,216,121,0.30); --badge-xls-fg:  #8fe89a;
+      --badge-img-bg:  rgba(236,194,92,0.30);  --badge-img-fg:  #f2d27a;
+      --badge-txt-bg:  rgba(188,198,211,0.28); --badge-txt-fg:  #bcc6d3;
     }
 
     /* ── RESET ────────────────────────────────────────────────────────── */
@@ -90,14 +142,14 @@
     body {
       background: var(--bg);
       color: var(--text);
-      font-family: 'IBM Plex Mono', 'JetBrains Mono', 'Fira Code', ui-monospace, monospace;
+      font-family: var(--font-ui);
       font-size: 1rem;
       line-height: 1.5;
       -webkit-font-smoothing: antialiased;
     }
     ::-webkit-scrollbar { width: 0.43rem; height: 0.43rem; }
     ::-webkit-scrollbar-track { background: transparent; }
-    ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 0.21rem; }
+    ::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: var(--radius-xs); }
     .hidden { display: none !important; }
 
     /* ── APP SHELL ────────────────────────────────────────────────────── */
@@ -121,12 +173,20 @@
       border-bottom: 1px solid var(--border);
       user-select: none;
     }
-    .topbar__dots { display: flex; gap: 0.5rem; }
-    .topbar__dot  { width: 0.71rem; height: 0.71rem; border-radius: 50%; background: var(--border); }
+    .topbar__nav { display: flex; gap: 0.29rem; }
+    .nav-btn {
+      width: 1.71rem; height: 1.71rem; flex: none;
+      display: flex; align-items: center; justify-content: center;
+      background: none; border: 1px solid var(--border); border-radius: var(--radius-sm);
+      color: var(--text-muted); font-family: inherit; font-size: 0.95rem; line-height: 1;
+      padding: 0; cursor: pointer; transition: .12s;
+    }
+    .nav-btn:hover:not(:disabled) { color: var(--text); border-color: var(--text-muted); }
+    .nav-btn:disabled { opacity: 0.35; cursor: default; }
 
     .topbar__search {
       flex: 1; height: 1.86rem;
-      background: var(--bg); border: 1px solid var(--border); border-radius: 0.43rem;
+      background: var(--bg); border: 1px solid var(--border); border-radius: var(--radius);
       display: flex; align-items: center; gap: 0.5rem; padding: 0 0.79rem;
     }
     .topbar__path  { color: var(--accent);     font-size: 0.82rem; white-space: nowrap; }
@@ -145,7 +205,7 @@
     .theme-btn {
       background: none; border: 1px solid var(--border);
       color: var(--text-faint); font-family: inherit; font-size: 0.71rem;
-      padding: 0.14rem 0.64rem; border-radius: 0.29rem; cursor: pointer; letter-spacing:.06em;
+      padding: 0.14rem 0.64rem; border-radius: var(--radius-sm); cursor: pointer; letter-spacing:.06em;
     }
     .theme-btn:hover { color: var(--text); border-color: var(--text-muted); }
 
@@ -168,7 +228,7 @@
     .tree { flex:1; overflow-y:auto; padding: 0.14rem 0.57rem 0.86rem; font-size: 0.86rem; line-height:1; }
     .tree-row {
       display: flex; align-items: center; gap: 0.29rem;
-      padding: 0.29rem 0.43rem; border-radius: 0.29rem;
+      padding: 0.29rem 0.43rem; border-radius: var(--radius-sm);
       cursor: pointer; white-space: nowrap; min-height: 1.71rem;
       transition: background .08s;
     }
@@ -216,7 +276,7 @@
       height:1.57rem; padding:0 0.6rem; margin-left:0.43rem;
       background:none; border:1px solid var(--border);
       color:var(--text-faint); font-family:inherit; font-size:0.75rem;
-      border-radius:0.29rem; cursor:pointer; transition:all .1s; white-space:nowrap;
+      border-radius:var(--radius-sm); cursor:pointer; transition:all .1s; white-space:nowrap;
     }
     .hdr-sync:hover { color:var(--accent); border-color:var(--accent); }
     .hdr-sync.busy { color:var(--amber); border-color:var(--amber); cursor:default; }
@@ -226,7 +286,7 @@
       width: 1.86rem; height: 1.57rem;
       background:none; border:1px solid var(--border);
       color:var(--text-faint); font-family:inherit; font-size:0.93rem;
-      border-radius:0.29rem; cursor:pointer;
+      border-radius:var(--radius-sm); cursor:pointer;
       display:flex; align-items:center; justify-content:center;
       transition: all .1s;
     }
@@ -283,7 +343,7 @@
     /* ── TYPE BADGES ──────────────────────────────────────────────────── */
     .badge {
       display:inline-block; font-size:0.64rem; font-weight:600; letter-spacing:.04em;
-      padding:0.14rem 0.36rem; border-radius:0.21rem; min-width:2.71rem; text-align:center;
+      padding:0.14rem 0.36rem; border-radius:var(--radius-xs); min-width:2.71rem; text-align:center;
     }
     .b-pdf { background:var(--badge-pdf-bg); color:var(--badge-pdf-fg); }
     .b-doc { background:var(--badge-doc-bg); color:var(--badge-doc-fg); }
@@ -295,7 +355,7 @@
     /* ── AI STATE CHIPS ───────────────────────────────────────────────── */
     .ai-chip {
       display:inline-block; font-size:0.68rem; font-weight:500;
-      padding:0.07rem 0.43rem; border-radius:0.21rem;
+      padding:0.07rem 0.43rem; border-radius:var(--radius-xs);
       letter-spacing:.03em; white-space:nowrap;
     }
     .ai-deep    { background:var(--accent-bg);           color:var(--accent);     border:1px solid rgba(94,194,106,0.2); }
@@ -311,7 +371,7 @@
       padding: 1rem;
     }
     .fc {
-      background: var(--bg-alt); border: 1px solid var(--border); border-radius: 0.43rem;
+      background: var(--bg-alt); border: 1px solid var(--border); border-radius: var(--radius);
       overflow:hidden; cursor:pointer;
       display:flex; flex-direction:column;
       transition: border-color .1s, background .1s;
@@ -400,14 +460,14 @@
       padding: 3.43rem 3.71rem; flex:none;
       font-family:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,sans-serif;
     }
-    .p-eye  { font-size:0.64rem; letter-spacing:.16em; text-transform:uppercase; color:#9a8f6a; font-weight:600; font-family:'IBM Plex Mono',monospace; }
+    .p-eye  { font-size:0.64rem; letter-spacing:.16em; text-transform:uppercase; color:#766a3f; font-weight:600; font-family:'IBM Plex Mono',monospace; }
     .p-title{ font-size:1.57rem; font-weight:700; color:#1d1e24; margin-top:0.79rem; line-height:1.18; letter-spacing:-.01em; }
-    .p-sub  { font-size:0.93rem; color:#73747c; margin-top:0.43rem; }
+    .p-sub  { font-size:0.93rem; color:#44454e; margin-top:0.43rem; }
     .p-meta { font-size:0.75rem; color:var(--page-faint); margin-top:0.79rem; padding-bottom:1.07rem; border-bottom:1px solid var(--page-rule); font-family:'IBM Plex Mono',monospace; }
     .p-h2   { font-size:0.89rem; font-weight:700; color:var(--page-h); margin-top:1.57rem; }
     .p-p    { font-size:0.79rem; line-height:1.85; color:var(--page-p); margin-top:0.57rem; text-align:justify; }
     .p-hl   { background:#fff3b0; padding:0 0.14rem; border-radius:0.14rem; }
-    .p-folio{ margin-top:2.14rem; font-size:0.71rem; color:#c0c1c8; text-align:center; font-family:'IBM Plex Mono',monospace; }
+    .p-folio{ margin-top:2.14rem; font-size:0.71rem; color:#82838c; text-align:center; font-family:'IBM Plex Mono',monospace; }
 
     /* ── PREVIEW: real document rendering (carried from Phase 1 viewer) ──
        PDF pages render to <canvas> inside .docarea; an overlaid .textLayer lets
@@ -417,7 +477,7 @@
     .vpage { display:block; width:100%; height:auto; border-radius:2px; }
     .textLayer { position:absolute; left:0; top:0; overflow:hidden; line-height:1; opacity:1; z-index:2; pointer-events:none; }
     .textLayer span { position:absolute; white-space:pre; transform-origin:0% 0%; color:transparent; }
-    .textLayer span.hl { background:rgba(255,213,0,.42); box-shadow:0 0 0 1px rgba(214,158,0,.5); border-radius:2px; }
+    .textLayer span.hl { background:rgba(255,205,0,.78); box-shadow:0 0 0 1.5px rgba(196,138,0,.85); border-radius:2px; }
     @keyframes pageflash { 0%{box-shadow:0 0 0 3px var(--accent),0 0.57rem 2.14rem -0.57rem rgba(0,0,0,0.45)} 100%{box-shadow:0 0 0 0 rgba(94,194,106,0),0 0.57rem 2.14rem -0.57rem rgba(0,0,0,0.45)} }
     .vpage-wrap.flash { animation:pageflash 1.8s ease-out; }
     /* image / text / office rendering, on a "page"-styled sheet */
@@ -428,12 +488,72 @@
     .vsheet-page p { margin:0 0 0.71rem; white-space:pre-wrap; word-wrap:break-word; }
     .vimg { max-width:100%; height:auto; display:block; margin:0 auto; border-radius:2px; }
     .vmeta { margin-top:1.29rem; display:flex; flex-direction:column; gap:0.71rem; }
-    .vmeta section { background:var(--bg-hover); border:1px solid var(--border); border-radius:0.43rem; padding:0.71rem 0.86rem; }
+    .vmeta section { background:var(--bg-hover); border:1px solid var(--border); border-radius:var(--radius); padding:0.71rem 0.86rem; }
     .vmeta h4 { margin:0 0 0.29rem; font-size:0.64rem; font-weight:600; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); }
     .vmeta p { margin:0; font-size:0.79rem; line-height:1.6; white-space:pre-wrap; color:var(--text); }
     .vsheet-page table { border-collapse:collapse; margin:0.71rem 0; font-size:0.75rem; }
     .vsheet-page td, .vsheet-page th { border:1px solid var(--page-rule); padding:0.21rem 0.5rem; white-space:nowrap; }
+    /* Spreadsheets: a wider page that fills the preview, with each sheet
+       horizontally scrollable so wide tables scroll inside the page instead
+       of bleeding off to the right. */
+    .vsheet-page.is-xlsx { width:calc(100% - 2rem); max-width:64rem; }
+    .xlsx-sheet { overflow-x:auto; max-width:100%; }
+    .xlsx-sheet table { margin:0.71rem 0; }
     .vnote { font-size:0.71rem; color:var(--text-faint); }
+    .status-doc ul { margin:0 0 0.71rem; padding-left:1.2rem; }
+    .status-doc li { margin:0.15rem 0; line-height:1.45; }
+    .status-doc code { background:var(--page-rule); border-radius:var(--radius-xs,3px); padding:0.05rem 0.3rem; font-family:var(--font-mono,monospace); font-size:0.82em; }
+    .status-doc h1 { margin-top:0; }
+    /* ── MARKDOWN preview (.md/.markdown via marked.js) ──────────────────── */
+    /* Definite (content-independent) page width + min-width:0 so wide code/tables
+       can't stretch the page; they scroll inside it instead of bleeding off. */
+    .vsheet-page.md-body { width:calc(100% - 2rem); max-width:46rem; min-width:0; }
+    .md-body > *:first-child { margin-top:0; }
+    .md-body h1,.md-body h2 { border-bottom:1px solid var(--page-rule); padding-bottom:0.2rem; }
+    .md-body ul,.md-body ol { margin:0 0 0.71rem; padding-left:1.4rem; }
+    .md-body li { margin:0.15rem 0; line-height:1.5; }
+    .md-body li > input[type=checkbox] { margin-right:0.4rem; }
+    .md-body a { color:var(--accent); }
+    .md-body p,.md-body li,.md-body h1,.md-body h2,.md-body h3 { overflow-wrap:break-word; }
+    .md-body code { background:var(--page-rule); border-radius:var(--radius-xs,3px); padding:0.05rem 0.3rem; font-family:var(--font-mono,monospace); font-size:0.85em; }
+    .md-body pre { background:var(--page-rule); border-radius:var(--radius,6px); padding:0.71rem 0.86rem; overflow-x:auto; max-width:100%; margin:0.71rem 0; }
+    .md-body pre code { background:none; padding:0; font-size:0.78rem; line-height:1.5; }
+    .md-body blockquote { margin:0.71rem 0; padding:0.1rem 0.86rem; border-left:3px solid var(--page-rule); color:var(--page-faint); }
+    .md-body hr { border:none; border-top:1px solid var(--page-rule); margin:1.14rem 0; }
+    .md-body img { max-width:100%; height:auto; }
+    /* display:block + overflow-x:auto turns a wide table into its own scroll area */
+    .md-body table { display:block; width:max-content; max-width:100%; overflow-x:auto; border-collapse:collapse; margin:0.71rem 0; font-size:0.8rem; }
+    .md-body td,.md-body th { border:1px solid var(--page-rule); padding:0.21rem 0.57rem; text-align:left; }
+
+    /* ── HOMEPAGE (the app's launch surface — informs + offers options) ──── */
+    .home { max-width:46rem; }
+    .home-hero { margin-bottom:1.43rem; }
+    .home-hero__title { font-size:1.5rem; font-weight:600; color:var(--page-h); letter-spacing:.01em; }
+    .home-ver { font-size:0.71rem; color:var(--text-faint); font-weight:400; margin-left:0.43rem; vertical-align:middle; }
+    .home-hero__tag { margin-top:0.21rem; font-size:0.86rem; color:var(--page-p); }
+    .home-hero__gen { margin-top:0.5rem; font-size:0.71rem; color:var(--text-faint); }
+    .home-link { color:var(--accent); cursor:pointer; }
+    .home-link:hover { text-decoration:underline; }
+    .home-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr)); gap:0.71rem; margin-bottom:1.43rem; }
+    .home-card { background:var(--bg-hover); border:1px solid var(--border); border-radius:var(--radius); padding:0.79rem 0.86rem; }
+    .home-card__label { font-size:0.6rem; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint); }
+    .home-card__big { margin-top:0.29rem; font-size:1.07rem; font-weight:600; color:var(--text); line-height:1.25; word-break:break-word; }
+    .home-card__sub { margin-top:0.14rem; font-size:0.71rem; color:var(--text-muted); }
+    .home-ok   { color:var(--accent); }
+    .home-warn { color:var(--amber); }
+    .home-sec { margin-bottom:1.43rem; }
+    .home-h { font-size:0.64rem; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint); margin:0 0 0.5rem; }
+    .home-synced { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0.43rem; }
+    .home-synced li { background:var(--bg-hover); border:1px solid var(--border); border-radius:var(--radius); padding:0.5rem 0.71rem; }
+    .home-synced__path { display:block; font-family:var(--font-mono,monospace); font-size:0.75rem; color:var(--text); word-break:break-all; }
+    .home-synced__meta { display:block; margin-top:0.14rem; font-size:0.68rem; color:var(--text-faint); }
+    .home-empty { font-size:0.79rem; color:var(--text-muted); background:var(--bg-hover); border:1px dashed var(--border); border-radius:var(--radius); padding:0.71rem 0.86rem; }
+    .home-actions { display:flex; flex-wrap:wrap; gap:0.5rem; }
+    .home-act {
+      background:var(--bg-alt); border:1px solid var(--border); border-radius:var(--radius-sm);
+      color:var(--text); font-family:inherit; font-size:0.79rem; padding:0.43rem 0.86rem; cursor:pointer; transition:.12s;
+    }
+    .home-act:hover { border-color:var(--accent); color:var(--accent); }
 
     /* ── RIGHT: AI REPL ───────────────────────────────────────────────── */
     .right {
@@ -483,7 +603,7 @@
 
     .repl-folder-result {
       margin:0.43rem 0 0.14rem; padding:0.43rem 0.71rem;
-      border:1px solid var(--border); border-radius:0.29rem;
+      border:1px solid var(--border); border-radius:var(--radius-sm);
       cursor:pointer; transition: border-color .1s, background .1s;
     }
     .repl-folder-result:hover { border-color:var(--text-muted); background:var(--bg-hover); }
@@ -499,7 +619,7 @@
     .repl-input-wrap { flex:none; padding:0.71rem 0.86rem 0.93rem; border-top:1px solid var(--border); }
     .repl-input-row {
       min-height: 2.57rem;
-      background:var(--bg); border:1px solid var(--border); border-radius:0.43rem;
+      background:var(--bg); border:1px solid var(--border); border-radius:var(--radius);
       display:flex; align-items:center; gap:0.64rem; padding:0 0.79rem; cursor:text;
     }
     .repl-prompt { color:var(--accent); flex:none; }
@@ -514,9 +634,9 @@
       min-width: 17rem;
       background: var(--bg-alt);
       border: 1px solid var(--border);
-      border-radius: 0.43rem;
+      border-radius: var(--radius);
       box-shadow: 0 0.57rem 2rem -0.14rem rgba(0,0,0,0.55), 0 0 0 1px rgba(0,0,0,0.2);
-      font-family: 'IBM Plex Mono','JetBrains Mono',ui-monospace,monospace;
+      font-family: var(--font-ui);
       font-size: 0.79rem;
       overflow: hidden;
       user-select: none;
@@ -551,7 +671,7 @@
       position: fixed; bottom: 1.29rem; left: 50%;
       transform: translateX(-50%) translateY(1rem);
       background: var(--bg-alt); border: 1px solid var(--border); color: var(--text);
-      padding: 0.64rem 1.07rem; border-radius: 0.43rem; font-size: 0.79rem;
+      padding: 0.64rem 1.07rem; border-radius: var(--radius); font-size: 0.79rem;
       box-shadow: 0 0.57rem 2rem -0.14rem rgba(0,0,0,0.55);
       opacity: 0; pointer-events: none; transition: .22s; z-index: 10000;
       max-width: 26rem; text-align: center;
@@ -565,10 +685,10 @@
 
   <!-- ── TOP BAR ── -->
   <div class="topbar">
-    <div class="topbar__dots">
-      <span class="topbar__dot"></span>
-      <span class="topbar__dot"></span>
-      <span class="topbar__dot"></span>
+    <div class="topbar__nav">
+      <button class="nav-btn" id="navHome" onclick="navHome()" title="Home — AMAdocs overview & status" aria-label="Home">⌂</button>
+      <button class="nav-btn" id="navBack" onclick="navBack()" title="Back" aria-label="Back" disabled>‹</button>
+      <button class="nav-btn" id="navFwd"  onclick="navForward()" title="Forward" aria-label="Forward" disabled>›</button>
     </div>
     <div class="topbar__search">
       <span class="topbar__path" id="searchPath">~/Documents/Reports</span>
@@ -1005,6 +1125,7 @@
 <script src="vendor/pdf.min.js"></script>
 <script src="vendor/mammoth.browser.min.js"></script>
 <script src="vendor/xlsx.full.min.js"></script>
+<script src="vendor/marked.min.js"></script>
 <script>
   if (window.pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = "vendor/pdf.worker.min.js";
 </script>
@@ -1200,11 +1321,13 @@ function capAnswer(text){
 /* ---- low-level streaming chat (DOM-free; REPL wires its own rendering) ----
    Calls onEvent(frame, answerSoFar, sourcesSoFar) for each SSE frame.
    Returns the final {answer, sources}. Stage D drives this from the REPL. */
-async function streamChat(message, {signal, onEvent}={}){
+async function streamChat(message, {signal, onEvent, scopePath=null}={}){
   let answer="", sources=[];
+  const body={message,sessionId:SESSION_ID};
+  if(scopePath) body.scopePath=scopePath;
   const resp=await fetch(`${API}/workspace/${WS_SLUG}/stream-chat`,{
     method:"POST",headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({message,sessionId:SESSION_ID}),signal});
+    body:JSON.stringify(body),signal});
   const reader=resp.body.getReader(), dec=new TextDecoder(); let buf="";
   while(true){
     const {done,value}=await reader.read(); if(done) break;
@@ -1255,6 +1378,15 @@ async function deepSearchDoc(docpath){
   let d={}; try{ d=await r.json(); }catch(_){}
   return {ok:r.ok && !!d.success, ...d};
 }
+// On-demand backstop: ingest a file GNOME couldn't read (image, image-only PDF, office
+// doc) via AMAdocs' own extractor (OCR + vision / mammoth / OCR-PDF). `entryPath` is the
+// real on-disk path. Returns {ok, docpath, error?}.
+async function analyseFile(entryPath){
+  const r=await fetch(`${API}/workspace/${WS_SLUG}/analyse-file`,{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:entryPath})});
+  let d={}; try{ d=await r.json(); }catch(_){}
+  return {ok:r.ok && !!d.ok, ...d};
+}
 
 /* ═══════════════════════ DOCUMENT RENDERERS (carried) ═══════════════════
    Render a retained original into a container (the preview .docarea). PDF uses
@@ -1281,9 +1413,58 @@ async function renderOriginalInto(container, docpath, opts={}){
     if(type.startsWith("image/")) return renderImageInto(container,blob,docpath);
     if(type.includes("wordprocessingml")) return renderDocxInto(container,blob,docpath);
     if(type.includes("spreadsheetml")||type.includes("csv")) return renderXlsxInto(container,blob,docpath);
+    if(type.includes("markdown")||/\.(md|markdown|mdown|mkd)$/i.test(docpath||"")) return renderMarkdownInto(container,blob,(docpath||"").split("/").pop());
     return renderTextInto(container,docpath,opts);
   }catch(e){
     return renderTextInto(container,docpath,opts);
+  }
+}
+// Preview a file straight off disk via the Electron bridge — works on ANY local file,
+// indexed or not (preview = "let me see it"; indexing stays opt-in). Mirrors
+// renderOriginalInto's mime dispatch but sources bytes from window.amadocs.readFile
+// (no docpath / engine round-trip). Unindexed → no caption/OCR/extracted-text panel.
+async function renderFromDisk(container, fsPath, name){
+  container.innerHTML=`<div class="vnote" style="margin:2rem">Loading…</div>`;
+  try{
+    const res=await desktop.readFile(fsPath);
+    if(!res||!res.ok) throw new Error((res&&res.error)||"read-failed");
+    const u8=Uint8Array.from(atob(res.data), c=>c.charCodeAt(0));
+    const type=(res.mime||"").toLowerCase();
+    const blob=new Blob([u8],{type});
+    if(type.includes("pdf")) return renderPdfInto(container,blob,{});
+    if(type.startsWith("image/")) return renderImageInto(container,blob,null);
+    if(type.includes("wordprocessingml")) return renderDocxInto(container,blob,null);
+    if(type.includes("spreadsheetml")||type.includes("csv")) return renderXlsxInto(container,blob,null);
+    if(type.includes("markdown")||/\.(md|markdown|mdown|mkd)$/i.test(name||"")) return renderMarkdownInto(container,blob,name);
+    if(type.startsWith("text/")||type==="application/json") return renderBlobTextInto(container,blob,name);
+    container.innerHTML=`<div class="vnote" style="margin:2rem;max-width:34rem;line-height:1.5">
+      <strong>${esc(name)}</strong><br><br>No built-in preview for this file type. Use <strong>⤢ show in file manager</strong> to open it with your system app.</div>`;
+  }catch(e){
+    const msg = e&&e.message==="too-large" ? "File is too large to preview." : (e&&e.message)||"error";
+    container.innerHTML=`<div class="vnote" style="margin:2rem">Couldn’t preview this file (${esc(msg)}).</div>`;
+  }
+}
+// Markdown view (.md/.markdown). Renders to formatted HTML via marked.js (bundled in
+// vendor/). Falls back to plain text if marked is unavailable or parsing fails.
+async function renderMarkdownInto(container, blob, name){
+  try{
+    const text=await blob.text();
+    const note=`<div class="vnote">📝 ${esc(name)} · markdown</div>`;
+    const html=(window.marked&&marked.parse)?marked.parse(text,{gfm:true,breaks:false}):renderDocText(text);
+    container.innerHTML=`<div class="vsheet-page md-body">${note}${html||"<p>Empty file.</p>"}</div>`;
+    container.scrollTop=0;
+  }catch(e){ return renderBlobTextInto(container,blob,name); }
+}
+// Plain-text view from a blob (the on-disk path's text fallback — renderTextInto needs
+// a docpath/engine, this doesn't). Reuses renderDocText so it stays escaped.
+async function renderBlobTextInto(container, blob, name){
+  try{
+    const text=await blob.text();
+    const note=`<div class="vnote">🔤 ${esc(name)} · ${text.length.toLocaleString()} chars · not indexed (showing file contents).</div>`;
+    container.innerHTML=`<div class="vsheet-page">${note}${text?renderDocText(text):"<p>Empty file.</p>"}</div>`;
+    container.scrollTop=0;
+  }catch(e){
+    container.innerHTML=`<div class="vnote" style="margin:2rem">Couldn’t read this file as text.</div>`;
   }
 }
 // Text view = exactly what the AI reads (extracted text). Also the fallback.
@@ -1309,6 +1490,114 @@ function renderDocText(text){
   });
   return blocks.join("");
 }
+// AMAdocs status document. Slightly richer than renderDocText: handles **bold**,
+// `inline code`, and "- " lists so the live status doc reads cleanly in the
+// preview pane. (Plain Markdown can't do interactive controls — that's a later
+// pass with our own widgets; this v1 is read-only status.)
+function mdInline(s){
+  return esc(s)
+    .replace(/`([^`]+)`/g, '<code>$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+}
+function renderStatusMd(md){
+  const out=[]; let list=null;
+  const flush=()=>{ if(list!==null){ out.push(`<ul>${list}</ul>`); list=null; } };
+  String(md).split(/\n/).forEach(raw=>{
+    const line=raw.replace(/\s+$/,"");
+    if(!line.trim()){ flush(); return; }
+    const h=line.match(/^(#{1,3})\s+(.*)$/);
+    if(h){ flush(); out.push(`<h${h[1].length}>${mdInline(h[2])}</h${h[1].length}>`); return; }
+    const li=line.match(/^[-*]\s+(.*)$/);
+    if(li){ list=(list||"")+`<li>${mdInline(li[1])}</li>`; return; }
+    flush(); out.push(`<p>${mdInline(line)}</p>`);
+  });
+  flush();
+  return out.join("");
+}
+// The app opens to the homepage on launch (the Home ⌂ button returns here) —
+// the launch surface that informs the user (index/library/model/engine at a
+// glance) and offers options, so we don't have to cram everything into menus.
+// v1 is lean; we add cards/actions here as the product grows.
+function fmtUtc(ts){
+  try{ return new Date(ts).toISOString().replace("T"," ").slice(0,16)+" UTC"; }catch(_){ return "—"; }
+}
+function homeCard(label, big, sub){
+  return `<div class="home-card"><div class="home-card__label">${esc(label)}</div>
+    <div class="home-card__big">${big}</div><div class="home-card__sub">${sub}</div></div>`;
+}
+function renderHomeHtml(d){
+  d = d || {};
+  const eng=d.engine||{}, model=d.model||{}, gn=d.gnome||{}, lib=d.library||{}, synced=d.synced||[];
+  const docs = lib.totalDocs ?? 0, wsN = lib.workspaces ?? 0;
+  const cards =
+    homeCard("Index",
+      `<span class="${gn.connected?"home-ok":"home-warn"}">●</span> ${gn.connected?"Connected":"Unavailable"}`,
+      "GNOME LocalSearch") +
+    homeCard("Library", `${docs}`,
+      `document${docs===1?"":"s"} · ${wsN} workspace${wsN===1?"":"s"}`) +
+    homeCard("Model", esc(model.chat||"—"), `chat · via ${esc(eng.llmProvider||"ollama")}`) +
+    homeCard("Engine", `v${esc(eng.version||"?")}`,
+      `Node ${esc(eng.node||"")} · ${esc(eng.vectorDb||"lancedb")}`);
+  const syncedHtml = synced.length
+    ? `<ul class="home-synced">` + synced.map(s =>
+        `<li><span class="home-synced__path">${esc(s.folder||"?")}</span>
+          <span class="home-synced__meta">${s.files||0} file${s.files===1?"":"s"} · last sync ${fmtUtc(s.lastSync)}</span></li>`
+      ).join("") + `</ul>`
+    : `<div class="home-empty">No folders indexed yet. Use <strong>＋ Index a folder</strong> below, or open a folder and hit <strong>⟳ index</strong>.</div>`;
+  return `<div class="home">
+    <div class="home-hero">
+      <div class="home-hero__title">◆ AMAdocs<span class="home-ver">v${esc(eng.version||"?")}</span></div>
+      <div class="home-hero__tag">Your private, local AI file browser. Everything stays on this computer.</div>
+      <div class="home-hero__gen">Status generated ${fmtUtc(d.generatedAt||Date.now())} · <a class="home-link" onclick="showStatusDoc()">⟳ refresh</a></div>
+    </div>
+    <div class="home-cards">${cards}</div>
+    <div class="home-sec"><h3 class="home-h">Indexed folders</h3>${syncedHtml}</div>
+    <div class="home-sec"><h3 class="home-h">Quick actions</h3>
+      <div class="home-actions">
+        <button class="home-act" onclick="homeBrowseFiles()">🗂 Browse my files</button>
+        <button class="home-act" onclick="homeIndexFolder()">＋ Index a folder…</button>
+        <button class="home-act" onclick="showStatusDoc()">⟳ Refresh status</button>
+      </div>
+    </div>
+  </div>`;
+}
+async function showStatusDoc(){
+  const da=$("#docarea"); if(!da) return;
+  pushHist({type:"home", path:null});
+  view.filePath=null; view.fileName=null;
+  $("#viewFolder")?.classList.add("hidden");
+  $("#viewPreview")?.classList.remove("hidden");
+  const backBtn=$(".back-btn"); if(backBtn) backBtn.textContent="‹ Home/";
+  const activeTab=$(".tab.tab-active"); if(activeTab) activeTab.innerHTML='<span class="icon-md">⌂</span> Home';
+  document.querySelectorAll(".tabs .tab:not(.tab-active)").forEach(t=>t.classList.add("hidden"));
+  const meta=$(".tabs__meta"); if(meta) meta.innerHTML="";
+  const ms=$(".metastrip"); if(ms) ms.innerHTML="";
+  $("#replFile")?.classList.add("hidden");
+  $("#replFolder")?.classList.remove("hidden");
+  da.innerHTML=`<div class="vnote" style="margin:2rem">Loading…</div>`;
+  try{
+    const r=await fetch(`${API}/amadocs-status`);
+    if(!r.ok) throw 0;
+    const d=await r.json();
+    da.innerHTML=`<div class="vsheet-page">${renderHomeHtml(d.data||{})}</div>`;
+    da.scrollTop=0;
+  }catch(e){
+    da.innerHTML=`<div class="vnote" style="margin:2rem">AMAdocs homepage unavailable — is the engine running?</div>`;
+  }
+}
+// Homepage quick actions (wired to the existing desktop bridge + folder flows).
+async function homeBrowseFiles(){
+  if(!desktop || !desktop.homePath){ toast("Run the desktop app to browse files."); return; }
+  const home = await desktop.homePath();
+  if(home) await selectFolder(home, "Home");
+}
+async function homeIndexFolder(){
+  if(!desktop || !desktop.pickFolder){ toast("Run the desktop app to index folders."); return; }
+  const dir = await desktop.pickFolder();
+  if(!dir) return;
+  await selectFolder(dir, baseName(dir));
+  await onSyncFolder();
+}
 async function renderDocxInto(container, blob, docpath){
   try{
     const buf=await blob.arrayBuffer();
@@ -1322,8 +1611,8 @@ async function renderXlsxInto(container, blob, docpath){
     const buf=await blob.arrayBuffer();
     const wb=XLSX.read(buf,{type:"array"});
     let html="";
-    wb.SheetNames.forEach(n=>{ html+=`<h3>${esc(n)}</h3>`+XLSX.utils.sheet_to_html(wb.Sheets[n]); });
-    container.innerHTML=`<div class="vsheet-page">${html}</div>`;
+    wb.SheetNames.forEach(n=>{ html+=`<h3>${esc(n)}</h3><div class="xlsx-sheet">`+XLSX.utils.sheet_to_html(wb.Sheets[n])+`</div>`; });
+    container.innerHTML=`<div class="vsheet-page is-xlsx">${html}</div>`;
     container.scrollTop=0;
   }catch(e){ renderTextInto(container,docpath); }
 }
@@ -1344,6 +1633,7 @@ async function renderImageInto(container, blob, docpath){
   sheet.appendChild(img);
   container.appendChild(sheet);
   container.scrollTop=0;
+  if(!docpath) return;   // not indexed: show the raw image, no caption/OCR panel yet
   // caption / OCR panel beneath the image (best-effort)
   try{
     const r=await fetch(`${API}/workspace/${WS_SLUG}/doc-view?path=${encodeURIComponent(docpath)}`);
@@ -1496,15 +1786,23 @@ async function locatePassagePage(pdf,needle){
    folder switch, context menu). Still driven by the static demo markup; the
    data wiring (steps 4–8) replaces the static nodes with live ones. */
 
-if (window.matchMedia('(prefers-color-scheme: light)').matches) {
-  document.documentElement.dataset.theme = 'light';
-  $("#themeBtn").textContent = 'dark';
+/* Three visual skins — colour + typeface + corner rounding, all via CSS vars.
+   No structural difference: same tree, tabs, preview and REPL in every skin. */
+const THEMES = [
+  { id: 'dark',  label: 'Terminal' },  /* dark · monospace · sharp    (TUI)     */
+  { id: 'slate', label: 'Slate'    },  /* dim  · sans      · medium   (halfway) */
+  { id: 'light', label: 'Desktop'  },  /* light· sans      · rounded  (Finder)  */
+];
+function applyTheme(id) {
+  const t = THEMES.find(x => x.id === id) || THEMES[0];
+  document.documentElement.dataset.theme = t.id;
+  $("#themeBtn").textContent = t.label;
 }
+applyTheme(window.matchMedia('(prefers-color-scheme: light)').matches ? 'light' : 'dark');
 function toggleTheme() {
-  const html = document.documentElement;
-  const btn  = $("#themeBtn");
-  html.dataset.theme = html.dataset.theme === 'dark' ? 'light' : 'dark';
-  btn.textContent = html.dataset.theme === 'dark' ? 'light' : 'dark';
+  const cur = document.documentElement.dataset.theme || 'dark';
+  const i = THEMES.findIndex(x => x.id === cur);
+  applyTheme(THEMES[(i + 1) % THEMES.length].id);
 }
 function toggleChev(row) {
   const c = row.querySelector('.chev');
@@ -1550,6 +1848,7 @@ function showFolder() {
 
 /* ---- CONTEXT MENU ---- */
 const ctxMenu = $("#ctxMenu");
+let ctxEntryPath = null;   // full filesystem path of the right-clicked entry (Stage D)
 // file metadata for each static demo entry (replaced with live data in Stage C)
 const fileData = {
   'Annual-Infrastructure-Review-2025.pdf': { meta: 'PDF · 1.4 MB', isImage: false },
@@ -1560,10 +1859,15 @@ const fileData = {
   'draft-notes.txt':                       { meta: 'TXT · 2 KB',    isImage: false },
   'Q3-Infrastructure-Update.pdf':          { meta: 'PDF · 880 KB',  isImage: false },
 };
-function openCtx(e, filename) {
+function openCtx(e, entryPath) {
   e.preventDefault();
   e.stopPropagation();
-  const data = fileData[filename] || { meta: '', isImage: isImageName(filename) };
+  // entryPath may be a full path (live entries) or just a name (static demo rows)
+  const isAbsPath = String(entryPath).startsWith('/');
+  const filename = isAbsPath ? baseName(entryPath) : entryPath;
+  ctxEntryPath = isAbsPath ? entryPath : null;
+  const ai = isAbsPath ? aiStateFor(entryPath, filename) : null;
+  const data = fileData[filename] || { meta: ai ? `${badgeFor(filename)[0]} · ${fmtBytes(entryIndex.get(entryPath)?.size)}` : '', isImage: isImageName(filename) };
   $("#ctxFilename").textContent = filename;
   $("#ctxFilemeta").textContent = data.meta;
   const analyseItem  = $("#ctxAnalyse");
@@ -1620,6 +1924,49 @@ document.querySelectorAll('#treeFiles .tree-row').forEach(row => {
 // Selection state. `view` is also read by showFile()/showFolder() above.
 const view = { folderPath:null, folderName:null, filePath:null, fileName:null };
 const entryIndex = new Map();           // path → {name,isDir,size,mtime} for the open folder
+
+/* ─── Top-bar navigation history (Home / Back / Forward) ───────────────────
+   A browser-style back/forward stack over the three destinations the middle
+   panel can show: the Home status doc, a folder, or a file preview. User-driven
+   navigation (tree/folder/file clicks, folder-chat results, the Home button)
+   records an entry via pushHist(); Back/Forward replay entries with `replaying`
+   set so the replay itself doesn't re-record. The three destination functions
+   (showStatusDoc / selectFolder / showFilePreview) each call pushHist() up top,
+   so every path into them — wherever it's triggered — is captured automatically. */
+const navHist = { stack:[], idx:-1, replaying:false };
+function navEq(a, b){ return !!a && !!b && a.type === b.type && a.path === b.path; }
+function pushHist(entry){
+  if(navHist.replaying) return;                          // mid back/forward replay — don't record
+  if(navEq(navHist.stack[navHist.idx], entry)) return;   // re-selecting the same place — ignore
+  navHist.stack = navHist.stack.slice(0, navHist.idx + 1);  // drop any forward history past here
+  navHist.stack.push(entry);
+  navHist.idx = navHist.stack.length - 1;
+  updateNavButtons();
+}
+function updateNavButtons(){
+  const b = $("#navBack"), f = $("#navFwd");
+  if(b) b.disabled = navHist.idx <= 0;
+  if(f) f.disabled = navHist.idx >= navHist.stack.length - 1;
+}
+async function navDispatch(entry){
+  navHist.replaying = true;
+  try{
+    if(entry.type === "home")        await showStatusDoc();
+    else if(entry.type === "folder") await selectFolder(entry.path, entry.name);
+    else                             showFilePreview(entry.path, entry.name, entryIndex.get(entry.path) || {});
+  } finally { navHist.replaying = false; }
+}
+async function navBack(){
+  if(navHist.idx <= 0) return;
+  navHist.idx--; updateNavButtons();
+  await navDispatch(navHist.stack[navHist.idx]);
+}
+async function navForward(){
+  if(navHist.idx >= navHist.stack.length - 1) return;
+  navHist.idx++; updateNavButtons();
+  await navDispatch(navHist.stack[navHist.idx]);
+}
+function navHome(){ showStatusDoc(); }   // records itself via showStatusDoc's pushHist
 
 /* ---- path + formatting helpers (POSIX; the app targets Linux/GNOME) ---- */
 function joinPath(dir, name){ return dir.endsWith("/") ? dir+name : dir+"/"+name; }
@@ -1678,7 +2025,7 @@ function makeTreeNode(ent, full, depth, labelOverride){
     if(isDir) onTreeFolderClick(row, kids, full);
     else      onTreeFileClick(row, full, ent);
   });
-  row.addEventListener("contextmenu", e => openCtx(e, ent.name));
+  row.addEventListener("contextmenu", e => openCtx(e, full));
   return { row, kids };
 }
 async function loadChildren(container, dir, depth){
@@ -1721,6 +2068,7 @@ function onTreeFileClick(row, full, ent){
 
 /* ---- folder view (middle): real contents, neutral AI state ---- */
 async function selectFolder(full, name){
+  pushHist({type:"folder", path:full, name});
   view.folderPath = full; view.folderName = name; view.filePath = null; view.fileName = null;
   showFolder();
   const hdr = $(".folder-hdr__path"); if(hdr) hdr.innerHTML = `<strong>${esc(name)}/</strong>`;
@@ -1741,15 +2089,15 @@ async function selectFolder(full, name){
   renderFolderList(entries, full);
   renderFolderGrid(entries, full);
   $("#replFolder").innerHTML =
-    `<div class="repl-folder-intro">Scoped to <strong style="color:var(--text)">${esc(name)}/</strong> · ${fileCount} files · ${indexedCount} indexed.
-     <span class="tree-ghost">Folder search is wired in a later stage.</span></div>`;
+    `<div class="repl-folder-intro">Scoped to <strong style="color:var(--text)">${esc(name)}/</strong> · ${fileCount} files · ${indexedCount} indexed.</div>
+     <div id="replFolderConv"></div>`;
 }
 function rowClickWire(el){
   const full = el.dataset.path, nm = el.dataset.name;
   if(el.dataset.dir){ el.addEventListener("click", () => selectFolder(full, nm)); }
   else {
     el.addEventListener("click", () => showFilePreview(full, nm, entryIndex.get(full) || {}));
-    el.addEventListener("contextmenu", e => openCtx(e, nm));
+    el.addEventListener("contextmenu", e => openCtx(e, el.dataset.path || nm));
   }
 }
 function renderFolderList(entries, dir){
@@ -1805,6 +2153,7 @@ function renderFolderGrid(entries, dir){
 /* ---- file preview (middle): metadata card. Rich preview + summary = later stages. ---- */
 function showFilePreview(full, name, ent){
   ent = ent || {};
+  pushHist({type:"file", path:full, name});
   view.filePath = full; view.fileName = name;
   showFile();
   const backBtn = $(".back-btn");
@@ -1825,17 +2174,26 @@ function showFilePreview(full, name, ent){
      <span><span class="mk">modified</span>&nbsp;${esc(fmtDate(ent.mtime))}</span>
      <span><span class="mk">indexed</span>&nbsp;${indexedLabel}</span>`;
   const da = $("#docarea");
-  if(da) da.innerHTML =
-    `<div class="vnote" style="margin:2rem;max-width:34rem;line-height:1.5">
-       <strong>${esc(name)}</strong><br><br>
-       ${ai.indexed
-         ? "This file is in the AI index. The live document preview is wired in the next stage."
-         : "Preview and AI summary appear once this file is indexed. Live preview and chat are wired in the next stages."}<br><br>
-       <span class="tree-ghost">Right-click → ${ai.chipCls==="ai-analyse"?"analyse":"re-analyse"} to ${ai.indexed?"refresh":"index"} this file on demand.</span></div>`;
-  $("#replFile").innerHTML = ai.summary
-    ? `<div class="sum-block"><div class="sum-label">summary</div><div class="sum-text">${esc(ai.summary)}</div></div>`
-    : `<div class="sum-block"><div class="sum-label">summary</div>
-         <div class="sum-text tree-ghost">${ai.indexed?"Indexed — summary pending. Chat is wired in a later stage.":"Not yet indexed — file chat is wired in a later stage."}</div></div>`;
+  if(da){
+    const docEntry = docIndex.get(full);
+    if(ai.indexed && docEntry && docEntry.docpath){
+      renderOriginalInto(da, docEntry.docpath, {});
+    } else if(desktop && desktop.readFile){
+      // Not indexed, but we can still SHOW the file straight off disk. Indexing
+      // (caption/OCR/search) stays opt-in via right-click → analyse / ⟳ index.
+      renderFromDisk(da, full, name);
+    } else {
+      da.innerHTML = `<div class="vnote" style="margin:2rem;max-width:34rem;line-height:1.5">
+        <strong>${esc(name)}</strong><br><br>
+        ${ai.chipCls==="ai-analyse"
+          ? 'Right-click → <em>analyse with AI</em> to index this image on demand.'
+          : 'Right-click → <em>analyse with AI</em> to index this file, or use <strong>⟳ index</strong> on the folder header to index the whole folder.'}
+      </div>`;
+    }
+  }
+  $("#replFile").innerHTML =
+    `<div class="sum-block"><div class="sum-label">summary</div><div class="sum-text${ai.summary?"":" tree-ghost"}">${ai.summary ? esc(ai.summary) : (ai.indexed ? "Indexed — no summary yet. Right-click → summarise to generate one." : "Not yet indexed — previewing from disk. Right-click → analyse with AI to make it searchable.")}</div></div>
+     <div id="replFileConv"></div>`;
 }
 
 /* ---- boot the tree: root = Home, auto-expanded ---- */
@@ -1958,12 +2316,230 @@ async function onSyncFolder(){
   setTimeout(refreshAiState, 4000);
 }
 
+/* ═══════════════════════ STAGE D — REPL CHAT + CTX ACTIONS ═════════════════
+   D1: Wire #replInput (Enter / ⏎ run) → streamChat with scopePath pre-filter.
+       File scope  → stream answer + cite chips (click chip → jump to page in docarea).
+       Folder scope → collect sources → render file result cards (no LLM answer shown).
+   D2: Wire context-menu actions (analyse / summarise / reveal; prioritise + save-copy
+       are honest "coming soon" stubs — no Phase 2 endpoint wired yet).
+   Verification: same pattern as A/B/C — see DEV-NOTES for the Stage D checkpoint. */
+
+let replAbort = null;   // AbortController for the in-flight REPL request
+
+/* helper: active conversation container in each REPL panel */
+function replConvEl(){
+  const isFile = !$("#replFolder") || !$("#replFolder").classList || $("#replFolder").classList.contains("hidden");
+  const id = isFile ? "replFileConv" : "replFolderConv";
+  return document.getElementById(id);
+}
+
+/* append content to the active REPL conversation area and scroll it into view */
+function replAppend(html){
+  const conv = replConvEl(); if(!conv) return null;
+  const wrap = document.createElement("div");
+  wrap.className = "repl-exchange";
+  wrap.innerHTML = html;
+  conv.appendChild(wrap);
+  conv.parentElement.scrollTop = conv.parentElement.scrollHeight;
+  return wrap;
+}
+
+async function runRepl(){
+  const ta = $("#replInput"); if(!ta) return;
+  const msg = ta.value.trim(); if(!msg) return;
+  if(replAbort){ replAbort.abort(); replAbort=null; }
+  ta.value=""; ta.style.height="auto";
+
+  const isFile  = view.filePath  && !$("#replFolder") || ($("#replFolder") && $("#replFolder").classList.contains("hidden"));
+  const scopePath = isFile ? view.filePath : (view.folderPath ? view.folderPath+"/" : null);
+  const label   = isFile ? "file" : "folder";
+
+  /* ---- show the command line immediately ---- */
+  const exchange = replAppend(
+    `<div class="cmd">▸ <span class="cmd-verb">ask</span> <span class="cmd-str">${esc(msg)}</span></div>
+     <div class="repl-thinking">…<span class="warm-t"></span></div>`
+  );
+  const thinkEl = exchange && exchange.querySelector(".repl-thinking");
+  let tick=0;
+  const tickInterval = setInterval(()=>{ if(thinkEl) thinkEl.textContent = ["…",".. ","..."][tick++%3]; }, 420);
+
+  const ctrl = new AbortController();
+  replAbort = ctrl;
+  try{
+    if(isFile){
+      /* FILE MODE: stream answer + citations */
+      let answerEl = null;
+      const {answer, sources} = await streamChat(msg, {
+        signal: ctrl.signal,
+        scopePath,
+        onEvent(j, answerSoFar){
+          if(!answerEl && answerSoFar){
+            clearInterval(tickInterval);
+            if(thinkEl){ thinkEl.remove(); }
+            answerEl = document.createElement("div");
+            answerEl.className = "answer";
+            exchange.appendChild(answerEl);
+          }
+          if(answerEl) answerEl.textContent = capAnswer(answerSoFar);
+          exchange.closest(".repl-body").scrollTop = exchange.closest(".repl-body").scrollHeight;
+        }
+      });
+      clearInterval(tickInterval);
+      if(!answerEl){
+        if(thinkEl) thinkEl.remove();
+        const noEl=document.createElement("div");
+        noEl.className="answer tree-ghost";
+        noEl.textContent="No answer found in this file.";
+        exchange.appendChild(noEl);
+      } else {
+        answerEl.textContent = capAnswer(answer);
+        /* citations */
+        const cites = await resolveCitations(sources);
+        if(cites.length){
+          const provEl=document.createElement("div"); provEl.className="provenance";
+          provEl.innerHTML="↳ "+cites.map((c,i)=>{
+            CITES.push(c);
+            const lbl=c.page ? `p.${c.page}` : c.name;
+            return `<span class="prov-link" data-ci="${CITES.length-1}">${esc(lbl)}</span>`;
+          }).join(" · ");
+          provEl.querySelectorAll("[data-ci]").forEach(el=>{
+            el.style.cursor="pointer";
+            el.addEventListener("click",()=>{
+              const ci=CITES[+el.dataset.ci]; if(!ci) return;
+              const da=$("#docarea"); if(!da) return;
+              if(ci.docpath) renderOriginalInto(da, ci.docpath, {targetPage:ci.page, targetText:ci.text});
+            });
+          });
+          exchange.appendChild(provEl);
+        }
+      }
+    } else {
+      /* FOLDER MODE: collect sources, render file result cards (no LLM answer shown) */
+      const {sources} = await streamChat(msg, {signal:ctrl.signal, scopePath});
+      clearInterval(tickInterval);
+      if(thinkEl) thinkEl.remove();
+      if(!sources || !sources.length){
+        const noEl=document.createElement("div"); noEl.className="answer tree-ghost";
+        noEl.textContent="No relevant files found in this folder.";
+        exchange.appendChild(noEl);
+      } else {
+        /* dedupe by sourcePath or title */
+        const seen=new Set(), cards=[];
+        for(const s of sources){
+          const sp=s.sourcePath||""; const nm=sourceName(s)||sp;
+          const key=sp||nm; if(seen.has(key)) continue; seen.add(key);
+          const ai=sp?aiStateFor(sp,baseName(sp)):{chipLabel:"",chipCls:""};
+          const snip=(s.text||"").replace(/<[^>]*>/g,"").slice(0,120).trim();
+          const scoreStr=s.score!=null?` · score ${s.score.toFixed(2)}`:"";
+          const pageStr=s.chunkSource?"":""  // page info not reliable without doc-view
+          cards.push({nm,sp,ai,snip,scoreStr,s});
+        }
+        const listEl=document.createElement("div");
+        listEl.innerHTML=cards.map((c,i)=>
+          `<div class="repl-folder-result" data-ci="${i}" style="cursor:pointer">
+             <div class="rfr-name">${esc(baseName(c.nm)||c.nm)}</div>
+             ${c.snip?`<div class="rfr-snip">…${esc(c.snip)}…</div>`:""}
+             <div class="rfr-meta">${esc(c.ai.chipLabel||"")}${c.scoreStr}</div>
+           </div>`
+        ).join("");
+        listEl.querySelectorAll(".repl-folder-result").forEach((el,i)=>{
+          el.addEventListener("click",()=>{
+            const c=cards[i]; if(!c || !c.sp) return;
+            const ent=entryIndex.get(c.sp)||{name:baseName(c.sp),isDir:false};
+            showFilePreview(c.sp, baseName(c.sp), ent);
+          });
+        });
+        exchange.appendChild(listEl);
+        const provEl=document.createElement("div"); provEl.className="provenance";
+        provEl.textContent=`↳ ${cards.length} file${cards.length===1?"":"s"} found`;
+        exchange.appendChild(provEl);
+      }
+    }
+  } catch(err){
+    clearInterval(tickInterval);
+    if(err.name!=="AbortError"){
+      if(thinkEl) thinkEl.remove();
+      const errEl=document.createElement("div"); errEl.className="answer tree-ghost";
+      errEl.textContent=isModelMissingError(err)?"No AI model loaded — pull a model first.":"Chat error: "+String(err.message||err).slice(0,120);
+      exchange && exchange.appendChild(errEl);
+    }
+  } finally {
+    if(replAbort===ctrl) replAbort=null;
+  }
+}
+
+/* ---- wire Enter + ⏎ run ---- */
+(function(){
+  const ta=$("#replInput"), run=$("#replInputRow")?.querySelector(".repl-run");
+  if(ta){
+    ta.addEventListener("keydown", e=>{
+      if(e.key==="Enter" && !e.shiftKey){ e.preventDefault(); runRepl(); }
+    });
+  }
+  if(run) run.addEventListener("click", runRepl);
+})();
+
+/* ═══════════════════════ CONTEXT MENU ACTIONS (Stage D2) ═══════════════════ */
+
+$("#ctxAnalyse").addEventListener("click", async ()=>{
+  closeCtx();
+  if(!ctxEntryPath){ toast("No file selected."); return; }
+  const entry=docIndex.get(ctxEntryPath);
+  const dp=entry?.docpath||null;
+  if(dp){
+    // Already indexed → "re-analyse" = full-text deep search of the existing doc.
+    toast("Analysing…");
+    const r=await deepSearchDoc(dp);
+    // Follow-up refresh: the workspace doc list can lag the embed by a beat, so a
+    // second pass guarantees the chip/dot flip (mirrors onSyncFolder).
+    if(r.ok){ await refreshAiState(); setTimeout(refreshAiState, 4000); toast("Analysis complete."); }
+    else toast("Analysis failed — check the engine logs.");
+    return;
+  }
+  // Not indexed yet → on-demand backstop. This is the working path for images and
+  // image-only PDFs (OCR + vision) and any file GNOME couldn't read.
+  if(!desktop){ toast("Analysis bridge not available in browser dev mode."); return; }
+  toast("Analysing… (OCR / vision may take a moment)");
+  const r=await analyseFile(ctxEntryPath);
+  if(r.ok){ await refreshAiState(); setTimeout(refreshAiState, 4000); toast("Analysis complete."); }
+  else toast(r.error || "Couldn’t analyse this file.");
+});
+
+$("#ctxSummarise").addEventListener("click", async ()=>{
+  closeCtx();
+  if(!ctxEntryPath){ toast("No file selected."); return; }
+  const entry=docIndex.get(ctxEntryPath);
+  const dp=entry?.docpath||null;
+  if(!dp){ toast("File not indexed yet."); return; }
+  toast("Generating summary…");
+  const r=await summarizeDoc(dp);
+  if(r.ok && r.summary){
+    if(docIndex.has(ctxEntryPath)) docIndex.get(ctxEntryPath).aiSummary=r.summary;
+    if(view.filePath===ctxEntryPath){
+      const sb=document.querySelector("#replFile .sum-text");
+      if(sb){ sb.classList.remove("tree-ghost"); sb.textContent=r.summary; }
+    }
+    toast("Summary updated.");
+  } else toast("Summary failed.");
+});
+
+$("#ctxReveal").addEventListener("click", ()=>{
+  closeCtx();
+  if(!ctxEntryPath){ toast("No file selected."); return; }
+  if(desktop && desktop.revealInFolder) desktop.revealInFolder(ctxEntryPath);
+  else toast("File manager bridge not available in browser dev mode.");
+});
+
+$("#ctxPrioritise").addEventListener("click", ()=>{ closeCtx(); toast("Coming soon."); });
+$("#ctxSaveCopy").addEventListener("click",   ()=>{ closeCtx(); toast("Coming soon."); });
+
 /* ─────────────────────────────── BOOT ──────────────────────────────────── */
 (async()=>{
   await ensureLibraryWorkspace();
   await loadDocIndex();   // Stage C — index map before the tree paints its dots/chips
   await initFileTree();   // Stage B — live file tree (readDir/homePath)
-  // Stage D attaches here: REPL chat (streamChat) + context-menu actions.
+  navHist.stack = []; navHist.idx = -1;   // discard the implicit init folder-load — Home is the history root
+  await showStatusDoc();  // open to the AMAdocs status doc (index/db/model/version)
 })();
 </script>
 </body>
