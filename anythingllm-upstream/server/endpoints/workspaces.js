@@ -131,6 +131,14 @@ async function buildAmadocsStatus() {
     /* ignore */
   }
 
+  // ---- indexing pace (the user-set rest between summaries; Homepage slider) ----
+  let paceMs = 30000;
+  try {
+    paceMs = Gnome.getPaceMs();
+  } catch (_) {
+    /* keep the default if the bridge can't report it */
+  }
+
   // ---- structured data (consumed by the homepage; mirrors the markdown below) ----
   const data = {
     generatedAt: Date.now(),
@@ -139,6 +147,7 @@ async function buildAmadocsStatus() {
     gnome: { connected: gnomeUp },
     library: { totalDocs, workspaces: wsRows.length, wsRows },
     synced,
+    pace: { summaryCooldownMs: paceMs },
   };
 
   // ---- assemble ----
@@ -561,6 +570,44 @@ function workspaceEndpoints(app) {
         return response.status(result.ok ? 200 : 400).json(result);
       } catch (e) {
         console.error("[analyse-file] error:", e);
+        response.status(500).json({ ok: false, error: e.message });
+      }
+    }
+  );
+
+  // AMAdocs: "Re-summarise" — (re)generate the granite per-doc summary for already-indexed
+  // files. The cadence only re-touches new/changed files, so files indexed before
+  // summaries-by-default (or before a summary prompt/model change) never (re)gain a summary on
+  // their own. GnomeBridge.resummarize stamps them as "changed"; we then kick ONE bounded
+  // runSync to start re-summarising now, and the background cadence drains the rest — the same
+  // serial/capped/cooled/durable path as the backfill. Body: { onlyMissing?=true }.
+  app.post(
+    "/workspace/:slug/resummarize",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { slug = null } = request.params;
+        const { onlyMissing = true } = reqBody(request);
+        const Gnome = require("../utils/GnomeBridge");
+
+        const flip = Gnome.resummarize(slug, { onlyMissing });
+        if (!flip.ok) return response.status(400).json(flip);
+        if (flip.flipped === 0)
+          return response.status(200).json({ ...flip, queued: 0, remaining: 0 });
+
+        // Re-read the folder from saved state so we drive the same path as the cadence cron.
+        const state = Gnome.loadState(slug);
+        const { status, body } = await Gnome.runSync({
+          slug,
+          folder: state.folder,
+          exclude: state.exclude ?? "/novels/",
+          limit: 0,
+          dryRun: false,
+          userId: response.locals?.user?.id ?? null,
+        });
+        return response.status(status).json({ ...flip, ...body });
+      } catch (e) {
+        console.error("[resummarize] error:", e);
         response.status(500).json({ ok: false, error: e.message });
       }
     }
@@ -2104,6 +2151,26 @@ function workspaceEndpoints(app) {
       } catch (e) {
         console.error("[amadocs-status] error:", e);
         response.status(500).json({ error: e.message });
+      }
+    }
+  );
+
+  // AMAdocs: set the indexing PACE — the rest the worker takes between summaries (the
+  // Homepage slider). One honest user-controlled knob for thermal/quiet trade-offs instead
+  // of brittle per-machine auto-tuning; persisted by GnomeBridge and read live on the next
+  // sync (no restart). Body: { summaryCooldownMs }. Returns the clamped value stored.
+  app.post(
+    "/amadocs-settings",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { summaryCooldownMs } = reqBody(request);
+        const Gnome = require("../utils/GnomeBridge");
+        const stored = Gnome.setPaceMs(summaryCooldownMs);
+        response.status(200).json({ ok: true, pace: { summaryCooldownMs: stored } });
+      } catch (e) {
+        console.error("[amadocs-settings] error:", e);
+        response.status(400).json({ ok: false, error: e.message });
       }
     }
   );

@@ -206,23 +206,56 @@ async function streamChatWithWorkspace(
     });
   });
 
-  const vectorSearchResults =
-    embeddingsCount !== 0
-      ? await VectorDb.performSimilaritySearch({
-          namespace: workspace.slug,
-          input: updatedMessage,
-          LLMConnector,
-          similarityThreshold: workspace?.similarityThreshold,
-          topN: workspace?.topN,
-          filterIdentifiers: pinnedDocIdentifiers,
-          rerank: workspace?.vectorSearchMode === "rerank",
-          scopePath,
-        })
-      : {
-          contextTexts: [],
-          sources: [],
-          message: null,
-        };
+  // AMAdocs (summary-search redesign): route by scope. BREADTH scope (a folder prefix —
+  // scopePath ends with "/", or whole-workspace when null) retrieves over per-document
+  // SUMMARY vectors → one librarian card per document, the "AI librarian by default" view.
+  // FILE/DEEP scope (an exact file path) keeps chunk retrieval — the click-in "deep search"
+  // — plus the Option-A summary injection below. If the summary table isn't built yet
+  // (corpus not backfilled), summarySearch returns {empty:true} and we fall back to chunk
+  // search so breadth chat still works during rollout. See [[llm-search-redesign]].
+  const isFileScope = !!scopePath && !String(scopePath).endsWith("/");
+  const useSummarySearch = !isFileScope;
+  let vectorSearchResults;
+  if (embeddingsCount === 0) {
+    vectorSearchResults = { contextTexts: [], sources: [], message: null };
+  } else if (useSummarySearch) {
+    // Summary vectors are broad/document-level, so their cosine similarities run lower
+    // than chunk vectors — the chunk default (0.25) silently drops good matches (an eval
+    // over /STEM: rare-term queries like "microbit" sit ~0.2). A summary-specific floor
+    // of 0.20 took Recall@5 0.857→1.000 on that set. Tunable for the Homepage panel.
+    const summarySimThreshold =
+      Number(process.env.AMADOCS_SUMMARY_SIM_THRESHOLD) || 0.2;
+    vectorSearchResults = await VectorDb.summarySearch({
+      namespace: workspace.slug,
+      input: updatedMessage,
+      LLMConnector,
+      similarityThreshold: summarySimThreshold,
+      topN: Math.max(Number(workspace?.topN) || 4, 10),
+      scopePath,
+    });
+    if (vectorSearchResults?.empty)
+      vectorSearchResults = await VectorDb.performSimilaritySearch({
+        namespace: workspace.slug,
+        input: updatedMessage,
+        LLMConnector,
+        similarityThreshold: workspace?.similarityThreshold,
+        topN: workspace?.topN,
+        filterIdentifiers: pinnedDocIdentifiers,
+        rerank: workspace?.vectorSearchMode === "rerank",
+        scopePath,
+      });
+  } else {
+    vectorSearchResults = await VectorDb.performSimilaritySearch({
+      namespace: workspace.slug,
+      input: updatedMessage,
+      LLMConnector,
+      similarityThreshold: workspace?.similarityThreshold,
+      topN: workspace?.topN,
+      filterIdentifiers: pinnedDocIdentifiers,
+      rerank: workspace?.vectorSearchMode === "rerank",
+      scopePath,
+    });
+  }
 
   // Failed similarity search if it was run at all and failed.
   if (!!vectorSearchResults.message) {
@@ -254,6 +287,26 @@ async function streamChatWithWorkspace(
   // TLDR; reduces GitHub issues for "LLM citing document that has no answer in it" while keep answers highly accurate.
   contextTexts = [...contextTexts, ...filledSources.contextTexts];
   sources = [...sources, ...vectorSearchResults.sources];
+
+  // AMAdocs (Option A — summary-grounded chat): when chat is scoped to a single file,
+  // prepend that file's stored aiSummary (built from its title page + opening) as a
+  // whole-document overview. Similarity search only retrieves chunks that match the
+  // question, so the orienting title/opening pages are often absent; the summary fills
+  // that gap. Added to contextTexts only (NOT sources) so it grounds the answer without
+  // creating a citation that can't be jumped to a page. No-op for folder scope (trailing
+  // slash), unscoped chat, or files without a summary (bridged/GNOME docs, images).
+  if (scopePath && !String(scopePath).endsWith("/")) {
+    const aiSummary = await VectorDb.aiSummaryForPath({
+      namespace: workspace.slug,
+      sourcePath: scopePath,
+    });
+    if (aiSummary)
+      contextTexts.unshift(
+        `Overview of the document being discussed (use this for what the document is ` +
+          `and what it covers; answer specific questions from the excerpts below and ` +
+          `cite those excerpts):\n${aiSummary}`
+      );
+  }
 
   // If in query mode and no context chunks are found from search, backfill, or pins -  do not
   // let the LLM try to hallucinate a response or use general knowledge and exit early

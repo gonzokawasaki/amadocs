@@ -40,7 +40,8 @@ on top. Files are never modified; all AI data lives in a separate local database
 ## Status
 
 🚧 Early development, GNOME (Linux) first. The engine works end-to-end, fully offline.
-Aimed at technical early adopters for now; non-technical zero-config users are the destination.
+Aimed at technical Linux users who like to tweak their tools — every setting, the prompts, and
+the CSS are exposed for customisation. (Zero-config-for-non-technical-users is no longer a goal.)
 
 ## Built on
 

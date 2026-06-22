@@ -37,6 +37,44 @@ const syncStateDir =
 const docSubfolder = (slug) => `gnome-${slug}`;
 const stateFile = (slug) => path.join(syncStateDir, `${slug}.json`);
 
+// AMAdocs: indexing PACE — the rest the worker takes between documents during summary
+// generation / indexing. Each summarised doc fires one granite /generate (sustained GPU);
+// on a thermally-constrained machine (e.g. an old laptop with a tired battery) a longer
+// rest keeps the box cool and quiet at the cost of a slower backfill — the user's call, not
+// ours. We deliberately DON'T try to auto-tune this per machine (temp watchdogs / charge
+// caps are brittle across hardware); we just expose one honest knob (Homepage slider) with a
+// conservative default and let the user pick. Persisted to a tiny JSON file so it survives
+// relaunch and the boot resume picks it up. runSync reads it live (once per batch), so a
+// slider change applies on the next sync with no restart.
+const settingsFile = path.join(syncStateDir, "amadocs-settings.json");
+const DEFAULT_PACE_MS = 30000; // fairly conservative: ~30s rest between summaries
+const MAX_PACE_MS = 600000; // 10 min ceiling — past this a backfill is effectively paused
+const clampPace = (n) =>
+  Number.isFinite(n) ? Math.min(MAX_PACE_MS, Math.max(0, Math.round(n))) : null;
+
+// Effective per-doc rest in ms. Precedence: the user's saved slider value > an explicit
+// GNOME_SYNC_COOLDOWN_MS launch override (back-compat) > the conservative default.
+function getPaceMs() {
+  try {
+    const saved = JSON.parse(fs.readFileSync(settingsFile, "utf8"))?.summaryCooldownMs;
+    const c = clampPace(Number(saved));
+    if (c !== null) return c;
+  } catch (_) {
+    /* no saved setting yet — fall through */
+  }
+  const env = clampPace(Number(process.env.GNOME_SYNC_COOLDOWN_MS));
+  return env !== null ? env : DEFAULT_PACE_MS;
+}
+
+// Persist the user's chosen pace. Returns the clamped value actually stored.
+function setPaceMs(ms) {
+  const c = clampPace(Number(ms));
+  if (c === null) throw new Error("pace must be a number of milliseconds");
+  fs.mkdirSync(syncStateDir, { recursive: true });
+  fs.writeFileSync(settingsFile, JSON.stringify({ summaryCooldownMs: c }, null, 2));
+  return c;
+}
+
 function sparql(query) {
   const tmp = path.join(os.tmpdir(), `tsp-${crypto.randomBytes(4).toString("hex")}.rq`);
   fs.writeFileSync(tmp, query);
@@ -230,7 +268,7 @@ WHERE { ?do nie:url <${url}> . ?ie nie:isStoredAs ?do ; nie:plainTextContent ?t 
 // never undefined). LanceDB fixes the collection's Arrow schema from the first
 // embedded doc; a later single-chunk doc that OMITS a column makes .add() build a
 // malformed 0-byte Utf8 buffer and the whole insert throws.
-function buildDoc(meta, text, source = "tinysparql", pages = null) {
+function buildDoc(meta, text, source = "tinysparql", pages = null, aiSummary = "") {
   const fsPath = decodeURIComponent(meta.u.replace(/^file:\/\//, ""));
   const filename = path.basename(fsPath);
   const backstop = source === "collector-backstop";
@@ -254,6 +292,12 @@ function buildDoc(meta, text, source = "tinysparql", pages = null) {
     // still works (text-match in the rendered PDF via doc-original's sourcePath
     // fallback); only the p.N chip label is absent. Disk-only (doc-view), not Lance.
     pages: Array.isArray(pages) ? pages : [],
+    // AMAdocs: the ~120-word "catalog card" gist (built from the doc's opening by the
+    // local LLM). Default "" when summarising is off/failed/the text is too short, so the
+    // LanceDB key set stays identical across every doc (a missing column corrupts the
+    // collection's Arrow schema). Consumed by the UI summary card, the Option-A summary-
+    // grounded chat (aiSummaryForPath), and — next — the per-doc summary search vector.
+    aiSummary: aiSummary || "",
     amadocsSource: source,
     sourceMime: meta.mime,
     sourcePath: fsPath,
@@ -274,11 +318,39 @@ function writeDoc(slug, doc) {
   return `${sub}/${safe}`;
 }
 
-// Build + write a doc for one url, returning its docpath (or null if no text).
-function materialize(slug, url) {
+// AMAdocs: per-doc "catalog card" summary on the ride-on-GNOME path. This is the GATE
+// for both summary-vector breadth search AND the Option-A summary-grounded chat — without
+// it the bulk-indexed corpus has no aiSummary and both are silent no-ops. Best-effort and
+// already bounded: DocSummary caps input to the first ~5 pages / 8000 chars and output to
+// ~120 words, and it runs one Ollama /generate per doc INSIDE the serial, GNOME_SYNC_CAP-
+// bounded runSync loop, so it adds no new unbounded/parallel work (THE #1 RULE). Off
+// switch: GNOME_SUMMARY_DISABLED=1. Returns "" on disable/failure/too-short input (e.g. an
+// image whose short vision caption already IS its gist) so buildDoc always stores a string.
+// Model resolves from SUMMARY_MODEL_PREF / OLLAMA_MODEL_PREF (granite4.1:3b on this box).
+const summariesDisabled = () =>
+  String(process.env.GNOME_SUMMARY_DISABLED || "") === "1";
+
+async function summariseDoc(text, { title = "", pages = null } = {}) {
+  if (summariesDisabled()) return "";
+  try {
+    const DocSummary = require("../DocSummary");
+    const summary = await new DocSummary().summarize(text, { title, pages });
+    return summary || "";
+  } catch (e) {
+    console.error("[gnome-sync] summary:", e.message);
+    return "";
+  }
+}
+
+// Build + write a doc for one url, returning its docpath (or null if no text). Async
+// because it summarises the extracted text first (see summariseDoc).
+async function materialize(slug, url) {
   const text = fetchText(url);
   if (!text.trim()) return null;
-  return writeDoc(slug, buildDoc(fetchMeta(url), text));
+  const meta = fetchMeta(url);
+  const title = meta.title || path.basename(decodeURIComponent(url.replace(/^file:\/\//, "")));
+  const aiSummary = await summariseDoc(text, { title });
+  return writeDoc(slug, buildDoc(meta, text, "tinysparql", null, aiSummary));
 }
 
 // Fallback mime by extension, for files GNOME has no node for (e.g. an image
@@ -326,7 +398,13 @@ async function materializeViaCollector(slug, url) {
     meta.mime = EXT_MIME[path.extname(fsPath).toLowerCase()] || meta.mime;
   // asPDF emits per-page char ranges; carry them so backstop PDFs (scanned / OCR'd /
   // empty-text) get the p.N citation label. Other extractors omit pages → buildDoc []s it.
-  return writeDoc(slug, buildDoc(meta, text, "collector-backstop", doc?.pages));
+  // Summarise from the same pages so the input cap respects real page boundaries; short
+  // image OCR/caption text (< 200 chars) returns "" and the caption stays the gist.
+  const aiSummary = await summariseDoc(text, {
+    title: meta.title || filename,
+    pages: doc?.pages,
+  });
+  return writeDoc(slug, buildDoc(meta, text, "collector-backstop", doc?.pages, aiSummary));
 }
 
 function loadState(slug) {
@@ -374,6 +452,14 @@ function listSyncedSlugs() {
     return [];
   }
 }
+
+// AMAdocs: one in-flight sync per folder. The EXECUTE loop can run for a long time at a
+// gentle indexing pace, and for most of it NO embed worker is active — so without this a
+// cadence tick (which only guards on Embed.hasRunningWorker) could start a SECOND pass over
+// the same folder mid-materialize: two granite loops = double GPU heat, the opposite of the
+// pace knob's purpose. Held across the materialize loop; released once embedding is dispatched
+// (the embed phase is then guarded by hasRunningWorker as before). THE #1 RULE.
+const inFlight = new Set();
 
 // AMAdocs: the durable "ride on GNOME" sync orchestration, extracted so BOTH the
 // gnome-sync HTTP endpoint and the background cadence scheduler drive ONE code path
@@ -470,6 +556,19 @@ async function runSync(opts = {}) {
     for (const d of deleted) delete nextFiles[d.url];
   }
 
+  // ---- RESUME materialized-but-unconfirmed docs (per-doc checkpoint recovery) ----
+  // A doc marked pendingEmbed had its (expensive, GPU) summary generated + written to disk
+  // in a prior pass but was interrupted before the embed was confirmed. Re-embed the SAME
+  // docpath now — never re-run granite. Only resume ones still present + unchanged; a doc
+  // that changed again is already in toDelete/toEmbed and gets re-materialized fresh.
+  const curUrls = new Set(current.map((c) => c.url));
+  const planned = new Set(toEmbed.map((e) => e.url));
+  const toResume = [];
+  for (const [url, e] of Object.entries(nextFiles)) {
+    if (e && e.pendingEmbed && e.docpath && curUrls.has(url) && !planned.has(url))
+      toResume.push({ url, mtime: e.mtime, docpath: e.docpath });
+  }
+
   // ---- BOUND the per-call work (THE #1 RULE) ----
   let remaining = 0;
   const explicitLimit = limit > 0;
@@ -502,75 +601,136 @@ async function runSync(opts = {}) {
   // scheduler's own runs pass fromScheduler:true and must NOT clear it.
   if (!fromScheduler) Embed.setIngestPaused(false);
 
-  // ---- EXECUTE (async, durable, finalize-on-confirm) ----
-  if (toDelete.length > 0)
-    await Document.removeDocuments(currWorkspace, toDelete, userId);
+  // Serial ingest (THE #1 RULE). Bail if a pass is already materializing for this folder
+  // (inFlight) OR any embed worker is still running machine-wide — the latter also closes a
+  // race: the lock is released once embedding is dispatched, but a resumed doc stays
+  // pendingEmbed until its embed is CONFIRMED, so a second pass entering during that window
+  // could re-embed an in-flight doc (duplicate vectors). While a worker runs, no new pass
+  // proceeds. A second caller backs off; the cadence just retries next tick.
+  if (inFlight.has(slug) || Embed.hasRunningWorker())
+    return {
+      status: 409,
+      body: { busy: true, error: "Indexing is already in progress." },
+    };
+  inFlight.add(slug);
+  try {
+    // ---- EXECUTE (async, durable, finalize-on-confirm) ----
+    if (toDelete.length > 0) {
+      // Capture sourcePaths BEFORE the docs are removed, then drop their summary cards too.
+      const goneSourcePaths = toDelete
+        .map((dp) => readDocMeta(dp)?.sourcePath)
+        .filter(Boolean);
+      await Document.removeDocuments(currWorkspace, toDelete, userId);
+      await deleteSummaryVectors(slug, goneSourcePaths);
+    }
 
-  const pending = new Map();
-  const adds = [];
-  for (const { url, mtime } of toEmbed) {
-    // GNOME-text files read their extracted text directly; blind spots go through the
-    // collector backstop (its own parser/OCR). Source is resolved from the current
-    // listing (defaults to gnome for delta items whose source map entry is present).
-    const docpath =
-      sourceByUrl.get(url) === "collector"
-        ? await materializeViaCollector(slug, url)
-        : materialize(slug, url);
-    if (docpath) {
+    // Per-doc thermal rest — the user-set indexing PACE (Homepage slider; see getPaceMs).
+    // Each materialize() fires one granite /generate (the summary), which pins the GPU;
+    // back-to-back over a few hundred docs is what heats a thermally-constrained box during
+    // a bulk backfill. The rest between docs lets the GPU shed heat without parallelising
+    // anything (still serial — THE #1 RULE). Read live each batch so a slider change takes
+    // effect on the next sync. Disabled when summaries are off (no GPU work to pace).
+    const docCooldownMs = summariesDisabled() ? 0 : getPaceMs();
+
+    const persist = () =>
+      saveState(slug, {
+        folder,
+        exclude,
+        slug,
+        lastSync: new Date().toISOString(),
+        files: nextFiles,
+      });
+
+    const pending = new Map();
+    const adds = [];
+
+    // Resume docs whose summary was already generated last pass (embed-only, no granite).
+    for (const { url, mtime, docpath } of toResume) {
       adds.push(docpath);
       pending.set(docpath, { url, mtime });
     }
-    // else: text vanished / not extractable — leave ABSENT so it's retried next sync.
-  }
 
-  const persist = () =>
-    saveState(slug, {
-      folder,
-      exclude,
-      slug,
-      lastSync: new Date().toISOString(),
-      files: nextFiles,
-    });
-  persist();
+    for (const { url, mtime } of toEmbed) {
+      // Hard STOP mid-pass: halt granite immediately (a long pace makes this loop long-lived,
+      // so without this check STOP would keep summarising for the rest of the batch). Already-
+      // materialized docs are checkpointed below, so they resume cleanly on the next sync.
+      if (Embed.isIngestPaused()) break;
+      // GNOME-text files read their extracted text directly; blind spots go through the
+      // collector backstop (its own parser/OCR). Source is resolved from the current
+      // listing (defaults to gnome for delta items whose source map entry is present).
+      const docpath =
+        sourceByUrl.get(url) === "collector"
+          ? await materializeViaCollector(slug, url)
+          : await materialize(slug, url);
+      if (docpath) {
+        adds.push(docpath);
+        pending.set(docpath, { url, mtime });
+        // CHECKPOINT the expensive summary the instant it's written: record the doc as
+        // pendingEmbed so an interruption before the embed is confirmed re-embeds THIS
+        // docpath next pass instead of re-running granite. Cleared to a plain done-entry in
+        // onDocComplete. This is what makes GNOME_SYNC_CAP irrelevant to durability, so the
+        // user only ever needs the one pace knob.
+        nextFiles[url] = { docpath, mtime, pendingEmbed: true };
+        try {
+          persist();
+        } catch (err) {
+          console.error("[gnome-sync] persist:", err.message);
+        }
+        if (docCooldownMs) await sleep(docCooldownMs); // rest only after real GPU work
+      }
+      // else: text vanished / not extractable — leave ABSENT so it's retried next sync.
+    }
 
-  if (adds.length > 0 && Embed.isNativeEmbedder()) {
-    await Embed.embedFiles(currWorkspace.slug, adds, currWorkspace.id, userId, {
-      onDocComplete: (docpath) => {
-        const e = pending.get(docpath);
-        if (!e) return;
+    persist(); // persist deletions / dormant refreshes even if nothing materialized
+
+    // If STOP arrived during the loop, do NOT dispatch a fresh embed worker (it would defeat
+    // the kill switch). The materialized docs stay pendingEmbed and resume on the next sync.
+    const paused = Embed.isIngestPaused();
+
+    if (adds.length > 0 && !paused && Embed.isNativeEmbedder()) {
+      await Embed.embedFiles(currWorkspace.slug, adds, currWorkspace.id, userId, {
+        onDocComplete: (docpath) => {
+          const e = pending.get(docpath);
+          if (!e) return;
+          nextFiles[e.url] = { docpath, mtime: e.mtime }; // confirmed → drop pendingEmbed
+          try {
+            persist();
+          } catch (err) {
+            console.error("[gnome-sync] persist:", err.message);
+          }
+        },
+        onComplete: () => {
+          try {
+            persist();
+          } catch (err) {
+            console.error("[gnome-sync] persist:", err.message);
+          }
+        },
+      });
+    } else if (adds.length > 0 && !paused) {
+      await Document.addDocuments(currWorkspace, adds, userId);
+      for (const [docpath, e] of pending)
         nextFiles[e.url] = { docpath, mtime: e.mtime };
-        try {
-          persist();
-        } catch (err) {
-          console.error("[gnome-sync] persist:", err.message);
-        }
-      },
-      onComplete: () => {
-        try {
-          persist();
-        } catch (err) {
-          console.error("[gnome-sync] persist:", err.message);
-        }
-      },
-    });
-  } else if (adds.length > 0) {
-    await Document.addDocuments(currWorkspace, adds, userId);
-    for (const [docpath, e] of pending)
-      nextFiles[e.url] = { docpath, mtime: e.mtime };
-    persist();
-  }
+      persist();
+    }
 
-  return {
-    status: 202,
-    body: {
-      mode,
-      indexed: current.length,
-      queued: adds.length,
-      deleted: toDelete.length,
-      remaining,
-      tracked: Object.keys(nextFiles).length,
-    },
-  };
+    // Mirror the freshly-embedded docs into the summary-vector table (breadth search).
+    if (adds.length > 0 && !paused) await upsertSummaryVectors(slug, adds);
+
+    return {
+      status: 202,
+      body: {
+        mode,
+        indexed: current.length,
+        queued: adds.length,
+        deleted: toDelete.length,
+        remaining,
+        tracked: Object.keys(nextFiles).length,
+      },
+    };
+  } finally {
+    inFlight.delete(slug);
+  }
 }
 
 // AMAdocs: on-demand single-file backstop for the right-click "analyse with AI" action.
@@ -628,6 +788,9 @@ async function backstopFile(slug, fsPath, { userId = null } = {}) {
     await Embed.embedFiles(currWorkspace.slug, [docpath], currWorkspace.id, userId, {});
   else await Document.addDocuments(currWorkspace, [docpath], userId);
 
+  // Refresh this file's summary card (idempotent by sourcePath → replaces any deduped one).
+  await upsertSummaryVectors(slug, [docpath]);
+
   const ext = path.extname(fsPath).toLowerCase();
   const state = loadState(slug);
   if (
@@ -648,9 +811,113 @@ async function backstopFile(slug, fsPath, { userId = null } = {}) {
   return { ok: true, docpath };
 }
 
+// AMAdocs: read a stored gnome doc JSON and report whether it carries a real aiSummary.
+// Best-effort — a missing/unreadable doc counts as "no summary" so it gets re-processed.
+function docHasSummary(docpath) {
+  try {
+    const doc = JSON.parse(
+      fs.readFileSync(path.join(documentsPath, docpath), "utf8")
+    );
+    return typeof doc.aiSummary === "string" && doc.aiSummary.trim().length > 0;
+  } catch (_) {
+    return false;
+  }
+}
+
+// AMAdocs (summary-search): read the fields the summary-vector table needs from a stored
+// gnome doc JSON. Best-effort — returns null on any read/parse failure.
+function readDocMeta(docpath) {
+  try {
+    const doc = JSON.parse(
+      fs.readFileSync(path.join(documentsPath, docpath), "utf8")
+    );
+    return {
+      sourcePath: doc.sourcePath || "",
+      aiSummary: typeof doc.aiSummary === "string" ? doc.aiSummary : "",
+      title: doc.title || "",
+      amadocsSource: doc.amadocsSource || "",
+      sourceMime: doc.sourceMime || "",
+      pageCount: doc.pageCount || 0,
+    };
+  } catch (_) {
+    return null;
+  }
+}
+
+// AMAdocs (summary-search): keep the per-document summary-vector table ("<slug>__summaries")
+// in lockstep with the chunk embeds/deletes on the gnome-sync path so breadth (folder/drive)
+// chat searches a current set of cards. Embeds-only (NativeEmbedder) and best-effort — a
+// failure here is logged and never breaks ingest (THE #1 RULE: still serial, no new worker).
+async function upsertSummaryVectors(slug, docpaths = []) {
+  if (summariesDisabled() || !docpaths.length) return;
+  try {
+    const { getVectorDbClass } = require("../helpers");
+    const VectorDb = getVectorDbClass();
+    if (typeof VectorDb.upsertSummaryVector !== "function") return;
+    for (const dp of docpaths) {
+      const m = readDocMeta(dp);
+      if (!m || !m.sourcePath || !m.aiSummary.trim()) continue;
+      await VectorDb.upsertSummaryVector({ namespace: slug, ...m });
+    }
+  } catch (e) {
+    console.error("[gnome-sync] summary-vector upsert:", e.message);
+  }
+}
+
+async function deleteSummaryVectors(slug, sourcePaths = []) {
+  if (!sourcePaths.length) return;
+  try {
+    const { getVectorDbClass } = require("../helpers");
+    const VectorDb = getVectorDbClass();
+    if (typeof VectorDb.deleteSummaryVector !== "function") return;
+    for (const sp of sourcePaths) {
+      if (!sp) continue;
+      await VectorDb.deleteSummaryVector({ namespace: slug, sourcePath: sp });
+    }
+  } catch (e) {
+    console.error("[gnome-sync] summary-vector delete:", e.message);
+  }
+}
+
+// AMAdocs: "Re-summarise" — force the granite summary step to re-run over already-indexed
+// files. The mtime-based delta (computeDelta) only re-selects NEW or CHANGED files, so a file
+// indexed before summaries-by-default (or before a summary prompt/model change) is invisible
+// to the cadence and would never (re)gain a summary on its own — the typical user never hits
+// this (they index on a summaries-by-default build), but anyone who indexed with
+// GNOME_SUMMARY_DISABLED=1 first, or who later changes the summary prompt/model, does.
+// This stamps the SAVED mtime to "" for the matching tracked files, which makes the next
+// runSync treat them as "changed" → delete-old + re-embed + re-summarise through the EXACT
+// same serial / capped (GNOME_SYNC_CAP) / cooled-down (GNOME_SYNC_COOLDOWN_MS) / durable path
+// as the backfill — no new ingest machinery, THE #1 RULE intact. It does NOT embed; the caller
+// drives runSync, and the background cadence drains whatever exceeds one bounded pass.
+//   onlyMissing=true  → stamp only files whose stored doc has an EMPTY aiSummary (backfill
+//                       the gaps). false → ALL tracked files (e.g. after changing the prompt).
+// Returns { ok, flipped, total } (or { ok:false, error } when summaries are off / no state).
+function resummarize(slug, { onlyMissing = true } = {}) {
+  if (summariesDisabled())
+    return { ok: false, error: "Summaries are disabled (GNOME_SUMMARY_DISABLED=1)." };
+  const state = loadState(slug);
+  if (!state || !state.files || !Object.keys(state.files).length)
+    return { ok: false, error: "This folder has not been indexed yet." };
+
+  let flipped = 0;
+  let total = 0;
+  for (const [url, e] of Object.entries(state.files)) {
+    if (!e || !e.docpath) continue; // only files actually embedded can be re-summarised
+    total++;
+    if (onlyMissing && docHasSummary(e.docpath)) continue;
+    if (!e.mtime) continue; // already stamped (a prior resummarize still pending) — leave it
+    state.files[url] = { ...e, mtime: "" }; // force computeDelta → "changed"
+    flipped++;
+  }
+  if (flipped > 0) saveState(slug, state);
+  return { ok: true, flipped, total };
+}
+
 module.exports = {
   available, ensureIndexer, queryFileList, queryBlindSpots, fetchMeta, fetchText,
   buildDoc, writeDoc, materialize, materializeViaCollector, pathToFileUrl,
   loadState, saveState, computeDelta, docSubfolder,
-  listSyncedSlugs, runSync, backstopFile,
+  listSyncedSlugs, runSync, backstopFile, resummarize,
+  getPaceMs, setPaceMs,
 };

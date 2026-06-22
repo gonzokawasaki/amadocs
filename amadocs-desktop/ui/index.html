@@ -554,6 +554,12 @@
       color:var(--text); font-family:inherit; font-size:0.79rem; padding:0.43rem 0.86rem; cursor:pointer; transition:.12s;
     }
     .home-act:hover { border-color:var(--accent); color:var(--accent); }
+    .home-pace { background:var(--bg-hover); border:1px solid var(--border); border-radius:var(--radius); padding:0.71rem 0.86rem; }
+    .home-pace__row { display:flex; align-items:center; gap:0.71rem; }
+    .home-pace__slider { flex:1; min-width:6rem; accent-color:var(--accent); cursor:pointer; }
+    .home-pace__val { font-family:var(--font-mono,monospace); font-size:0.79rem; font-weight:600; color:var(--text); min-width:6.5rem; text-align:right; }
+    .home-pace__ends { display:flex; justify-content:space-between; font-size:0.6rem; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); margin-top:0.21rem; }
+    .home-pace__hint { font-size:0.71rem; color:var(--text-muted); margin-top:0.43rem; }
 
     /* ── RIGHT: AI REPL ───────────────────────────────────────────────── */
     .right {
@@ -1387,6 +1393,15 @@ async function analyseFile(entryPath){
   let d={}; try{ d=await r.json(); }catch(_){}
   return {ok:r.ok && !!d.ok, ...d};
 }
+// Re-summarise: regenerate the granite summary for already-indexed files that are missing one
+// (or all, onlyMissing=false). Server stamps them "changed" then kicks a bounded sync; the
+// cadence drains the rest. Bounded + stoppable (THE #1 RULE). Returns {ok, flipped, queued, ...}.
+async function apiResummarize(onlyMissing=true){
+  const r=await fetch(`${API}/workspace/${WS_SLUG}/resummarize`,{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({onlyMissing})});
+  let d={}; try{ d=await r.json(); }catch(_){}
+  return {ok:r.ok && d.ok!==false, ...d};
+}
 
 /* ═══════════════════════ DOCUMENT RENDERERS (carried) ═══════════════════
    Render a retained original into a container (the preview .docarea). PDF uses
@@ -1525,6 +1540,14 @@ function homeCard(label, big, sub){
   return `<div class="home-card"><div class="home-card__label">${esc(label)}</div>
     <div class="home-card__big">${big}</div><div class="home-card__sub">${sub}</div></div>`;
 }
+// Human label for an indexing-pace value (ms of rest between summaries).
+function fmtPace(ms){
+  const s = Math.round((ms||0)/1000);
+  if(s<=0) return "No rest (fastest)";
+  if(s<60) return `${s}s rest / file`;
+  const m=Math.floor(s/60), r=s%60;
+  return r ? `${m}m ${r}s rest / file` : `${m}m rest / file`;
+}
 function renderHomeHtml(d){
   d = d || {};
   const eng=d.engine||{}, model=d.model||{}, gn=d.gnome||{}, lib=d.library||{}, synced=d.synced||[];
@@ -1538,6 +1561,20 @@ function renderHomeHtml(d){
     homeCard("Model", esc(model.chat||"—"), `chat · via ${esc(eng.llmProvider||"ollama")}`) +
     homeCard("Engine", `v${esc(eng.version||"?")}`,
       `Node ${esc(eng.node||"")} · ${esc(eng.vectorDb||"lancedb")}`);
+  const paceMs = (d.pace && Number(d.pace.summaryCooldownMs)) || 0;
+  const paceS = Math.round(paceMs/1000);
+  const paceHtml = `<div class="home-pace">
+      <div class="home-pace__row">
+        <input type="range" class="home-pace__slider" id="paceSlider" min="0" max="120" step="5"
+          value="${paceS}" oninput="homePaceInput(this.value)" onchange="homeSetPace(this.value)">
+        <span class="home-pace__val" id="paceVal">${esc(fmtPace(paceMs))}</span>
+      </div>
+      <div class="home-pace__ends"><span>⚡ Fast</span><span>Gentle &amp; cool ❄</span></div>
+      <div class="home-pace__hint">How long the AI rests between files. A longer rest lets the machine cool
+        between files — both the GPU (writing summaries) and the CPU (building the search index) — so it keeps an
+        older / hot-running laptop cool and quiet during a big background index; it just takes longer to finish
+        (fine to leave running overnight). Applies to the next file; no restart needed.</div>
+    </div>`;
   const syncedHtml = synced.length
     ? `<ul class="home-synced">` + synced.map(s =>
         `<li><span class="home-synced__path">${esc(s.folder||"?")}</span>
@@ -1556,9 +1593,11 @@ function renderHomeHtml(d){
       <div class="home-actions">
         <button class="home-act" onclick="homeBrowseFiles()">🗂 Browse my files</button>
         <button class="home-act" onclick="homeIndexFolder()">＋ Index a folder…</button>
+        <button class="home-act" onclick="homeResummarize()" title="Generate AI summaries for indexed files that are missing one (runs granite in the background, bounded + stoppable)">🧠 Re-summarise files</button>
         <button class="home-act" onclick="showStatusDoc()">⟳ Refresh status</button>
       </div>
     </div>
+    <div class="home-sec"><h3 class="home-h">Indexing pace</h3>${paceHtml}</div>
   </div>`;
 }
 async function showStatusDoc(){
@@ -1597,6 +1636,32 @@ async function homeIndexFolder(){
   if(!dir) return;
   await selectFolder(dir, baseName(dir));
   await onSyncFolder();
+}
+async function homeResummarize(){
+  toast("Re-summarising — checking which indexed files need a summary…");
+  const res = await apiResummarize(true);
+  if(!res.ok){ toast(res.error || "Re-summarise unavailable."); return; }
+  if(res.flipped === 0){ toast("Every indexed file already has a summary. ✓"); return; }
+  const rem = res.remaining || 0;
+  toast(`Re-summarising ${res.queued ?? res.flipped} file(s)${rem?` · ${rem} more after`:""}. Runs in the background; summaries fill in as it completes.`);
+  setTimeout(showStatusDoc, 4000); // refresh the homepage so the Library card reflects progress
+}
+// Indexing pace (Homepage slider): the rest between summaries. Live-update the label on drag;
+// persist on release. Server reads it on the next sync — no restart, no scripts.
+async function apiSetPace(ms){
+  const r=await fetch(`${API}/amadocs-settings`,{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({summaryCooldownMs:ms})});
+  let d={}; try{ d=await r.json(); }catch(_){}
+  return {ok:r.ok && d.ok!==false, ...d};
+}
+function homePaceInput(secs){
+  const v=$("#paceVal"); if(v) v.textContent=fmtPace(Number(secs)*1000);
+}
+async function homeSetPace(secs){
+  const ms=Math.max(0,Number(secs))*1000;
+  const res=await apiSetPace(ms);
+  if(!res.ok){ toast(res.error || "Couldn't save indexing pace."); return; }
+  toast(`Indexing pace saved — ${fmtPace(ms)}. Takes effect on the next file (no restart).`);
 }
 async function renderDocxInto(container, blob, docpath){
   try{
