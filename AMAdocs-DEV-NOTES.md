@@ -20,9 +20,404 @@ The **`p.N` citation label** is now restored for backstop PDFs (carry `asPDF`'s 
 **dryRun over-count is fixed** (empty-text files route to the backstop instead of being phantom-counted)
 — both 2026-06-21, verified live. The top-left **window-style dots are now real Home/Back/Forward nav
 buttons** and the launch surface is a proper **Homepage** (status cards + indexed-folders + quick actions),
-not the old read-only markdown status — both 2026-06-21, verified live in the Electron app. Open:
-**packaging** only (stale AppImage, icon, Windows/macOS). The "Phase 1 / Phase 2" labels below are
+not the old read-only markdown status — both 2026-06-21, verified live in the Electron app.
+**Summaries-by-default is now live on the GNOME-ride path** (2026-06-22): every gnome-sync'd doc gets a
+granite `aiSummary` (was collector/upload-only); test batch + the 40-doc /STEM eval folder backfilled and
+verified, and a real `aiSummaryForPath` query bug (unquoted DataFusion identifier) found + fixed so
+Option-A summary chat finally works — see the top entry. A **full-778 backfill is now in progress**
+(bounded cadence drain, ~4h, $0). Open: **packaging** (stale AppImage, icon, Windows/macOS) + the
+summary-search *routing* redesign this backfill unblocks. The "Phase 1 / Phase 2" labels below are
 historical build-stage names — the product is just AMAdocs now.
+
+## 🔬 FINDING (2026-06-22) — "GPU idle, CPU hot" = the heat is the native ONNX embedder, NOT granite
+
+User reported the last run kept the **GPU totally idle while the CPU ran hot** — the opposite of the
+thermal model the whole `[[thermal-throttle]]` saga (gpu-tempguard / "granite dominates") was built around.
+Traced where the work actually lands; the GPU model was never the CPU source:
+
+**granite (the LLM) runs fully on the GPU and barely touches the CPU.** Ollama journal, last real load
+(13:00:43): `load_tensors: offloaded 41/41 layers to GPU`, `CUDA0 model buffer size = 1998.84 MiB` (+320 KV
++67 compute ≈ 2.4 of 3.6 GiB resident at `num_ctx=4096`). systemd's own accounting confirms it:
+`ollama.service: Consumed 4min 50s CPU over 2h 55min wall`. So granite = brief GPU bursts, then GPU idle.
+
+**The sustained CPU load is the embedder.** `server/.env`: `EMBEDDING_ENGINE='native'` /
+`EMBEDDING_MODEL_PREF='Xenova/all-MiniLM-L6-v2'` → AnythingLLM's `NativeEmbedder`
+(`utils/EmbeddingEngines/native/index.js`) runs MiniLM through **`@xenova/transformers` 2.17.2 +
+`onnxruntime-node` 1.14.0 on the CPU** (CPU execution provider; no CUDA EP in the 1.14 npm build). onnxruntime
+intra-op defaults to the physical core count → it pins all **4 cores** of the i5-10300H (4C/8T) per chunk,
+per doc. That is the steady multi-second-per-doc load that reads 0% on `nvidia-smi`.
+
+**Why this run was GPU-idle the WHOLE time:** the recent work is the summary-vector backfill, and
+`server/_backfill_summaries.js` is by design *"Embeds only (NativeEmbedder, local/CPU — NO granite
+generation, thermally safe)."* An embeds-only pass invokes granite zero times → GPU dead idle → 100 % of the
+work falls on the CPU ONNX embedder. Exact match for the report.
+
+**Implication for the thermal controls:** `gpu-tempguard.sh` reads only `nvidia-smi` GPU temp → **blind to
+embedding heat** (this is *why* `chassis-monitor.sh` watching `x86_pkg_temp` exists, and why the live finding
+showed GPU 64–67 °C while pkg hit 84–89 °C). The **pace slider cooldown still helps** — resting between docs
+rests the CPU embedder too — but it's framed around granite/GPU; for an embeds-only pass granite isn't the
+variable, the per-doc rest still is. Net correction to the mental model: **two distinct heat sources** —
+granite→GPU (interactive chat, summary generation) and MiniLM→CPU (every embed, incl. the embeds-only
+summary-vector seed) — and the CPU one is the one that was running hot here.
+
+**Options to tame the CPU embedder (investigated, NOT yet implemented — user to choose):**
+- **Move embedding onto the GPU — NOT viable cheaply here.** `onnxruntime-node` is pinned at **1.14.0** (the
+  NativeEmbedder comment depends on its `dispose()`-is-a-noop behaviour) and that build is **CPU-only** (no
+  CUDA EP shipped). The only GPU path is switching `EMBEDDING_ENGINE='ollama'` to a GPU embed model
+  (`granite-embedding`/`nomic-embed-text`) — but that (a) changes the vector space/dim (MiniLM = 384-d) →
+  **forces a full re-embed of the whole corpus** (`amadocs-library.lance` + `__summaries`), and (b) competes
+  with granite for the 3.6 GiB VRAM and just **relocates heat to the worse-cooled GPU**. Rejected for now.
+- **Cap the CPU work (portable, recommended) — two flavours:** (1) OS-level: launch the node server under
+  `taskset -c 0-1` (limit to 2 of 4 cores) and/or `nice`/`systemd CPUQuota` in `tooling/start-stack.sh` — zero
+  code, cross-machine-safe, lowers peak heat at the cost of slower embeds (throttle-not-stop, same philosophy
+  as the pace slider); downside: throttles ALL server work, not just embedding. (2) onnxruntime intra-op
+  thread cap — fiddly: transformers.js 2.17 only cleanly exposes `env.backends.onnx.wasm.numThreads` (WASM
+  backend), not a per-session `intraOpNumThreads` for the node backend, so this needs a patch to how the
+  pipeline session is created. (1) is the clean win and fits the "one knob, works across machines" steer.
+
+## ✅ DONE (2026-06-22) — Indexing PACE: one user-set "rest between summaries" knob (heat, the simple way)
+
+Replaced the abandoned thermal-automation direction (temp watchdogs / chassis monitor / charge-cap
+systemd units — all brittle across machines, see [[thermal-throttle]]) with **one honest knob the user
+controls**, per the user's explicit steer: *"trying to build in lots of scripts that automate this is too
+difficult across many different machines — just let the user decide … managed by a simple timeout rest
+between sessions."* The lever is the existing per-doc cool-down (`GnomeBridge.runSync`'s `docCooldownMs`):
+each summarised doc fires one granite `/generate` (sustained GPU); a longer rest between docs keeps an
+old/hot laptop cool and quiet during a bulk backfill at the cost of wall-clock — fine to leave overnight.
+
+**What shipped (no scripts, no auto-tuning, no restart needed):**
+- **`GnomeBridge.getPaceMs()` / `setPaceMs(ms)`** (`utils/GnomeBridge/index.js`) — the pace is persisted to
+  a tiny `storage/gnome-sync/amadocs-settings.json` (`{summaryCooldownMs}`), clamped 0–600000 ms.
+  `getPaceMs` precedence: **saved slider value > explicit `GNOME_SYNC_COOLDOWN_MS` launch override
+  (back-compat) > conservative default 30000 ms**. `runSync` now reads `getPaceMs()` live (once per batch,
+  still `summariesDisabled() ? 0`), so a slider change applies on the **next** sync with no restart and the
+  boot-resume cadence picks up the saved value automatically. Default changed from 0 → **30 s** (≈10 h for
+  ~780 docs, ~40 % GPU duty) — "fairly conservative" out of the box.
+- **`POST /amadocs-settings {summaryCooldownMs}`** + `pace.summaryCooldownMs` added to the `/amadocs-status`
+  `data` (`endpoints/workspaces.js`).
+- **Homepage "Indexing pace" slider** (`tooling/amadocs-ui/index.html` → synced to `amadocs-desktop/ui/`):
+  range 0–120 s (⚡ Fast ↔ Gentle & cool ❄), live `fmtPace` label on drag, persists on release via
+  `homeSetPace`→`apiSetPace`. Honest hint text ("a longer rest keeps an older/hot laptop cool … takes
+  longer to finish … applies to the next file, no restart").
+
+**Decision (user, 2026-06-22): keep this to ONE transparent knob.** `GNOME_SYNC_CAP` stays an INTERNAL
+safety bound (per-pass batch size), deliberately NOT surfaced — two workload controls would confuse the
+expert-Linux audience. So the cap-vs-pace coupling that *would* leak cap into user-visible behaviour was
+removed at the source (below) rather than by exposing a second slider.
+
+**Follow-up BUILT same session — per-doc checkpoint + the two safety fixes a long-lived loop needs**
+(`runSync`, all in `utils/GnomeBridge/index.js`; chosen over "just lower the cap" because it collapses the
+mental model to one knob that's safe at any pace):
+- **Per-doc checkpoint (durability).** The EXECUTE loop now writes state `{docpath, mtime, pendingEmbed:true}`
+  and persists **the instant each summary is materialized**, before the batch embed. A new RESUME pass in
+  PLAN re-embeds any `pendingEmbed` doc's EXISTING docpath (granite never re-run); `onDocComplete` clears the
+  flag to a plain done-entry on confirm. Legacy `{docpath,mtime}` entries = done (back-compat). Net: an
+  interruption mid-backfill never re-summarises a completed doc → **`GNOME_SYNC_CAP` is now irrelevant to
+  durability**, so it can stay internal at 200.
+- **STOP check in the loop.** `if (Embed.isIngestPaused()) break;` per iteration + gating the embed dispatch
+  on `!paused` — a long pace makes the materialize loop long-lived, so without this the hard STOP would keep
+  firing granite for the rest of the batch. Materialized docs are checkpointed, so STOP resumes cleanly.
+- **Serial guard (no double-granite).** Module `inFlight` Set + a `Embed.hasRunningWorker()` check bail any
+  second pass with **409 busy**. The loop now runs for a long time with no worker active, which would
+  otherwise let a cadence tick start a concurrent pass (2× GPU heat); the `hasRunningWorker` half also closes
+  a real race (lock releases at embed *dispatch* but `pendingEmbed` clears at embed *confirm*, so a pass
+  entering that window could re-embed an in-flight doc → duplicate vectors).
+
+**Status: built + parse-verified** (`node --check` both server files; vm.Script over UI scripts = 0
+failures; UI source synced identical to the desktop copy) **+ unit-tested the pace store directly** (default
+30 s, set/get/clamp at both ends, file cleaned up) **+ module load-tested** after the runSync rewrite. The
+per-doc-checkpoint / STOP / lock paths are reasoned-through, **NOT yet exercised live** (would need a real
+GNOME + DB + an induced interruption). **NOT yet eyeballed in the running app** — deliberately did NOT boot
+the stack (cadence boot-resume would relaunch the paused 726-doc thermal backfill). When that backfill is
+resumed it now runs at the user's chosen pace, checkpoints per file, and honours STOP. Per
+[[thermal-throttle]] / next-session plan.
+
+## ✅ DONE (2026-06-22) — Summary-vector breadth search (the "AI librarian by default" retrieval)
+
+Built + measured the search redesign from `AMAdocs-DEV-NOTES → "LLM search redesign"`: **breadth-scope
+chat (a folder, or the whole workspace) now retrieves over ONE per-document summary vector instead of
+full-text chunks**, so results are one librarian card per document rather than scattered chunk fragments
+(which in a big folder dominate the topN with duplicate chunks of one doc and miss the right doc). File
+scope (clicked into one doc) is unchanged — chunks + the Option-A summary injection ("deep search").
+
+**Measured on the /STEM eval (7 labelled queries, real corpus, REAL production `db.summarySearch`):**
+
+|            | Recall@5 | MRR  |
+|------------|----------|------|
+| chunk (old)| 0.857    | 0.766|
+| **summary**| **1.000**| 0.821|
+| lexBM25    | 0.833    | 0.810|
+| RRF-fusion | 0.905    | 0.750|
+
+Summary-only **beats chunk and even fusion**, so we shipped summary-only for breadth — no lexical/RRF
+complexity. **The key finding: the only thing making summary search look mediocre earlier was the
+similarity threshold.** Summary vectors are document-level/broad, so their cosine similarities run lower
+than chunk vectors; the inherited chunk default of 0.25 silently dropped good matches (the rare-term query
+"microbit" sits ~0.2 → got cut → Recall 0.00). A summary-specific floor of **0.20** took it 0.857→1.000.
+
+**What shipped:**
+- **Separate table `<slug>__summaries`** — NOT a marker column in the chunk table, because the main table's
+  Arrow schema is locked at its first row (a marker would force a drop+reindex). One row/doc = its
+  `aiSummary` embedded with the SAME engine as chunks/queries, so the spaces are comparable; can be
+  dropped+rebuilt cheaply while tuning. New `LanceDb` methods (`vectorDbProviders/lance/index.js`):
+  `summaryNamespace`, `summaryRow` (stable schema via one constructor), `upsertSummaryVector` (idempotent
+  by sourcePath: delete-then-add), `deleteSummaryVector`, `summarySearch` (mirrors `similarityResponse`'s
+  shape; returns `{...,empty:true}` when the table doesn't exist yet → caller falls back to chunk search).
+- **Scope routing in `chats/stream.js`** — FILE scope (exact path) → `performSimilaritySearch` (chunks) +
+  Option-A; BREADTH scope (scopePath ends "/" OR is null) → `summarySearch`, topN bumped to ≥10, with a
+  summary-specific threshold `AMADOCS_SUMMARY_SIM_THRESHOLD` (default 0.20). Empty-table fallback to chunk
+  search so breadth chat still works mid-rollout. **No UI change** — the folder-scope UI already renders
+  `sources` as one card/doc.
+- **Self-maintaining on the gnome-sync path** (`GnomeBridge/index.js`): `runSync` upserts summary vectors
+  after `embedFiles` and deletes them after `removeDocuments` (captures sourcePaths first); `backstopFile`
+  (right-click analyse) upserts too. Best-effort + gated by `summariesDisabled()` — never breaks ingest,
+  still serial (THE #1 RULE). `resummarize` refreshes cards through the same delete+re-embed path.
+- **One-off seed** `server/_backfill_summaries.js` populated the table from the 156 `aiSummary`s already on
+  disk → **106 unique-path cards** (duplicate doc-JSONs sharing a path collapse to one), embeds-only
+  (~13 s, $0, NO granite, thermally safe). `WIPE=1` rebuilds clean.
+- **Eval harness promoted** to `tooling/search-eval.js` (parameterized `THRESH`/`TOPN`/`K_RRF`; exercises
+  the real `db.summarySearch`). Run from `server/`: `node ../../tooling/search-eval.js`.
+
+**Status: built, parse-verified (`node --check` all touched files), and measured via the harness against
+the live tables.** NOT yet eyeballed in the running Electron app — deliberately didn't start the full
+stack, because cadence boot-resume would relaunch the paused thermal backfill (726 files queued `mtime=""`).
+**Remaining:** (1) live in-app verify of folder chat showing summary cards; (2) the 726-file granite
+backfill now has a clear payoff (more cards = broader breadth recall) — run it throttled; (3) follow-up:
+folder "search" still runs a full granite generation server-side whose answer the UI discards
+(`amadocs-ui` ~line 2437) → a retrieval-only breadth path would save GPU per query.
+
+## ✅ DONE (2026-06-22) — "Re-summarise" button: user-triggered backfill of missing summaries
+
+Built + wired the re-summarise action the SPEC's Homepage "Tuning" direction anticipated ("changes
+don't retro-apply → pairs with a re-summarise action"). **Why it's needed at all:** the mtime-based
+delta (`computeDelta`) only re-selects NEW or CHANGED files, so a file indexed *before*
+summaries-by-default — or before a future summary prompt/model change — is invisible to the cadence and
+never (re)gains a summary on its own. A **typical fresh user never hits this** (they index on a
+summaries-by-default build, so every file is summarised as it's first embedded); it bites only (a) anyone
+who indexed with `GNOME_SUMMARY_DISABLED=1` first (the thermal-safe path) and later wants summaries, and
+(b) the prompt/model re-tune case. So this is a deliberate **user-triggered** maintenance action, not
+silent always-on delta behaviour. Until now the only way to backfill existing files was the manual
+`/tmp` `mtime=""` surgery we've been doing by hand.
+
+**Mechanism — reuses the proven backfill path, zero new ingest machinery (THE #1 RULE intact):**
+- `GnomeBridge.resummarize(slug, {onlyMissing=true})` — stamps the SAVED `mtime` to `""` for matching
+  tracked files (those with a docpath; `onlyMissing` ⇒ only ones whose stored doc JSON has an empty
+  `aiSummary`, via new `docHasSummary(docpath)`). That makes the next `runSync` see them as "changed" →
+  delete-old + re-embed + re-summarise through the **exact same serial / `GNOME_SYNC_CAP` / `GNOME_SYNC_
+  COOLDOWN_MS` / durable** path as the hand-driven backfill. Skips already-stamped (`mtime===""`) entries
+  so repeated clicks don't double-count. Returns `{ok, flipped, total}`; refuses when `GNOME_SUMMARY_
+  DISABLED=1` or the folder was never indexed.
+- `POST /workspace/:slug/resummarize {onlyMissing?=true}` — flips, then kicks ONE bounded `runSync`
+  (limit:0, folder re-read from saved state so it drives the cadence's code path) and returns
+  `{...flip, ...syncBody}`. The background cadence drains whatever exceeds the bounded pass.
+- UI: `apiResummarize()` helper + `homeResummarize()` handler + a **🧠 Re-summarise files** button in the
+  Homepage Quick actions; toasts `flipped`/`remaining`, then refreshes the homepage after 4s.
+
+**Status: built + parse-verified only** (`node --check` on both server files; vm.Script over all 6 inline
+UI scripts = 0 failures; source synced `tooling/amadocs-ui/index.html` → `amadocs-desktop/ui/index.html`).
+**NOT yet clicked live** — deliberately holding the GPU quiet during the in-flight thermal-throttled
+778-backfill; safe to eyeball once that completes (a `onlyMissing` click then is consistent with it — it
+flips the same still-missing set). **Known tradeoff (inherited from the existing path, not introduced
+here):** `runSync`'s `toDelete` is computed over ALL changed docs but `toEmbed` is capped, so flipping a
+set larger than the cap deletes those docs' vectors up front and re-embeds `cap`/pass — search is degraded
+for the not-yet-drained remainder until the cadence catches up. Acceptable for a deliberate, user-initiated
+background re-index, but if we want search to stay whole during it, bound `toDelete` to the same cap. **Two
+minor follow-ups:** legit-empty summaries (images / too-short docs that summarise to `""`) get re-flipped on
+every `onlyMissing` click since "tried-but-empty" isn't distinguished from "never-tried" — harmless churn,
+fixable with a `summaryAttempted` marker; and there's no progress/STOP surfacing yet beyond the toast.
+
+## ⚠️ 2026-06-22 — Backfill interrupted by overheating; resumed THROTTLED + GPU temp-guard watchdog
+
+Mid-full-backfill the user **powered the machine down** — a burning/overheating smell in the room
+(possibly this box, possibly another machine nearby; unconfirmed). Context that makes this box a
+credible culprit: it's a **fan-stop GTX 1650 Ti laptop** whose GPU fan the OS can't read/control
+(`nvidia-smi` reports fan/power-limit `N/A`), run in a **sub-tropical hot room**, and the full-778
+summary backfill fires one granite `/generate` per doc → sustained GPU load for hours. On reboot:
+thermals normal at idle (GPU 39 °C, CPU pkg 42 °C, trip points sane 100–120 °C), nothing running but
+`ollama serve`. Backfill progress is durable — **~141 docs had summaries** (was ~52 at flip), i.e.
+~89 done before shutdown. ⚠️ The pre-flip state backup lived in `/tmp` and the **reboot wiped it** —
+"undo the flip" is no longer possible; only path is to let the backfill finish.
+
+Two safety layers added before relaunch:
+
+**(1) Per-doc thermal cool-down** — `GnomeBridge/index.js` runSync EXECUTE loop now sleeps
+`GNOME_SYNC_COOLDOWN_MS` after each doc that did real GPU work (gated; default 0 so tiny incremental
+syncs are unaffected; auto-disabled when `GNOME_SUMMARY_DISABLED=1`). Pairs with the existing
+`GNOME_SYNC_CAP` (per-tick batch size). Still fully serial — no new parallel work (THE #1 RULE).
+
+**(2) GPU temp-guard watchdog** — `tooling/gpu-tempguard.sh`: polls `nvidia-smi` every 5s and, since
+the OS can't drive this GPU's fan, **`SIGSTOP`s every `ollama` process at CEILING (80 °C)** to instantly
+freeze GPU compute, then **`SIGCONT`s at RESUME (70 °C)**. A frozen `/generate` just makes the in-flight
+HTTP request wait — resumes cleanly, worst case one summary retried next sync. Logs to
+`tooling/logs/tempguard.log`. App-independent hard backstop.
+
+Relaunched throttled: `GNOME_SYNC_COOLDOWN_MS=4000 GNOME_SYNC_CAP=50 bash tooling/start-stack.sh`,
+watchdog at 80/70. **Measured rate ~19.5 s/doc** (granite itself dominates — the 4s cooldown is minor;
+matches the earlier ~19 s/doc figure). ~627 docs remaining → **ETA ~3–4 h**. First ~3 min: peak GPU
+**58 °C, 0 freeze events** — comfortably under the ceiling. User is watching thermals physically. If
+interrupted again, relaunch resumes (durable). To run the app WITHOUT the heavy backfill at all:
+`GNOME_SUMMARY_DISABLED=1`.
+
+**Addendum (2026-06-22, refined diagnosis + backfill PAUSED).** User identified the overheat as a
+**COMBINED** heat source: an **old (~8yr) battery that runs hot WHILE CHARGING** plus the GPU spinning
+up — not GPU-only. This matters because the watchdog is **blind to it**: `gpu-tempguard.sh` reads only
+`nvidia-smi` GPU temp, and on this box `BAT1` exposes **no** temperature via sysfs. Live probe of what
+this box CAN report: ACPI **chassis** zones in `/sys/class/thermal` (`x86_pkg_temp` + `pch_cometlake`
+~52 °C idle, `acpitz`) — these rise with battery/case heat and are the usable proxy. **Mitigation found:
+this laptop supports a charge cap** — `/sys/class/power_supply/BAT1/charge_control_end_threshold`
+(default 100); `echo 60 | sudo tee …` stops charging so a backfill runs on AC with the battery idle,
+removing one heat source (doesn't persist across reboot without a systemd unit / tlp). **Proposed (NOT
+yet done): add `x86_pkg_temp`/`acpitz` reads to `gpu-tempguard.sh`** so it freezes ollama on chassis heat
+too, not just GPU. **Current status: backfill is PAUSED — stack is DOWN** (only `ollama serve` running);
+saved state still has **726/778 files flipped `mtime=""` and queued** (52 summarised). Just relaunching
+the stack auto-resumes those 726 via cadence boot-resume — so DON'T relaunch un-throttled. User chose to
+**defer the backfill** and refine other things first; resume later with charge-cap + throttle + watchdog
+(ideally the hardened one). See [[thermal-throttle]] + [[next-session-plan]].
+
+## ✅ DONE (2026-06-22) — Summaries-by-default: test PASSED + /STEM backfill + fixed a real `aiSummaryForPath` bug
+
+Resumed the interrupted summaries-by-default test (code built+verified 2026-06-21; the gnome-sync path
+now summarises every doc — see the next-session plan). Three outcomes this session:
+
+**(1) The 5-doc test batch passed (verified by direct DB/disk inspection; server was down at session
+start).** The post-interrupt cadence tick (`lastSync 2026-06-21T23:20:59`) had already run the new code
+and summarised the 5 flipped ICT_MOET files via the **`tinysparql` GNOME-ride path** — the path that
+previously never summarised. All 5 carry an accurate `aiSummary` (disk JSON **and** `workspace_documents`
+metadata); **no duplicate workspace docs** (each sourcePath = exactly 1 doc — the delete-old+re-embed
+delta worked); **vectors net-unchanged** (13811 total == baseline; 783 docs / 781 unique paths). 12 docs
+had summaries at that point (5 flipped + ~5 newly-detected Cambridge IGCSE files re-embedded fresh =
+proof it fires on both changed and new files). The 2 pre-existing backstop dupes (`ict_quiz_SA2.xlsx`,
+scanned `Year 6 ICT…pdf`) are unrelated edge cases, not the test files.
+
+**(2) Small backfill on /STEM (the 40-doc eval folder) — clean.** Flipped `mtime=""` on the 40 `/STEM/`
+state entries (backup at `/tmp/amadocs-library.json.bak-*`), booted the stack, let the cadence resume
+drain them. **40/40 summarised** (~3–13 s/doc, granite4.1:3b), no errors; **40/40 carry `aiSummary` in
+both lance + `workspace_documents` metadata**; no new duplicate sourcePaths; `document_vectors` still
+**13811** (== baseline — re-embed swaps chunks in place, summary rides as a doc field). Backfill mechanism
+proven; the full-778 pass is the same trick at scale (~4 h, $0, idle-aware via cadence).
+
+**(3) ⚠️ Found + fixed a real bug — `aiSummaryForPath` threw on EVERY call (Option A was a no-op for TWO
+reasons, not one).** Validating the read path the Option-A summary-grounded chat uses
+(`stream.js:266 → VectorDb.aiSummaryForPath`), it returned `""` even with summaries present. Root cause:
+its filter `where(`sourcePath = '…'`)` uses an **unquoted identifier**, which DataFusion case-folds to
+`sourcepath` in a binary `=` comparison and throws *"No field named sourcepath"* (caught → `""`).
+Characterized the dialect against the live table (lancedb 0.15.0):
+
+| clause | result |
+| --- | --- |
+| `sourcePath = '…'` (unquoted, binary) | **throws** (case-folded to `sourcepath`) |
+| `"sourcePath" = '…'` (double-quote) | 0 rows — double-quotes parse as a *string literal* |
+| `` `sourcePath` = '…' `` (backtick) | ✅ matches |
+| `starts_with(sourcePath, '…')` (unquoted, function arg) | ✅ matches — so folder-scope search is fine |
+
+The gotcha: the unquoted convention that works for the `starts_with(sourcePath, …)` *function arg* (the
+scopePath filter in `similarityResponse`, confirmed still working — 295 rows on /STEM) does **not** carry
+to the `=` operator. **Fix:** backtick-quote the identifier in `aiSummaryForPath`
+(`server/utils/vectorDbProviders/lance/index.js`) + corrected the misleading comment. Verified via the
+real method against 4 present files (spaced + nested + ICT/STEM paths → all return their summary) and a
+missing file (→ `""`); `node --check` clean; nodemon reloaded the running server. **Net: Option-A
+summary-grounded file chat is now genuinely functional for the first time** (data + query both fixed).
+
+**Still open:** user decision on the **full-778 backfill** (vs new-files-only); a live SSE stream-chat
+eyeball of Option A through the UI (unit-proven here, not yet clicked in-app); and the summary-search
+*routing* redesign itself (breadth scope → summary vectors), which this backfill unblocks.
+
+## 🔬 EXPERIMENT (2026-06-21) — LLM search redesign: chunk vs summary vs lexical vs RRF-fusion
+
+The "search feels totally disconnected" problem, diagnosed and measured end-to-end. Conclusion:
+**folder/drive/global ("breadth") chat should retrieve over per-document SUMMARIES, not full-text
+chunks; file scope keeps chunk-level deep search.** Backed by a real offline eval on this box, not
+eyeballing. Throwaway rig kept at `server/_sumtest2.js` (+ `_sumtest.cache.json`, 40 granite
+summaries of `/STEM`) — the seed of the eval set the search work needs.
+
+**Why current folder search scatters (root cause).** Folder scope = `starts_with(sourcePath, folder)`
+over **full chunk vectors** (lance `similarityResponse`), topN=4. In a 100-doc folder that's thousands
+of chunk fragments; the top-4 are 4 stray passages that happen to share a word with the query — often
+from one doc repeated. Three concrete failure modes proven on `/STEM` (40 docs):
+1. **Duplicate-chunk domination** — every test query wasted 3–4 of its top slots on *copies of the same
+   document*. At production topN=4 a folder can collapse to one doc.
+2. **Recall misses the right doc** — "machine learning" *missed* `crest-silver-machine-learning-collection.pdf`
+   entirely (high-frequency "machine"/"assessment" words in other docs crowd it out); "assessment criteria
+   for grading" returned subject *assessments* (VibeCoding, MicrobitCar) instead of the actual rubric docs.
+3. **Metadata pollution** — embedded chunk text begins with a `<document_metadata> sourceDocument: …`
+   boilerplate header, so chunk search partly ranks on injected scaffolding, not content. Cheap fix worth
+   doing regardless.
+
+**Hard prerequisite found: 0 of 781 indexed docs have a summary.** The whole corpus came through the
+gnome-sync path, which builds docs via `buildDoc` straight from TinySPARQL text and **never summarises**
+(summaries are generated only in the collector path — uploads + the right-click/backstop route). So
+summary-search has nothing to run against today **and the already-built Option-A summary-grounded file
+chat is a silent no-op on every real file.** "Summaries by default + backfill" (memory's #1 queued task)
+is the gate, not an enhancement.
+
+**The eval (7 hand-labeled queries over `/STEM`, Recall@5 / MRR):**
+```
+                 Recall@5   MRR
+  chunk (now)      0.857    0.766     duplicate-domination + the criteria/ML misses above
+  summary          0.929    0.821     best single method; clean one-card-per-doc
+  lexical BM25     0.833    0.893     best MRR — nails exact terms #1, lower recall on paraphrase
+  RRF-fusion       0.952    0.750     best recall — covers both, small MRR cost from noise blending
+```
+- **Summary-search wins for topical/breadth queries** ("what docs are about X") — one vector per doc, no
+  duplicate domination, matches *what a doc is* (the LLM card says "an assessment criteria table") not word
+  overlap.
+- **Summary's one weakness is exact rare terms** the 120-word card didn't echo: "microbit" → summary R@5=0.50
+  (missed `microbit and electronics.pptx`), but **RRF-fusion(summary + lexical) recovered it to R@5=1.00**
+  (dense found the RC-car assessment, lexical found the pptx). Textbook hybrid win.
+- **Naive fusion can hurt MRR**: BM25 over *full body* imports keyword-spam (tracking spreadsheets rank high
+  on "assessment") and blended it back into the clean summary result (query 3: summary R@5=1.0 → fusion 0.67).
+  Likely fixes: lexical over **title+summary** (not full body), weight summary higher, or a light rerank on the
+  fused top-N. (Caveat: 7 queries is directional, not significant; queries skewed topical. One gold was
+  mislabeled — VEX newsletter lives in `/Generated_Documents` not `/STEM` — dropped before the final numbers.)
+
+**Recommended architecture (evidence-backed):**
+1. **Summaries by default** on the gnome-sync embed path (not just collector) + backfill the 781 (~19s/doc,
+   $0, ~4h, idle-aware queue). *The gate.*
+2. **One per-doc summary vector** (embed the `aiSummary`), tagged (e.g. `isSummary=true`) in the same table so
+   the existing `scopePath` filter just works.
+3. **Scope routing:** folder/drive/global → summary-vector search, one hit per doc, **files-as-results**;
+   file scope → current chunk search + Option A (the "deep search" click-into-a-doc mode).
+4. **Hybrid recall leg:** fuse a lexical leg (TinySPARQL FTS — already run for the filename bar) with the
+   summary search via **RRF**, as a recall safety net for exact terms. Expose pure-summary vs fused as a
+   Homepage tunable (fast/clean vs best-recall).
+5. **Fix the `<document_metadata>` pollution** in what gets embedded/matched.
+
+This connects to the IR research reviewed this session (Google = multi-stage funnel: cheap recall → fuse
+(RRF) → rerank → answer; its biggest levers — Navboost/clicks, link graph — don't transfer to a single-user
+local corpus, so copying "Google's algorithm" literally is a trap; what transfers is **hybrid lexical+dense,
+multi-representation indexing, intent/scope routing, and offline eval with Recall@K/MRR/NDCG**).
+
+## ✅ DONE (2026-06-21) — Summary-grounded file chat (Option A) + positioning shift
+
+**Product shift (user, 2026-06-21): zero-config-for-non-technical-users is dropped as a goal.**
+The audience is now explicitly the **techy Linux crowd who like to play with all the settings,
+including the CSS.** Consequence for the build: the Homepage becomes the surface where we **expose
+every tunable, the prompts, and the theme CSS for customisation**, each with a recommended default
++ rationale ("worked on this machine"). Captured in `K-base.md` ("Who it's for"), `README.md`
+(Status), and `AMAdocs-SPEC.md` (Homepage → "Tuning / Advanced panel" direction). Not built yet —
+direction only; recommended phasing is read-only "what we use & why" card → live numeric knobs →
+editable prompts (the prompt one needs the `openAiPrompt` write-through, see the strict-prompt notes).
+
+**Option A — summary-grounded file-scoped chat (built, NOT yet eyeballed live).** Diagnosed gap:
+chat answers come ONLY from LanceDB similarity search (`performSimilaritySearch` → top-N chunks that
+match the *question*), with zero positional bias, so the title page / first few pages — which hold the
+key orienting info — are seldom retrieved for a specific question. Meanwhile `aiSummary` is built from
+exactly those pages (`DocSummary.leadingSlice` = first 5 pages / 8000 chars) yet was **never read by
+the chat path** (it only fed the UI card). Fix reuses that good summary. Two edits, tagged `AMAdocs:`:
+- `server/utils/vectorDbProviders/lance/index.js` → new `aiSummaryForPath({namespace, sourcePath})`:
+  exact-path query `.query().where("sourcePath = '…'").select(["aiSummary"]).limit(1).toArray()`
+  (confirmed present in lancedb 0.15.0), returns `""` on miss, never throws. Exact `=` (not
+  `starts_with`) so a sibling path can't bleed in.
+- `server/utils/chats/stream.js` → after the `contextTexts` assembly and **before** the query-mode
+  empty-context refusal: if `scopePath && !endsWith("/")`, fetch the summary and
+  `contextTexts.unshift(<overview block>)`. Context-only, **not** pushed to `sources`, so it grounds
+  the answer without producing a citation that can't jump to a page. No-op for folder scope, unscoped
+  chat, or files with no summary (bridged/GNOME docs, images).
+
+Both files pass `node -c`. **TODO: eyeball live** — does the overview actually improve "what is this
+doc about" answers; note the before-the-refusal placement lets a file-scoped query answer from the
+summary alone when no chunk matches (intended, but it's a refusal-semantics change). **Deferred:**
+Option B (pin first N real, citable chunks) and Option C (positional rerank boost) — do A first.
 
 ## ✅ DONE (2026-06-21) — Preview polish: markdown rendering + spreadsheet/markdown bleed fix
 

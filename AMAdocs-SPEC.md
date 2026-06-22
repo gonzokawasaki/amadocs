@@ -78,15 +78,35 @@ Three states depending on selection:
    image searchable."
 3. Chat input + conversation, scoped to that file. Uses LocalSearch-extracted text (or
    embedding retrieval for large files) as context. Returns answers with passage citations.
+   **Summary-grounded (Option A, 2026-06-21):** file-scoped chat also prepends that file's
+   `aiSummary` to the context as a "document overview" block. The summary is built from the
+   title page + first ~5 pages (`DocSummary.leadingSlice`), so it gives the model whole-document
+   orientation that pure similarity search misses — the title/opening pages rarely match a
+   specific question and so are seldom retrieved. Added to context only, never as a citation.
+   See `AMAdocs-DEV-NOTES.md`. (Option B — pinning the first N real chunks for a citable title
+   page — is deferred pending how A performs on its own.)
 
 **Folder/drive selected:**
 1. Folder metadata (file count, indexed count, pending count)
 2. Chat input + conversation, scoped to that folder. Returns **files as results** (not a
    synthesised answer) with snippets. Clicking a result opens the file in preview mode.
+   **Retrieves over per-document SUMMARIES, not full-text chunks (decided 2026-06-21, evidence-backed).**
+   Folder/drive/global ("breadth") scope searches one summary vector per document → one card per file,
+   no duplicate-chunk domination, matching *what a doc is*. Chunk-level retrieval is reserved for **file
+   scope** ("deep search" — click into a single document). An offline eval on a 40-doc folder showed
+   summary-search beats current chunk-search on recall (0.93 vs 0.86 R@5) and kills the "random hits"
+   scatter; a fused **lexical (TinySPARQL FTS) + summary via RRF** leg lifts recall further (0.95) as a
+   safety net for exact rare terms the 120-word summary doesn't echo (e.g. "microbit"). See
+   `AMAdocs-DEV-NOTES.md` → "LLM search redesign". **Hard prerequisite — now being satisfied (2026-06-22):**
+   summaries must exist for every indexed file. gnome-sync now summarises by default; the /STEM eval folder
+   (40 docs) is backfilled and a full-778 backfill is in progress (~4h bounded cadence drain). Once complete,
+   the breadth summary-search routing can be built on top.
 
 **Nothing selected:**
 1. Brief explainer: "Select a file to see its summary. Ask a question to search your files."
-2. Chat input — searches the whole indexed filesystem.
+2. Chat input — searches the whole indexed filesystem. Like folder scope, this is a **breadth**
+   query: it retrieves over per-document summaries (+ optional RRF lexical leg) and returns
+   files-as-results, not chunk fragments.
 
 ### Top bar
 
@@ -106,6 +126,23 @@ an indexed-folders list, and Quick actions (Browse my files · Index a folder…
 `/amadocs-status` endpoint's structured `data` (which also still writes the on-disk `AMADOCS-STATUS.md`).
 Designed to grow: indexing progress + STOP on the Index card, a model picker on the Model card, per-folder
 re-index/remove, onboarding.
+
+**Tuning / Advanced panel (direction, 2026-06-21).** Because the audience is now explicitly the
+tinkerer crowd (zero-config is no longer a goal — see `K-base.md`), the Homepage is the place to
+**expose every tunable, the prompts, and the CSS for customisation**, each shown with our
+recommended default + rationale ("these settings worked on a GTX 1650 Ti / granite4.1:3b — adjust
+for your machine") and a Reset-to-recommended. Tunables, grouped: **prompts** — chat system prompt,
+summary/cataloguing prompt, vision-caption prompt; **summary** — `MAX_PAGES` / `MAX_CHARS` /
+`NUM_PREDICT` / temperature / summary model; **chat/retrieval** — answer length cap, temperature,
+`similarityThreshold`, `topN`, rerank on/off, Option-A summary injection; **indexing** —
+`EMBED_COOLDOWN_MS`, cadence interval, batch size; **appearance** — the theme `--*` CSS variables
+(see the user-CSS / LLM-theming idea). Three engineering realities to design around: most are env
+vars / hardcoded constants today (need a runtime settings store + a push path into the *collector*
+process; the summary constants are duplicated in two `DocSummary` copies); the chat prompt has the
+`openAiPrompt`-baking trap (must write through to the workspace, not just `saneDefault`); and changes
+don't retro-apply (only new summaries reflect a new summary setting → pairs with a re-summarise action).
+Recommended phasing: a read-only "here's what we use & why" card first, then live numeric knobs, then
+editable prompts. See `AMAdocs-DEV-NOTES.md` and the next-session plan.
 
 ---
 
@@ -209,6 +246,40 @@ The AMAdocs engine and its proven components are reused directly under the file-
 2. **One doc producer (gnome-sync).** Because everything flows through the gnome-sync path,
    the earlier mixed-schema LanceDB problem is moot. (The schema bug was also fixed directly
    via `withAmadocsSchema()` — see DEV-NOTES.)
+
+## Future direction — Virtual semantic folders (the AI abstraction layer)
+
+> ⭐ Flagship future feature (2026-06-21). *"An abstraction layer for your hard drive built on AI."*
+> The apex of the semantic-file-manager idea: not just understanding files, but **organising them by
+> meaning** — the physical filesystem becomes a presentation layer, AI the organising principle underneath.
+
+**Motivation.** Physical folders force ONE rigid hierarchy, but a document is semantically
+multi-dimensional — a VEX-robotics newsletter sitting in `/Generated_Documents` is *also* "STEM",
+"robotics", "Term 4". Folders can't express that; semantic views can. (Surfaced directly by the search
+experiment — see `AMAdocs-DEV-NOTES.md`.)
+
+**Why this is legitimate, not a gimmick.** The physical folder tree is *already* an abstraction. On an
+SSD there is no physical "folder" — the flash controller scatters bytes across blocks, and the directory
+hierarchy is itself just a metadata **index** the OS presents to make the bytes navigable. A semantic view
+is therefore not fake organisation over "real" folders: **both are indexes over the same bytes.** The folder
+tree is the OS's index; semantic folders are a meaning-based index beside it — there is no privileged "real"
+structure, only indexes, and AMAdocs simply offers a smarter one.
+
+**Tier 1 — Virtual "smart folders" (safe; build first).** Cluster the per-document summary vectors
+(k-means / HDBSCAN), have the local LLM name each cluster ("STEM resources", "Student grade reports",
+"Exam papers"), and render the clusters as virtual folders in the left tree *alongside* the real
+filesystem — like macOS Smart Folders / Gmail labels / playlists. **Files never move** (it's a saved query
+over LanceDB), one file can appear in several semantic groups, and it reuses the summary-vector +
+`scopePath` machinery the search redesign already builds — nearly free once summaries-by-default exists.
+
+**Tier 2 — Suggested physical reorganisation (powerful; opt-in, heavily guarded; much later).** Moving real
+files collides with THE #1 RULE — it breaks Obsidian vault links, git repos, symlinks, and fights cloud
+sync. If ever built: propose a plan → user reviews every move → execute with a manifest + one-click undo +
+a hard denylist (`.git`, vaults, cloud-synced dirs, system paths). Non-destructive middle path: materialise
+the semantic tree with **symlinks** (visible in Nautilus too, originals untouched).
+
+**Sequencing:** after search is refined and per-document summary vectors exist — meaningless until every
+file has a summary vector. Status: captured direction, not scheduled.
 
 ## Open questions
 

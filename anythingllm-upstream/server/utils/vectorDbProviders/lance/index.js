@@ -31,6 +31,30 @@ function withAmadocsSchema(metadata = {}) {
   };
 }
 
+// AMAdocs (summary-search redesign): breadth-scope chat (folder/drive/global) retrieves
+// over ONE per-document summary vector instead of full-text chunks, so results are
+// "one librarian card per document" rather than scattered chunk fragments (which in a
+// big folder dominate the topN with duplicate chunks of one doc and miss the right doc).
+// These vectors live in a SEPARATE table ("<slug>__summaries") so the proven chunk/chat
+// table and its DocumentVectors bookkeeping stay untouched, and the whole summary index
+// can be dropped+rebuilt cheaply (embeds only — no LLM generation) while we tune. Every
+// row goes through summaryRow() so the table's Arrow schema (locked at first insert) is
+// stable regardless of which fields a producer happens to supply. See [[llm-search-redesign]].
+function summaryRow(meta = {}) {
+  const summary = String(meta.aiSummary ?? "").trim();
+  return {
+    sourcePath: meta.sourcePath ?? "",
+    title: meta.title ?? "",
+    // `text` carries the summary so curateSources()/the UI render it as the result
+    // snippet, exactly like a chunk's text — folder result cards "just work".
+    text: summary,
+    aiSummary: summary,
+    amadocsSource: meta.amadocsSource ?? "",
+    sourceMime: meta.sourceMime ?? "",
+    pageCount: meta.pageCount ?? 0,
+  };
+}
+
 /**
  * LancedDB Client connection object
  * @typedef {import('@lancedb/lancedb').Connection} LanceClient
@@ -243,6 +267,181 @@ class LanceDb extends VectorDatabase {
     });
 
     return result;
+  }
+
+  /**
+   * AMAdocs (Option A — summary-grounded chat): fetch the stored aiSummary for an
+   * exact file path within a namespace. The summary is the "librarian's card" built
+   * from the document's title page + opening (see collector DocSummary). Injecting it
+   * into file-scoped chat context gives the LLM whole-document orientation that pure
+   * similarity search misses — the title/opening pages rarely textually match a
+   * specific question, so they're seldom retrieved. Exact-path match (not starts_with)
+   * so a sibling like "/a/file2" can't bleed into "/a/file". Returns "" when there is
+   * no summary (bridged/GNOME docs, images, summariser failures) — never throws.
+   * @param {Object} params
+   * @param {string} params.namespace
+   * @param {string} params.sourcePath - exact file path (no trailing slash)
+   * @returns {Promise<string>}
+   */
+  async aiSummaryForPath({ namespace = null, sourcePath = null } = {}) {
+    if (!namespace || !sourcePath) return "";
+    try {
+      const { client } = await this.connect();
+      if (!(await this.namespaceExists(client, namespace))) return "";
+      const collection = await client.openTable(namespace);
+      const escaped = String(sourcePath).replace(/'/g, "''");
+      // Backtick-quote the identifier. The unquoted bareword works as a FUNCTION arg
+      // (starts_with(sourcePath, …) in similarityResponse) but DataFusion case-folds it
+      // to `sourcepath` in a binary `=` comparison and throws "No field named sourcepath";
+      // double-quotes are parsed as a string literal (matches nothing → 0 rows). Backticks
+      // are the identifier quote that resolves the mixed-case column here. (lancedb 0.15.0)
+      const rows = await collection
+        .query()
+        .where(`\`sourcePath\` = '${escaped}'`)
+        .select(["aiSummary"])
+        .limit(1)
+        .toArray();
+      const summary = rows?.[0]?.aiSummary;
+      return typeof summary === "string" ? summary.trim() : "";
+    } catch (e) {
+      this.logger(`aiSummaryForPath failed: ${e.message}`);
+      return "";
+    }
+  }
+
+  // AMAdocs: the parallel summary-vector table for a workspace namespace.
+  summaryNamespace(namespace = "") {
+    return `${namespace}__summaries`;
+  }
+
+  /**
+   * AMAdocs (summary-search): write/replace the single per-document summary vector for
+   * a file in the workspace's "<slug>__summaries" table. Idempotent by sourcePath
+   * (delete-then-add) so a re-sync never duplicates a doc's card. Embeds the summary with
+   * the SAME engine used for chunk + query vectors (getEmbeddingEngineSelection) so the
+   * summary space and the query are comparable. No-op (returns false) when there's no
+   * summary text — bridged docs without a summary simply don't appear in breadth search.
+   * @returns {Promise<boolean>}
+   */
+  async upsertSummaryVector({
+    namespace = null,
+    sourcePath = null,
+    aiSummary = "",
+    title = "",
+    amadocsSource = "",
+    sourceMime = "",
+    pageCount = 0,
+  } = {}) {
+    const summary = String(aiSummary ?? "").trim();
+    if (!namespace || !sourcePath || !summary) return false;
+    try {
+      const EmbedderEngine = getEmbeddingEngineSelection();
+      const vector = await EmbedderEngine.embedTextInput(summary);
+      if (!Array.isArray(vector) || vector.length === 0) return false;
+
+      const sumNS = this.summaryNamespace(namespace);
+      const { client } = await this.connect();
+      if (await this.namespaceExists(client, sumNS)) {
+        const collection = await client.openTable(sumNS);
+        const escaped = String(sourcePath).replace(/'/g, "''");
+        await collection.delete(`\`sourcePath\` = '${escaped}'`);
+      }
+      const row = summaryRow({
+        sourcePath,
+        title,
+        aiSummary: summary,
+        amadocsSource,
+        sourceMime,
+        pageCount,
+      });
+      await this.updateOrCreateCollection(
+        client,
+        [{ id: uuidv4(), vector, ...row }],
+        sumNS
+      );
+      return true;
+    } catch (e) {
+      this.logger(`upsertSummaryVector failed: ${e.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * AMAdocs (summary-search): remove a document's summary vector (on delete/move) so a
+   * stale card can't survive in breadth search. Keyed by exact sourcePath. Never throws.
+   * @returns {Promise<boolean>}
+   */
+  async deleteSummaryVector({ namespace = null, sourcePath = null } = {}) {
+    if (!namespace || !sourcePath) return false;
+    try {
+      const sumNS = this.summaryNamespace(namespace);
+      const { client } = await this.connect();
+      if (!(await this.namespaceExists(client, sumNS))) return false;
+      const collection = await client.openTable(sumNS);
+      const escaped = String(sourcePath).replace(/'/g, "''");
+      await collection.delete(`\`sourcePath\` = '${escaped}'`);
+      return true;
+    } catch (e) {
+      this.logger(`deleteSummaryVector failed: ${e.message}`);
+      return false;
+    }
+  }
+
+  /**
+   * AMAdocs (summary-search): breadth-scope retrieval over per-document summary vectors.
+   * Returns one result per matching document (the "librarian card" view) instead of
+   * chunk fragments. Mirrors similarityResponse's shape so the chat pipeline + folder
+   * result-card UI consume it unchanged. scopePath is the folder prefix (trailing slash);
+   * null = whole workspace (drive/global). Falls back to an empty result when the summary
+   * table doesn't exist yet (corpus not backfilled) — caller can then choose chunk search.
+   * @returns {Promise<{contextTexts:string[], sources:object[], message:(string|false)}>}
+   */
+  async summarySearch({
+    namespace = null,
+    input = "",
+    LLMConnector = null,
+    similarityThreshold = 0.2, // summary vectors run lower than chunks — see stream.js note
+    topN = 10,
+    scopePath = null,
+  } = {}) {
+    if (!namespace || !input || !LLMConnector)
+      throw new Error("Invalid request to summarySearch.");
+
+    const sumNS = this.summaryNamespace(namespace);
+    const { client } = await this.connect();
+    if (!(await this.namespaceExists(client, sumNS)))
+      return { contextTexts: [], sources: [], message: false, empty: true };
+
+    const queryVector = await LLMConnector.embedTextInput(input);
+    const collection = await client.openTable(sumNS);
+    let vQuery = collection
+      .vectorSearch(queryVector)
+      .distanceType("cosine")
+      .limit(topN);
+    if (scopePath) {
+      const escaped = String(scopePath).replace(/'/g, "''");
+      vQuery = vQuery.where(`starts_with(sourcePath, '${escaped}')`);
+    }
+    const response = await vQuery.toArray();
+
+    const contextTexts = [];
+    const sourceDocuments = [];
+    response.forEach((item) => {
+      const similarity = this.distanceToSimilarity(item._distance);
+      if (similarity < similarityThreshold) return;
+      const { vector: _, ...rest } = item;
+      contextTexts.push(rest.text);
+      sourceDocuments.push({ ...rest, score: similarity });
+    });
+
+    const sources = sourceDocuments.map((metadata, i) => {
+      return { metadata: { ...metadata, text: contextTexts[i] } };
+    });
+    return {
+      contextTexts,
+      sources: this.curateSources(sources),
+      message: false,
+    };
   }
 
   /**

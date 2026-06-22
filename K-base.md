@@ -44,13 +44,17 @@ and the integration is **GNOME-first** (see below).
 
 ## Who it's for
 
-The **alpha is for technical early adopters** — Linux / privacy / self-hoster / Ollama folks
-who find it on AUR + GitHub, expect a GPU, tolerate rough edges, and file issues. This is an
-"experiment that may have legs," not a finished product — rough edges are the spec, not bugs.
+AMAdocs is for **technical Linux users who like to play with their tools** — privacy /
+self-hoster / Ollama folks who find it on AUR + GitHub, expect a GPU, tolerate rough edges,
+and file issues. This is an "experiment that may have legs," not a finished product — rough
+edges are the spec, not bugs.
 
-Non-technical, zero-config users are the long-term **destination** (the eventual differentiator
-being that the user never sees the words "model," "embedder," or "vector database") — but not
-the alpha bar. GPU-required, needs-Ollama, and GNOME-first are honest specs here, not failures.
+**Zero-config is no longer the destination (decided 2026-06-21).** The earlier framing — a
+non-technical user who never sees the words "model," "embedder," or "vector database" — is
+dropped. We are catering to a tinkerer audience who *want* the knobs: every tunable, the
+prompts, and even the CSS are exposed for customisation (each with a recommended default and
+a note on what worked on our machine — see the Homepage "Tuning" direction in `AMAdocs-SPEC.md`).
+GPU-required, needs-Ollama, and GNOME-first are honest specs for this audience, not failures.
 
 ## The shape (see `AMAdocs-SPEC.md` for the full spec)
 
