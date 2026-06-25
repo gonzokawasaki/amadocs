@@ -1,7 +1,34 @@
-# AMAdocs — Developer Notes
+# Coracle — Developer Notes
+
+> **Coracle** (formerly *AMAdocs*) — a private, local AI document assistant. The name is the new
+> project theme: a **coracle** is a small, light, single-person boat you carry to the water and that
+> carries you across it — the metaphor for a lightweight, personal, private vessel for navigating your
+> own documents. It runs on a modest machine (one person's corpus, local models, no cloud), and the
+> product language leans into the metaphor — *navigate / chart / waters* — for search and the file
+> view. See the rename entry below for what changed and what deliberately did not.
 
 Technical companion to `K-base.md` (overview) and `AMAdocs-SPEC.md` (product spec). This is the
 **engineering log** — newest entries on top, kept in chronological/archaeological order on purpose.
+
+## 🪶 RENAME (2026-06-25) — the project is now **Coracle** (was AMAdocs); branding-only this pass
+
+The GitHub repo was renamed `amadocs` → **`coracle`** and the product adopts the **Coracle theme**:
+the name plus the **coracle metaphor as product language** (a small personal boat for navigating your
+own waters → your documents; UI copy will lean on *navigate / chart / waters / vessel*). The git
+remote `origin` was repointed to `…/coracle.git`.
+
+**Scope this pass = docs/branding only (deliberate).** All runtime/code identifiers stay `amadocs-*`
+on purpose — the LanceDB workspace slug `amadocs-library` (and its `amadocs-library.lance` /
+`amadocs-library__summaries.lance` tables), the `storage/documents/gnome-amadocs-library/` doc store,
+`storage/gnome-sync/amadocs-*.json`, env vars (`GNOME_*`, `AMADOCS_*`), and UI internals are unchanged.
+Renaming those would mean **migrating/re-indexing the live recovered corpus** (250 docs / 1957 vectors)
+and rewriting baked-in references — a separate, planned task, not worth the breakage for a brand pass.
+
+**Not done yet (easy follow-ups, intentionally deferred):** renaming the doc *files* themselves
+(`AMAdocs-DEV-NOTES.md` / `AMAdocs-SPEC.md` → `Coracle-*`) + their cross-references; user-facing strings
+(app/window title, Homepage hero); and a possible visual **Coracle skin** (water/wood palette) alongside
+Terminal/Slate/Desktop. Branding language is being adopted in the docs now; code + UI strings follow when
+we choose to.
 
 ## ✅ HOUSEKEEPING + VERIFY (2026-06-25) — working tree committed; breadth search re-verified on live tables
 

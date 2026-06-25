@@ -1,6 +1,11 @@
-# AMAdocs — Product Spec: Semantic File Manager
+# Coracle — Product Spec: Semantic File Manager
 
 > The canonical product spec. Overview in `K-base.md`; engineering log in `AMAdocs-DEV-NOTES.md`.
+>
+> **Coracle** (formerly *AMAdocs*) — a coracle is a small, light, single-person boat you carry to the
+> water and that carries you across it: the theme for a lightweight, private, personal vessel for
+> navigating your own documents. Product language leans on the metaphor (*navigate / chart / waters*).
+> Rename is branding-only so far — runtime identifiers stay `amadocs-*`; see the DEV-NOTES rename entry.
 
 ---
 
