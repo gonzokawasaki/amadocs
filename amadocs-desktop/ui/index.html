@@ -407,6 +407,39 @@
       font-size:0.71rem; color:var(--text-faint);
     }
 
+    /* ── COVER thumbnail (clipped top-left crop of the doc) ───────────────
+       The cover is the EXISTING preview renderer drawn into this small tile,
+       then clipped to a legible top-left crop. No raster pipeline for text
+       docs — it's live, themeable DOM. Image/PDF get a real raster cover. */
+    .fc-thumb {
+      position:relative; height:8.5rem; overflow:hidden;
+      background:var(--bg); border-bottom:1px solid var(--border);
+    }
+    /* clamp the renderer's wrapper to a non-scrolling top-left crop */
+    .fc-thumb .vsheet-page, .fc-thumb .md-body {
+      margin:0 !important; padding:0.5rem 0.6rem !important;
+      max-width:none !important; width:auto !important;
+      font-size:0.6rem; line-height:1.3; pointer-events:none; transform-origin:top left;
+    }
+    .fc-thumb .vsheet-page h1, .fc-thumb .vsheet-page h2, .fc-thumb .vsheet-page h3 { font-size:0.82rem; margin:0.2rem 0; }
+    .fc-thumb .vnote { display:none; }                 /* hide loader/note chrome inside tiles */
+    .fc-thumb table { font-size:0.55rem; border-collapse:collapse; }
+    .fc-thumb td, .fc-thumb th { border:1px solid var(--border); padding:0 2px; white-space:nowrap; }
+    .fc-thumb.is-img, .fc-thumb.is-pdf { display:flex; align-items:flex-start; justify-content:center; background:var(--bg-alt); }
+    .fc-thumb canvas, .fc-thumb img { width:100%; height:auto; display:block; }
+    .fc-thumb.is-empty { display:none; }               /* no meaningful cover → summary-only card */
+    .fc-thumb::after {                                 /* bottom fade — signals "there's more" */
+      content:""; position:absolute; left:0; right:0; bottom:0; height:2.6rem;
+      background:linear-gradient(to bottom, transparent, var(--bg)); pointer-events:none;
+    }
+    .fc-thumb.is-img::after, .fc-thumb.is-pdf::after { display:none; }
+    .fc-thumb.is-html { background:#fff; }
+    .fc-thumb.is-html::after { display:none; }
+    .fc-thumb iframe { border:0; background:#fff; pointer-events:none; transform-origin:top left; }
+    /* HTML preview pane — rendered webpage in a sandboxed, network-blocked iframe */
+    .html-preview { height:100%; display:flex; flex-direction:column; }
+    .html-frame { flex:1; width:100%; min-height:24rem; border:0; background:#fff; }
+
     /* ── PREVIEW: tabs ────────────────────────────────────────────────── */
     .tabs {
       height:2.43rem; flex:none;
@@ -1429,6 +1462,7 @@ async function renderOriginalInto(container, docpath, opts={}){
     if(type.includes("wordprocessingml")) return renderDocxInto(container,blob,docpath);
     if(type.includes("spreadsheetml")||type.includes("csv")) return renderXlsxInto(container,blob,docpath);
     if(type.includes("markdown")||/\.(md|markdown|mdown|mkd)$/i.test(docpath||"")) return renderMarkdownInto(container,blob,(docpath||"").split("/").pop());
+    if(type.includes("html")||/\.html?$/i.test(docpath||"")) return renderHtmlInto(container,blob,(docpath||"").split("/").pop());
     return renderTextInto(container,docpath,opts);
   }catch(e){
     return renderTextInto(container,docpath,opts);
@@ -1451,6 +1485,7 @@ async function renderFromDisk(container, fsPath, name){
     if(type.includes("wordprocessingml")) return renderDocxInto(container,blob,null);
     if(type.includes("spreadsheetml")||type.includes("csv")) return renderXlsxInto(container,blob,null);
     if(type.includes("markdown")||/\.(md|markdown|mdown|mkd)$/i.test(name||"")) return renderMarkdownInto(container,blob,name);
+    if(type.includes("html")||/\.html?$/i.test(name||"")) return renderHtmlInto(container,blob,name);
     if(type.startsWith("text/")||type==="application/json") return renderBlobTextInto(container,blob,name);
     container.innerHTML=`<div class="vnote" style="margin:2rem;max-width:34rem;line-height:1.5">
       <strong>${esc(name)}</strong><br><br>No built-in preview for this file type. Use <strong>⤢ show in file manager</strong> to open it with your system app.</div>`;
@@ -1458,6 +1493,134 @@ async function renderFromDisk(container, fsPath, name){
     const msg = e&&e.message==="too-large" ? "File is too large to preview." : (e&&e.message)||"error";
     container.innerHTML=`<div class="vnote" style="margin:2rem">Couldn’t preview this file (${esc(msg)}).</div>`;
   }
+}
+/* ── COVER thumbnails (validation mock, 2026-06-24) ─────────────────────────
+   A grid card's cover = the existing preview renderer drawn into a small tile,
+   CSS-clipped to a legible top-left crop. Reuses renderDocx/Xlsx/Markdown/Pdf/
+   Image — no new render pipeline, no GPU/engine. Lazy (IntersectionObserver) +
+   one-shot per tile. Bytes come via the desktop.readFile bridge, so covers show
+   for unindexed files too (preview is decoupled from indexing).
+   PERF follow-up before shipping: cap docx/xlsx input + rasterize→cache the tile
+   (path+mtime key) instead of holding live DOM. */
+let _coverIO = null;
+const _coverQ = [];          // tiles awaiting a cover — drained ONE at a time (no parallel bursts)
+let _coverBusy = false;
+function _coverPump(){
+  if(_coverBusy) return;
+  const tile = _coverQ.shift();
+  if(!tile) return;
+  if(!tile.isConnected){ return _coverPump(); }     // folder changed out from under it → skip
+  _coverBusy = true;
+  Promise.resolve(renderCoverInto(tile, tile.dataset.cover, tile.dataset.name))
+    .catch(() => {})
+    .finally(() => { _coverBusy = false; _coverPump(); });
+}
+function wireCovers(scope){
+  if(!(desktop && desktop.readFile)) return;
+  _coverQ.length = 0;        // drop pending covers from a previously-viewed folder
+  if(!_coverIO){
+    _coverIO = new IntersectionObserver(ents => {
+      ents.forEach(en => {
+        if(!en.isIntersecting) return;
+        const tile = en.target; _coverIO.unobserve(tile);
+        if(tile.dataset.done) return; tile.dataset.done = "1";
+        _coverQ.push(tile);
+      });
+      _coverPump();          // SERIAL: never render more than one cover at a time
+    }, { rootMargin:"150px" });
+  }
+  scope.querySelectorAll(".fc-thumb[data-cover]:not([data-done])").forEach(t => _coverIO.observe(t));
+}
+const COVER_MAX_BYTES = 12 * 1024 * 1024;   // skip covers for big files — whole-file read+parse is the freeze
+// Only types we can actually DRAW a cover from. Anything else (pptx, zip, video, …) is skipped
+// WITHOUT reading the file — reading + base64-decoding a big unpreviewable blob (e.g. a multi-MB
+// .pptx) on the main thread just to discard it was a real freeze. Decide by extension up front.
+const COVERABLE_RE = /\.(pdf|png|jpe?g|gif|webp|bmp|tiff?|svg|docx|xlsx|csv|md|markdown|mdown|mkd|txt|log|json|xml|html?|js|ts|css|ya?ml|sh|py|c|cpp|h)$/i;
+async function renderCoverInto(tile, fsPath, name){
+  try{
+    if(!COVERABLE_RE.test(name || "")){ tile.classList.add("is-empty"); return; }
+    if(Number(tile.dataset.size || 0) > COVER_MAX_BYTES){ tile.classList.add("is-empty"); return; }
+    const res = await desktop.readFile(fsPath);
+    if(!res || !res.ok) throw 0;
+    const u8 = Uint8Array.from(atob(res.data), c => c.charCodeAt(0));
+    const type = (res.mime || "").toLowerCase();
+    const blob = new Blob([u8], { type });
+    if(type.includes("pdf")){ tile.classList.add("is-pdf"); return renderPdfCover(tile, blob); }
+    if(type.startsWith("image/")){
+      tile.classList.add("is-img");
+      const img = document.createElement("img"); img.src = URL.createObjectURL(blob);
+      img.onload = () => URL.revokeObjectURL(img.src);
+      tile.appendChild(img); return;
+    }
+    if(type.includes("wordprocessingml")) return renderDocxInto(tile, blob, null);
+    if(type.includes("spreadsheetml") || type.includes("csv")) return renderXlsxCover(tile, blob);
+    if(type.includes("markdown") || /\.(md|markdown|mdown|mkd)$/i.test(name||"")) return renderMarkdownInto(tile, blob.slice(0,6000), name);
+    if(type.includes("html") || /\.html?$/i.test(name||"")) return renderHtmlCover(tile, blob);
+    if(type.startsWith("text/") || type === "application/json") return renderBlobTextInto(tile, blob.slice(0,4000), name);
+    tile.classList.add("is-empty");   // no meaningful cover for this type
+  }catch(e){ tile.classList.add("is-empty"); }
+}
+async function renderPdfCover(tile, blob){
+  try{
+    const buf = await blob.arrayBuffer();
+    const pdf = await pdfjsLib.getDocument({ data:buf }).promise;
+    const page = await pdf.getPage(1);
+    const w = tile.clientWidth || 200;
+    const vp0 = page.getViewport({ scale:1 });
+    const vp = page.getViewport({ scale: w / vp0.width });
+    const cv = document.createElement("canvas");
+    cv.width = vp.width; cv.height = vp.height;
+    await page.render({ canvasContext: cv.getContext("2d"), viewport: vp }).promise;
+    tile.innerHTML = ""; tile.appendChild(cv);
+    try{ await pdf.destroy(); }catch(_){}   // free the parsed PDF — only page 1 was ever needed
+  }catch(e){ tile.classList.add("is-empty"); }
+}
+// Spreadsheet cover: render ONLY the first sheet's top-left corner. Tracking sheets often have a
+// used range formatted to the last row (1,048,576) — sheet_to_html over the full range builds a
+// multi-million-cell table and freezes the renderer. Clamp !ref to a small block first (which is
+// also exactly the "top-left crop" the cover wants).
+async function renderXlsxCover(tile, blob){
+  try{
+    const buf = await blob.arrayBuffer();
+    const wb = XLSX.read(buf, { type:"array" });
+    const n = wb.SheetNames[0];
+    const ws = n && wb.Sheets[n];
+    if(!ws || !ws["!ref"]){ tile.classList.add("is-empty"); return; }
+    const R = XLSX.utils.decode_range(ws["!ref"]);
+    R.e.r = Math.min(R.e.r, R.s.r + 14);   // first ~15 rows
+    R.e.c = Math.min(R.e.c, R.s.c + 9);    // first ~10 cols
+    ws["!ref"] = XLSX.utils.encode_range(R);
+    tile.innerHTML = `<div class="vsheet-page is-xlsx"><h3>${esc(n)}</h3><div class="xlsx-sheet">${XLSX.utils.sheet_to_html(ws)}</div></div>`;
+  }catch(e){ tile.classList.add("is-empty"); }
+}
+// HTML (.html/.htm) → render as an actual WEBPAGE in a sandboxed iframe, not raw source. TWO safety
+// layers, because covers auto-render on scroll in a privacy-first app: sandbox="" disables
+// scripts/forms/popups, and a prepended CSP blocks ALL network (no remote beacons/assets) — only
+// inline styles + data: images are allowed. So a stray/tracking .html can neither run nor phone home.
+function sandboxedHtml(html){
+  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:">`;
+  return csp + String(html || "");
+}
+async function renderHtmlCover(tile, blob){
+  try{
+    const html = await blob.text();
+    const ifr = document.createElement("iframe");
+    ifr.setAttribute("sandbox", "");
+    const scale = (tile.clientWidth || 224) / 1000;     // render a 1000px-wide page, scale to tile width
+    ifr.style.cssText = `width:1000px;height:1400px;transform:scale(${scale});`;
+    tile.classList.add("is-html");
+    tile.innerHTML = "";
+    tile.appendChild(ifr);
+    ifr.srcdoc = sandboxedHtml(html);
+  }catch(e){ tile.classList.add("is-empty"); }
+}
+async function renderHtmlInto(container, blob, name){
+  try{
+    const html = await blob.text();
+    container.innerHTML = `<div class="html-preview"><div class="vnote">🌐 ${esc(name)} · HTML (rendered · scripts &amp; network off)</div><iframe class="html-frame" sandbox=""></iframe></div>`;
+    container.querySelector(".html-frame").srcdoc = sandboxedHtml(html);
+    container.scrollTop = 0;
+  }catch(e){ return renderBlobTextInto(container, blob, name); }
 }
 // Markdown view (.md/.markdown). Renders to formatted HTML via marked.js (bundled in
 // vendor/). Falls back to plain text if marked is unavailable or parsing fails.
@@ -1552,12 +1715,22 @@ function renderHomeHtml(d){
   d = d || {};
   const eng=d.engine||{}, model=d.model||{}, gn=d.gnome||{}, lib=d.library||{}, synced=d.synced||[];
   const docs = lib.totalDocs ?? 0, wsN = lib.workspaces ?? 0;
+  const sm = d.summaries||{}, smDone = sm.summarised??0, smTot = sm.total??0, smQ = sm.queued??0;
+  // "Summaries" card: how many indexed docs carry an AI catalog card. While a backfill drains,
+  // smQ counts the files still waiting for granite — surfaced as a live "N queued" sub-line.
+  const smBig = smTot
+    ? `${smDone} <span style="color:var(--text-faint);font-weight:400">/ ${smTot}</span>`
+    : "—";
+  const smSub = smTot
+    ? (smQ>0 ? `AI catalog cards · ${smQ} queued` : "AI catalog cards · all done")
+    : "no indexed files yet";
   const cards =
     homeCard("Index",
       `<span class="${gn.connected?"home-ok":"home-warn"}">●</span> ${gn.connected?"Connected":"Unavailable"}`,
       "GNOME LocalSearch") +
     homeCard("Library", `${docs}`,
       `document${docs===1?"":"s"} · ${wsN} workspace${wsN===1?"":"s"}`) +
+    homeCard("Summaries", smBig, smSub) +
     homeCard("Model", esc(model.chat||"—"), `chat · via ${esc(eng.llmProvider||"ollama")}`) +
     homeCard("Engine", `v${esc(eng.version||"?")}`,
       `Node ${esc(eng.node||"")} · ${esc(eng.vectorDb||"lancedb")}`);
@@ -1576,10 +1749,13 @@ function renderHomeHtml(d){
         (fine to leave running overnight). Applies to the next file; no restart needed.</div>
     </div>`;
   const syncedHtml = synced.length
-    ? `<ul class="home-synced">` + synced.map(s =>
-        `<li><span class="home-synced__path">${esc(s.folder||"?")}</span>
-          <span class="home-synced__meta">${s.files||0} file${s.files===1?"":"s"} · last sync ${fmtUtc(s.lastSync)}</span></li>`
-      ).join("") + `</ul>`
+    ? `<ul class="home-synced">` + synced.map(s => {
+        const sumTxt = (s.summarised!=null)
+          ? ` · ${s.summarised} summarised${s.queued>0?` (${s.queued} queued)`:""}`
+          : "";
+        return `<li><span class="home-synced__path">${esc(s.folder||"?")}</span>
+          <span class="home-synced__meta">${s.files||0} file${s.files===1?"":"s"}${sumTxt} · last sync ${fmtUtc(s.lastSync)}</span></li>`;
+      }).join("") + `</ul>`
     : `<div class="home-empty">No folders indexed yet. Use <strong>＋ Index a folder</strong> below, or open a folder and hit <strong>⟳ index</strong>.</div>`;
   return `<div class="home">
     <div class="home-hero">
@@ -2190,6 +2366,7 @@ function renderFolderList(entries, dir){
 function renderFolderGrid(entries, dir){
   const g = $("#gridView .file-grid"); if(!g) return;
   if(!entries.length){ g.innerHTML = `<div class="tree-ghost" style="padding:1rem">empty folder</div>`; return; }
+  const canCover = !!(desktop && desktop.readFile);   // covers read bytes off disk via the bridge
   g.innerHTML = entries.map(e => {
     const full = joinPath(dir, e.name);
     if(e.isDir){
@@ -2209,10 +2386,12 @@ function renderFolderGrid(entries, dir){
     return `<div class="fc" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
       <div class="fc-head"><div class="fc-badge-wrap"><span class="badge ${cls} fc-badge">${esc(lab)}</span>
         <span class="fc-name${nmCls}">${esc(e.name)}</span></div><span class="fc-dot ${ai.dotOn?"fl-on":"fl-off"}">${ai.dotOn?"●":"○"}</span></div>
+      ${canCover ? `<div class="fc-thumb" data-cover="${escAttr(full)}" data-name="${escAttr(e.name)}" data-size="${e.size||0}"></div>` : ""}
       <div class="fc-divider"></div><div class="fc-summary ${sumCls}">${sumTxt}</div>
       <div class="fc-foot"><span>${esc(fmtBytes(e.size))} · ${fmtDate(e.mtime)}</span><span class="ai-chip ${ai.chipCls}">${esc(ai.chipLabel)}</span></div></div>`;
   }).join("");
   g.querySelectorAll(".fc").forEach(rowClickWire);
+  wireCovers(g);
 }
 
 /* ---- file preview (middle): metadata card. Rich preview + summary = later stages. ---- */
