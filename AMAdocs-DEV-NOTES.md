@@ -3,6 +3,46 @@
 Technical companion to `K-base.md` (overview) and `AMAdocs-SPEC.md` (product spec). This is the
 **engineering log** — newest entries on top, kept in chronological/archaeological order on purpose.
 
+## ✅ HOUSEKEEPING + VERIFY (2026-06-25) — working tree committed; breadth search re-verified on live tables
+
+Two things, no new features: got the multi-session working tree into git, then closed the long-owed
+breadth-search verification now that the library is recovered.
+
+**Library state confirmed (fresh session, stack down/cool):** the 2026-06-24 re-summarise drain **completed**
+— `amadocs-library.lance` = **1957 rows** (the predicted recovery target), sync state = **250 tracked / 0
+queued** (`mtime:""`), pace 15s. The "wedge" saga is fully closed.
+
+**Committed the working tree (was uncommitted across ~4 sessions — a real loss risk; a `/tmp` backup was
+wiped by a reboot once).** Five logical commits on `main` (not pushed): summariser `Keywords:` line · drain
+robustness (bounded timeouts + delete-phase instrumentation) · summary-progress in `/amadocs-status` · cover
+thumbnails + sandboxed HTML rendering · docs. Deleted the throwaway `_sumtest*` scratch files (the eval lives
+at `tooling/search-eval.js`).
+
+**Breadth search re-verified on the LIVE recovered tables (heat-free).** Ran `tooling/search-eval.js` — it
+CPU-embeds the gold queries and hits the REAL production `db.summarySearch` over the live `__summaries` table
+(no granite, no stack), /STEM fully card-covered (40/40):
+
+|            | Recall@5 | MRR  |
+|------------|----------|------|
+| chunk (old)| 0.857    | 0.766|
+| **summary**| **0.952**| 0.893|
+| lexBM25    | 0.833    | 0.798|
+| RRF-fusion | 0.905    | 0.821|
+
+Summary breadth still **beats chunk and fusion**, returning one card/doc with the right docs on top; scope
+routing confirmed in code (`utils/chats/stream.js:216` `isFileScope`). Slightly under the earlier 1.000 —
+the 3-gold "assessment criteria" query now scores 2/3 (`Assessment_Criteria_Breakdown.docx` drops out of
+top-5); card-text variation, not a regression to chase. **Honest scope:** this is a functional/API-level
+verification of the production retrieval path, NOT a literal Electron GUI screenshot (the chrome automation
+tools attach to Chrome, not Electron; an end-to-end stream-chat would fire granite for no extra signal since
+routing + retrieval are already proven).
+
+**The 127/250 summary-card gap = legit-empty short docs, not a hole.** Of 250 tracked docs, 129 carry a
+summary (≈127 cards); 121 are empty — **116 are tiny `.md` calendar/exam-schedule notes (110–126 chars,
+under `summariseDoc`'s 200-char floor → "" by design)** + 4 old `.xls` + 1 mis-titled. Tail worth a glance
+someday, not now. Build-1 finish **step 2 (re-summarise keepers + eyeball breadth search) is DONE**; next is
+step 3 (virtual semantic folders) — currently parked at user's request to discuss the search algorithm more.
+
 ## ✅ BUILT (2026-06-24) — document COVER thumbnails: clipped top-left crops in the grid
 
 A grid-card **cover** for every file, built + running + eyeballed live. **The design insight (user):**
