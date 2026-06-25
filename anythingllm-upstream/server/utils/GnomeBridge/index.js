@@ -82,6 +82,10 @@ function sparql(query) {
     return execFileSync("tinysparql", ["query", "-b", DBUS, "-f", tmp], {
       encoding: "utf8",
       maxBuffer: 1024 * 1024 * 512,
+      // execFileSync is SYNCHRONOUS — a query that never returns would block the whole
+      // Node event loop (freezing the server, not just the drain). Bound it; the caller
+      // treats a throw as "no text", so the doc is skipped and retried next sync.
+      timeout: Number(process.env.GNOME_SPARQL_TIMEOUT_MS) || 30000,
     });
   } finally {
     try { fs.unlinkSync(tmp); } catch {}
@@ -117,6 +121,30 @@ function available() {
 }
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// AMAdocs: bound any async step so a hung native call (e.g. a wedged LanceDB write)
+// can't freeze the serial drain forever. Rejects with a labelled error after `ms`,
+// which the EXECUTE delete phase catches → logs → skips → retried next sync. The
+// underlying promise is left to settle on its own; we only stop AWAITING it.
+function withTimeout(promise, ms, label = "op") {
+  if (!ms || ms <= 0) return promise;
+  let timer;
+  const guard = new Promise((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`${label} timed out after ${ms}ms`)),
+      ms
+    );
+  });
+  return Promise.race([promise, guard]).finally(() => clearTimeout(timer));
+}
+
+// Bound for the EXECUTE delete phase (removeDocuments + summary-vector deletes). A
+// single LanceDB delete that hangs (lock/conflict) would otherwise wedge the whole
+// boot-resume sync holding the inFlight lock — the 2026-06-24 incident. 0 disables.
+const DELETE_TIMEOUT_MS = (() => {
+  const v = Number(process.env.GNOME_DELETE_TIMEOUT_MS);
+  return Number.isFinite(v) && v >= 0 ? v : 120000;
+})();
 
 // Ensure the OS indexer is running (and, on `restart`, has re-crawled). On a
 // non-GNOME desktop LocalSearch is installed but dormant, and even when running its
@@ -386,8 +414,12 @@ async function materializeViaCollector(slug, url) {
   const fsPath = decodeURIComponent(url.replace(/^file:\/\//, ""));
   const filename = path.basename(fsPath);
   const { CollectorApi } = require("../collectorApi");
+  // Bounded so one un-parseable / OCR-stuck file can't wedge the serial drain forever
+  // (returns no text → null → ABSENT → retried next sync, same as "text vanished"). Generous
+  // by default (5 min) so a legitimately slow scanned-PDF OCR still completes; tune via env.
   const res = await new CollectorApi().parseDocument(filename, {
     absolutePath: fsPath,
+    timeoutMs: Number(process.env.GNOME_BACKSTOP_TIMEOUT_MS) || 300000,
   });
   const doc = res?.documents?.[0];
   const text = doc?.pageContent || "";
@@ -620,17 +652,52 @@ async function runSync(opts = {}) {
       const goneSourcePaths = toDelete
         .map((dp) => readDocMeta(dp)?.sourcePath)
         .filter(Boolean);
-      await Document.removeDocuments(currWorkspace, toDelete, userId);
-      await deleteSummaryVectors(slug, goneSourcePaths);
+      // Instrumented + bounded: the 2026-06-24 incident wedged HERE (a LanceDB delete
+      // froze, holding inFlight forever). Markers pin which call stalls; withTimeout
+      // converts a freeze into a logged error so the drain makes forward progress.
+      const t0 = Date.now();
+      console.error(
+        `[gnome-delete] removeDocuments START — ${toDelete.length} docs, ${goneSourcePaths.length} summary cards`
+      );
+      try {
+        await withTimeout(
+          Document.removeDocuments(currWorkspace, toDelete, userId),
+          DELETE_TIMEOUT_MS,
+          "removeDocuments"
+        );
+        console.error(
+          `[gnome-delete] removeDocuments DONE in ${Date.now() - t0}ms`
+        );
+      } catch (err) {
+        console.error(`[gnome-delete] removeDocuments FAILED: ${err.message}`);
+      }
+      const t1 = Date.now();
+      console.error(`[gnome-delete] deleteSummaryVectors START`);
+      try {
+        await withTimeout(
+          deleteSummaryVectors(slug, goneSourcePaths),
+          DELETE_TIMEOUT_MS,
+          "deleteSummaryVectors"
+        );
+        console.error(
+          `[gnome-delete] deleteSummaryVectors DONE in ${Date.now() - t1}ms`
+        );
+      } catch (err) {
+        console.error(
+          `[gnome-delete] deleteSummaryVectors FAILED: ${err.message}`
+        );
+      }
     }
 
     // Per-doc thermal rest — the user-set indexing PACE (Homepage slider; see getPaceMs).
     // Each materialize() fires one granite /generate (the summary), which pins the GPU;
     // back-to-back over a few hundred docs is what heats a thermally-constrained box during
     // a bulk backfill. The rest between docs lets the GPU shed heat without parallelising
-    // anything (still serial — THE #1 RULE). Read live each batch so a slider change takes
-    // effect on the next sync. Disabled when summaries are off (no GPU work to pace).
-    const docCooldownMs = summariesDisabled() ? 0 : getPaceMs();
+    // anything (still serial — THE #1 RULE). The actual rest is read LIVE inside the loop
+    // below (once per doc) so a slider change applies on the very next file — not just the
+    // next batch (a 200-doc batch is ~40min, far too long to wait). Disabled when summaries
+    // are off (no GPU work to pace).
+    const paceDisabled = summariesDisabled();
 
     const persist = () =>
       saveState(slug, {
@@ -650,7 +717,20 @@ async function runSync(opts = {}) {
       pending.set(docpath, { url, mtime });
     }
 
+    // AMAdocs diag (2026-06-24 recovery): pin where the drain stalls — loop sizes +
+    // source breakdown, then a per-doc result marker for the first several docs.
+    const collectorN = toEmbed.filter((e) => sourceByUrl.get(e.url) === "collector").length;
+    console.error(
+      `[gnome-drain] loop START — toEmbed=${toEmbed.length} (collector=${collectorN}, gnome=${toEmbed.length - collectorN}), toResume=${toResume.length}, paused=${Embed.isIngestPaused()}`
+    );
+    let _di = 0;
     for (const { url, mtime } of toEmbed) {
+      _di++;
+      const _diag = _di <= 6;
+      if (_diag)
+        console.error(
+          `[gnome-drain] doc ${_di}/${toEmbed.length} src=${sourceByUrl.get(url) || "gnome"} ${url.slice(-70)}`
+        );
       // Hard STOP mid-pass: halt granite immediately (a long pace makes this loop long-lived,
       // so without this check STOP would keep summarising for the rest of the batch). Already-
       // materialized docs are checkpointed below, so they resume cleanly on the next sync.
@@ -658,10 +738,23 @@ async function runSync(opts = {}) {
       // GNOME-text files read their extracted text directly; blind spots go through the
       // collector backstop (its own parser/OCR). Source is resolved from the current
       // listing (defaults to gnome for delta items whose source map entry is present).
-      const docpath =
-        sourceByUrl.get(url) === "collector"
-          ? await materializeViaCollector(slug, url)
-          : await materialize(slug, url);
+      // Per-doc try/catch: a SINGLE bad file (hung/failed parse, throwing query) must never
+      // abort or wedge the serial drain — skip it (left ABSENT → retried next sync) and move
+      // on. Combined with the bounded collector/sparql timeouts, the drain always makes
+      // forward progress.
+      let docpath = null;
+      try {
+        docpath =
+          sourceByUrl.get(url) === "collector"
+            ? await materializeViaCollector(slug, url)
+            : await materialize(slug, url);
+      } catch (err) {
+        console.error(`[gnome-sync] materialize failed for ${url}:`, err.message);
+      }
+      if (_diag)
+        console.error(
+          `[gnome-drain] doc ${_di} result: ${docpath ? "materialized" : "NULL (empty/unextractable text)"}`
+        );
       if (docpath) {
         adds.push(docpath);
         pending.set(docpath, { url, mtime });
@@ -676,6 +769,8 @@ async function runSync(opts = {}) {
         } catch (err) {
           console.error("[gnome-sync] persist:", err.message);
         }
+        // Read the pace LIVE here so the Homepage slider takes effect on the next file.
+        const docCooldownMs = paceDisabled ? 0 : getPaceMs();
         if (docCooldownMs) await sleep(docCooldownMs); // rest only after real GPU work
       }
       // else: text vanished / not extractable — leave ABSENT so it's retried next sync.
@@ -870,9 +965,23 @@ async function deleteSummaryVectors(slug, sourcePaths = []) {
     const { getVectorDbClass } = require("../helpers");
     const VectorDb = getVectorDbClass();
     if (typeof VectorDb.deleteSummaryVector !== "function") return;
+    let i = 0;
     for (const sp of sourcePaths) {
+      i++;
       if (!sp) continue;
-      await VectorDb.deleteSummaryVector({ namespace: slug, sourcePath: sp });
+      // Per-iteration marker + per-call bound: pins which card delete stalls and stops
+      // one wedged LanceDB write from hanging the whole loop (2026-06-24 incident).
+      const t = Date.now();
+      await withTimeout(
+        VectorDb.deleteSummaryVector({ namespace: slug, sourcePath: sp }),
+        DELETE_TIMEOUT_MS,
+        `deleteSummaryVector[${i}/${sourcePaths.length}]`
+      );
+      const dt = Date.now() - t;
+      if (dt > 2000)
+        console.error(
+          `[gnome-delete] slow summary delete ${i}/${sourcePaths.length} (${dt}ms): ${sp}`
+        );
     }
   } catch (e) {
     console.error("[gnome-sync] summary-vector delete:", e.message);
@@ -914,10 +1023,29 @@ function resummarize(slug, { onlyMissing = true } = {}) {
   return { ok: true, flipped, total };
 }
 
+// AMAdocs (Homepage): per-folder summary progress. Counts tracked (embedded) files, how many
+// carry a real aiSummary, and how many are still QUEUED for one (stamped mtime="" or pendingEmbed
+// — i.e. the backfill/cadence hasn't reached or confirmed them yet). Best-effort and LIVE: it
+// reads each tracked doc JSON via docHasSummary, so the number climbs as a backfill drains. A
+// file with no summary that ISN'T queued (indexed while summaries were off, never re-stamped)
+// shows up only in the total/summarised gap — it needs a 🧠 Re-summarise click to enqueue.
+function summaryStats(slug) {
+  const out = { total: 0, summarised: 0, queued: 0 };
+  const state = loadState(slug);
+  if (!state || !state.files) return out;
+  for (const e of Object.values(state.files)) {
+    if (!e || !e.docpath) continue; // only embedded files can carry a summary
+    out.total++;
+    if (docHasSummary(e.docpath)) out.summarised++;
+    else if (!e.mtime || e.pendingEmbed) out.queued++;
+  }
+  return out;
+}
+
 module.exports = {
   available, ensureIndexer, queryFileList, queryBlindSpots, fetchMeta, fetchText,
   buildDoc, writeDoc, materialize, materializeViaCollector, pathToFileUrl,
   loadState, saveState, computeDelta, docSubfolder,
-  listSyncedSlugs, runSync, backstopFile, resummarize,
+  listSyncedSlugs, runSync, backstopFile, resummarize, summaryStats,
   getPaceMs, setPaceMs,
 };

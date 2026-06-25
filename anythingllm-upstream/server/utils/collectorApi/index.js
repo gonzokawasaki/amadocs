@@ -355,6 +355,17 @@ class CollectorApi {
       },
     });
 
+    // AMAdocs: optional bounded timeout. The bulk GNOME backstop drain is SERIAL, so a
+    // single file whose parse hangs (a malformed office doc, an OCR job that never
+    // returns) would otherwise wedge ALL indexing forever. Callers that want this safety
+    // (materializeViaCollector) pass parseOptions.timeoutMs; default is no timeout, so the
+    // upload path and every other caller behave exactly as before.
+    const timeoutMs = Number(parseOptions.timeoutMs) || 0;
+    const controller = timeoutMs > 0 ? new AbortController() : null;
+    const timer = controller
+      ? setTimeout(() => controller.abort(), timeoutMs)
+      : null;
+
     return await fetch(`${this.endpoint}/parse`, {
       method: "POST",
       headers: {
@@ -365,6 +376,7 @@ class CollectorApi {
         ),
       },
       body: data,
+      signal: controller?.signal,
     })
       .then((res) => {
         if (!res.ok) throw new Error("Response could not be completed");
@@ -372,8 +384,15 @@ class CollectorApi {
       })
       .then((res) => res)
       .catch((e) => {
-        this.log(e.message);
-        return { success: false, reason: e.message, documents: [] };
+        const msg =
+          e?.name === "AbortError"
+            ? `parse timed out after ${timeoutMs}ms`
+            : e.message;
+        this.log(msg);
+        return { success: false, reason: msg, documents: [] };
+      })
+      .finally(() => {
+        if (timer) clearTimeout(timer);
       });
   }
 }
