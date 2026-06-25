@@ -104,15 +104,29 @@ async function buildAmadocsStatus() {
     gnomeUp = false;
   }
   const synced = [];
+  const summaries = { total: 0, summarised: 0, queued: 0 }; // library-wide AI-summary progress
   try {
     for (const slug of Gnome.listSyncedSlugs()) {
       const st = Gnome.loadState(slug);
       if (!st) continue;
+      // Per-folder summary progress (summarised / queued of embedded files) — live while a
+      // backfill drains. Best-effort: a bridge without summaryStats just omits the counts.
+      let ss = { total: 0, summarised: 0, queued: 0 };
+      try {
+        if (typeof Gnome.summaryStats === "function") ss = Gnome.summaryStats(slug);
+      } catch (_) {
+        /* keep zeros if the count fails */
+      }
+      summaries.total += ss.total;
+      summaries.summarised += ss.summarised;
+      summaries.queued += ss.queued;
       synced.push({
         slug,
         folder: st.folder || "?",
         lastSync: st.lastSync,
         files: st.files ? Object.keys(st.files).length : 0,
+        summarised: ss.summarised,
+        queued: ss.queued,
       });
     }
   } catch (_) {
@@ -146,6 +160,7 @@ async function buildAmadocsStatus() {
     model: { chat: chatModel, embedder },
     gnome: { connected: gnomeUp },
     library: { totalDocs, workspaces: wsRows.length, wsRows },
+    summaries,
     synced,
     pace: { summaryCooldownMs: paceMs },
   };
