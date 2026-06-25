@@ -16,7 +16,7 @@ class DocSummary {
   // converter gives us per-page char ranges (PDF), also stop at the end of page 5.
   static MAX_CHARS = 8000; // ~2000 tokens of input
   static MAX_PAGES = 5;
-  static NUM_PREDICT = 200; // ~120 words out — same cap as chat answers
+  static NUM_PREDICT = 300; // ~120-word paragraph + a trailing "Keywords:" line
 
   /**
    * @param {Object} options
@@ -91,6 +91,33 @@ class DocSummary {
   }
 
   /**
+   * Post-process a raw generation into the stored summary. The model returns a prose
+   * paragraph followed by a final "Keywords: a, b, c" line of exact searchable terms
+   * (names, dates, codes, technical terms) — that line is what gives breadth search
+   * rare-term recall, so it must survive. We split it off FIRST, trim only the prose
+   * to a whole sentence (trimToSentence cuts at the last . ! ? — which lives in the
+   * paragraph and would otherwise lop the keyword line off), then re-attach it.
+   * A "Keywords: none" line is dropped.
+   * @param {string} text
+   * @returns {string}
+   */
+  static finalize(text = "") {
+    const raw = (text || "").trim();
+    // Find the LAST "Keywords:" marker (the line we asked for is at the end; a stray
+    // "keywords:" earlier in the prose won't win).
+    let splitAt = -1;
+    const re = /keywords\s*:/gi;
+    let m;
+    while ((m = re.exec(raw)) !== null) splitAt = m.index;
+    if (splitAt === -1) return DocSummary.trimToSentence(raw);
+
+    const prose = DocSummary.trimToSentence(raw.slice(0, splitAt));
+    const keywords = raw.slice(splitAt).replace(/\s+/g, " ").trim();
+    if (/^keywords\s*:\s*(none\.?|n\/a\.?)?$/i.test(keywords)) return prose;
+    return prose ? `${prose}\n\n${keywords}` : keywords;
+  }
+
+  /**
    * Summarise a document into a ~120-word gist. Returns the summary text, or null
    * if anything goes wrong or there's nothing worth summarising. Never throws.
    * @param {string} content - The document's extracted text.
@@ -108,13 +135,20 @@ class DocSummary {
       if (input.length < 200) return null;
 
       const prompt =
-        `You are cataloguing a document for a file browser. Using ONLY the excerpt ` +
-        `below (the document's opening), write a single factual paragraph of at most ` +
-        `120 words describing what this document is and what it covers: its type ` +
-        `(e.g. report, contract, invoice, syllabus, novel, manual), its subject, and ` +
-        `the main topics or sections. Do not add information not in the excerpt, do ` +
-        `not speculate about later pages, and do not start with "This document" — ` +
-        `lead with the subject. Plain prose, no headings or lists.\n\n` +
+        `You are cataloguing a document for a searchable file browser. Using ONLY the ` +
+        `excerpt below (the document's opening), write exactly two parts.\n\n` +
+        `First, a single factual paragraph of at most 120 words describing what this ` +
+        `document is and what it covers: its type (e.g. report, contract, invoice, ` +
+        `syllabus, novel, manual), its subject, and the main topics or sections. Do ` +
+        `not add information not in the excerpt, do not speculate about later pages, ` +
+        `and do not start with "This document" — lead with the subject. Plain prose, ` +
+        `no headings or lists.\n\n` +
+        `Then, on a new final line beginning exactly with "Keywords:", list the ` +
+        `specific searchable terms that actually appear in the excerpt — proper names ` +
+        `(people, organisations, places), dates and years, reference numbers or codes, ` +
+        `and distinctive technical or topic terms — separated by commas. Include only ` +
+        `terms present in the excerpt; write "Keywords: none" if there are none. Output ` +
+        `nothing but the paragraph and the Keywords line (no other labels).\n\n` +
         `Filename: ${title || "untitled"}\n\n` +
         `--- Excerpt ---\n${input}\n--- End excerpt ---`;
 
@@ -152,7 +186,7 @@ class DocSummary {
       }
 
       const json = await res.json();
-      const summary = DocSummary.trimToSentence(json?.response || "");
+      const summary = DocSummary.finalize(json?.response || "");
       this.log(`Summarised "${title || "untitled"}"`, {
         chars: summary.length,
         executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
