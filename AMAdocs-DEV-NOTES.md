@@ -3,6 +3,182 @@
 Technical companion to `K-base.md` (overview) and `AMAdocs-SPEC.md` (product spec). This is the
 **engineering log** — newest entries on top, kept in chronological/archaeological order on purpose.
 
+## ✅ BUILT (2026-06-24) — document COVER thumbnails: clipped top-left crops in the grid
+
+A grid-card **cover** for every file, built + running + eyeballed live. **The design insight (user):**
+don't fight for a faithful full-page thumbnail of a text-heavy doc — a whole page shrunk to tile size is
+illegible grey texture. Render a **legible top-left crop** instead (title / letterhead / first heading /
+opening line — exactly what the eye uses to recognise a doc on a shelf). *Crop, don't scale.*
+
+**This dissolves the hard category instead of solving it.** Text-heavy types were only hard for *raster*
+thumbnails — but they're exactly the types AMAdocs already renders as **live HTML/DOM** (Word→mammoth,
+Markdown→marked.js, spreadsheets→SheetJS, text/code as text). So the cover for those is the **existing
+preview renderer dropped into a small clipped tile** — no raster pipeline, no LibreOffice, no Electron
+screenshot, crisp at any DPI, themeable. The LibreOffice/Office-thumbnail dependency problem just goes away
+because text docs aren't rasterised at all. Only genuinely visual types (PDF, image) get a real raster cover.
+
+**What shipped (both UI copies — `tooling/amadocs-ui/index.html` → mirrored byte-identical to
+`amadocs-desktop/ui/index.html`):**
+- **`.fc-thumb` CSS** — fixed-height (8.5rem) tile, `overflow:hidden`, top-left anchored, a bottom
+  fade-to-`--bg` gradient ("there's more" / torn-corner cue), theme-var styled. `.is-img`/`.is-pdf` center a
+  raster (no fade); `.is-empty` collapses the tile (→ summary-only card) for no-cover types. Clamps the
+  renderer's `.vsheet-page`/`.md-body` wrapper to a non-scrolling crop and hides the `.vnote` loader chrome.
+- **Cover slot** on each file card in `renderFolderGrid` (gated on the `desktop.readFile` bridge via a
+  `canCover` flag), inserted between `.fc-head` and `.fc-divider` — i.e. **cover + the librarian summary card
+  together** (the distinctive identity: visual fingerprint *and* what-it-is).
+- **`wireCovers` / `renderCoverInto` / `renderPdfCover`** — lazy via one shared `IntersectionObserver`
+  (`rootMargin:300px`, copied from `renderPdfInto`'s lazy-page pattern), one-shot per tile (`dataset.done`).
+  `renderCoverInto` reads bytes off disk via `desktop.readFile`, mime-dispatches: PDF→`renderPdfCover`
+  (page-1-only canvas at tile width — NOT the full multi-page `renderPdfInto`), image→`<img>`,
+  docx→`renderDocxInto`, xlsx/csv→`renderXlsxInto`, md→`renderMarkdownInto`, text/json→`renderBlobTextInto`.
+  Text/markdown input is `blob.slice()`d (4–6 KB) to keep the DOM small; unknown types → `.is-empty`.
+- **Covers are decoupled from indexing** (consistent with the 2026-06-21 preview decision): they read straight
+  off disk, so they render for *unindexed* files too — the card just shows "Not yet indexed" in the summary slot.
+
+**Status: built, parse-verified (`vm.Script` over both inline UI scripts = 0 failures; copies byte-identical),
+launched + previewed live.** Ran the desktop app with **`GNOME_CADENCE_DISABLED=1 GNOME_SUMMARY_DISABLED=1`**
+(log confirmed `[gnome-cadence] disabled`) → server/collector/ollama up, **zero indexing heat** (no drain, no
+granite, no embed), covers render purely client-side. Reached via folder → ⊞ grid toggle. Debug port
+`--remote-debugging-port=9222` added on relaunch.
+
+**⚠️ Then it FROZE on the /STEM folder — three rounds of live root-causing. The real lesson: bound the WORK,
+not the input bytes.** Guards now in the cover path (all in `wireCovers`/`renderCoverInto`, both UI copies):
+- **Serial queue** (`_coverQ` + `_coverPump`) — covers render **one tile at a time**. The naive version fired
+  `renderCoverInto` for *every* tile that intersected, so scrolling to the bottom kicked off a parallel burst of
+  whole-file reads + parses → freeze. Queue clears on folder change; skips detached tiles.
+- **12 MB input cap** — skip reading huge files. Helps, but **NOT sufficient** (see the xlsx below).
+- **Extension gate** (`COVERABLE_RE`) — decide renderability by extension **before reading**. The 10.45 MB
+  `Vibe Coding an App.pptx` was being fully read + base64-decoded on the main thread *just to discard it* (no
+  pptx cover renderer). Now skipped with zero I/O.
+- **The actual culprit + the principle:** `SISVT…STEM Assessment Tracking….xlsx` is **20 KB on disk** but its
+  first sheet's used range is **`B1:F1048576` = 5.24 MILLION cells** (formatted to Excel's max row). The cover
+  reused `renderXlsxInto` → `sheet_to_html` over the *full* range → a multi-million-cell DOM table → instant
+  freeze. **Input-size and extension caps cannot catch this — a 20 KB file exploded into a 5 M-cell render.**
+  Fix: a dedicated **`renderXlsxCover`** that clamps `!ref` to the first ~15 rows × ~10 cols *before*
+  `sheet_to_html` (which is also exactly the top-left crop the cover wants). Diagnosed properly — `ls -laS` the
+  folder + read each xlsx `!ref` with the node `xlsx` lib — instead of guessing per file.
+- **`renderPdfCover`** also `pdf.destroy()`s after page 1 to free memory.
+- **Known remaining gap:** only **xlsx** is output-bounded; a `.docx` with a huge embedded table could still
+  build heavy DOM via mammoth (the /STEM docx are all <60 KB so it didn't bite). Bound docx the same way if it
+  recurs.
+
+**✨ HTML now renders as a WEBPAGE, not source (2026-06-24).** `.html`/`.htm` previously fell into the
+`text/*` catch-all → raw escaped source. New `renderHtmlCover` (cover: 1000px-wide page scaled to tile width,
+top-cropped) + `renderHtmlInto` (preview pane: full rendered page) draw it in a **sandboxed iframe**. TWO safety
+layers because covers auto-render on scroll in a privacy-first app: `sandbox=""` (no scripts/forms/popups) **and**
+a prepended CSP (`default-src 'none'; style-src 'unsafe-inline'; img-src data:; font-src data:`) that **blocks
+all network** — a stray/tracking `.html` can neither run nor phone home. Wired into all three dispatchers
+(`renderCoverInto`, `renderFromDisk`, `renderOriginalInto`).
+
+**NOT yet done (follow-ups):**
+- **Catch this BUG CLASS (decided worth doing, 2026-06-24):** (a) a **Long Tasks `PerformanceObserver`**
+  dev-logger flagging any main-thread task >50 ms + which file's cover caused it (surfaces jank before it's a
+  freeze; ~10 lines, dev-only); (b) a **pathological-fixtures smoke test** — sheet-formatted-to-row-1M, huge
+  PDF/CSV/image, deeply-nested docx — rendering each cover under a time budget in CI (**/STEM is now a real
+  fixture**); (c) the architectural fix below makes the class *impossible*.
+- **Carousel view mode** — a third `setView('carousel')` (alongside `'list'`/`'grid'`, same `entries`, CSS
+  horizontal scroll-snap). The covers are the substrate; this is just another presentation.
+- **Perf + the architectural robustness fix (the "(c)" above) — render covers in a Web Worker + cache.**
+  Today covers render on the main thread, so a pathological file freezes the UI until each guard is found
+  (xlsx now clamped; docx not yet). The class-killing fix: render heavy covers in a **Web Worker** — it cannot
+  freeze the UI and, crucially, **can be killed on a timeout** (you can't interrupt sync main-thread JS), then
+  **rasterise the finished tile → cache** (data-URL/file keyed by path+mtime, same scheme as LanceDB AI data) so
+  the main thread only ever does `<img src>`. The cache layer and the robustness boundary are the **same work**.
+  (`renderFromDisk`/`readFile` reading the WHOLE file over IPC is also wasteful — worker + size/extension gates
+  address it.)
+- **Reuse GNOME's freedesktop thumbnail cache** (`~/.cache/thumbnails/{normal,large,…}`, PNG named by MD5 of
+  the `file://` URI) as a zero-cost first source for files Nautilus already thumbnailed — the same "ride on the
+  OS's work, fill the gaps" philosophy as riding on LocalSearch. (Note: GNOME only has Office-doc thumbs if a
+  LibreOffice thumbnailer is installed, so this doesn't dodge the dependency for those — the live-render path does.)
+- **Tuning** — text-tile font is 0.6rem; bump if the crop reads too small. Cover-first card layout (cover above
+  the header) is an option vs. the current header-then-cover.
+
+## 📝 FUTURE IDEA (2026-06-24) — coarse-to-fine "agentic" answers (cards → deep read)
+
+**Idea (user):** one query like *"find the doc where capex is discussed"* runs a two-hop funnel — search
+the catalogue **summary cards** to pick candidates, then read the **full-text chunks** of just those
+candidates for a detailed, cited answer. Needs more planning; parked here.
+
+**Why it fits:** both halves already exist — stage 1 = `summarySearch` over `<slug>__summaries` (built,
+R@5 1.000); stage 2 = chunk search scoped to a path (file-scope "deep search"). New work is small: take
+top-K summary hits → run chunk retrieval **restricted to that set of sourcePaths** → synthesise once.
+
+**Design leanings from the discussion:**
+- This is **deterministic coarse-to-fine, not a true agent loop** — call it that. Build the fixed two-hop
+  first. A real LLM-driven loop (decide which docs to open, judge sufficiency, re-query) only earns its
+  keep for multi-hop queries a single pass can't answer, and on the fan-stop 4 GB box **every iteration =
+  more granite/GPU heat** (THE #1 constraint). If ever added: bound to ≤2 iterations, small model as
+  router/judge (one-token "sufficient?"), not a free planner.
+- **Synthesise once, not per-candidate** — gather the narrowed candidates' chunks into ONE granite call.
+  One generation, stays serial, minimal heat.
+- **Generous at stage 1, narrow at stage 2** — a funnel only loses recall at stage 1, and stage 1 is pure
+  vector math (cheap, no granite), so cast wide (top-10–15 cards) then narrow to ~3–5 for the read. The
+  new `Keywords:` line covers the rare-term misses that used to leak here.
+- **Show the candidate cards it picked** as provenance (extends the grounded-citation differentiator one
+  level up; makes the two-hop legible).
+
+**Shares infra with virtual folders:** scoping search by a `sourcePath` **SET** (IN/OR-list) rather than
+`starts_with(prefix)` is the same engine delta the virtual-folders design needs — build it once, both
+land. → sequence this as a **step 5**, after virtual folders, not inside the Build 1 finish line.
+
+**Open / to plan:** does this unify the currently-separate breadth/deep scopes into one "just ask" answer
+mode? top-K thresholds; corpus scope (the "email" example assumes mail is indexed — today the catalogue is
+filesystem docs only, so demo with a doc type actually indexed). Pairs with the clarifying-questions note
+below.
+
+## 📝 FUTURE IDEA (2026-06-24) — LLM clarifying questions to refine a search
+
+**Idea (user):** the LLM can ask the user a question to refine an ambiguous search before/while answering.
+Needs more planning; parked here. Same primitive as the virtual-folders "optional, bounded questions"
+(folder-intent disambiguation + per-file tiebreak) — pointed at search.
+
+**The trap to avoid:** do NOT ask granite to *invent* a clarifying question — it's a heat-costing call, adds
+a round-trip before any answer, and it will ask about facets that don't exist in the corpus (hallucinated
+options are worse than none).
+
+**The right way — the retrieval results decide whether and what to ask (cheap, grounded):** after stage 1
+you already hold candidate cards with real metadata (folder, date, type, similarity). Ambiguity is
+detectable from that set **with no LLM call**:
+- candidates split across distinct folders → offer a folder facet;
+- wide date span → offer a time facet;
+- uniformly low top similarity → recall is weak, ask for more specific terms instead of guessing;
+- many near-tied candidates → offer to narrow.
+The options come straight from real candidate metadata, so they **can't be hallucinated** and granite is
+optional (templated phrasing works). The question stage then *saves* heat — pruning candidates shrinks the
+context into the one synthesis.
+
+**Strong leaning: answer-then-offer, not ask-then-answer.** Don't block by default (blocking reintroduces
+the friction "AI librarian by default" is meant to remove). Answer from the top candidate immediately, then
+offer the refinement as ignorable facets ("answering from the 2023 deck; also in Q4 forecast — switch?").
+Reserve a blocking question for the rare genuinely-unresolvable case. Rule: **ask only when the answer would
+materially change** (same bar the harness uses; same "skippable, sharpens edges" framing as virtual
+folders). **Cap at one question per query** — multi-turn interrogation is where it turns annoying and, on
+this box, each extra generation is more GPU time.
+
+**This is a single-user corpus**, so "which of *your* folders" is meaningful (the user recognises their own
+structure) — faceted refinement that feels robotic on web search feels natural here.
+
+**Open / to plan:** does refinement live in the **conversational chat** (inline "switch?" affordances) or a
+**structured faceted UI** (clickable folder/date filters above the candidate cards)? Retrieval logic is
+identical; the UX fork interacts with the breadth/deep scope-unification question in the note above.
+
+## 📝 NOTE / FUTURE IDEA (2026-06-24) — explicit `powerMonitor` resume hook on wake-from-sleep
+
+**Not built — captured for later.** There is currently **no sleep/suspend-specific code path**. On
+suspend the Node process freezes with the OS: the cadence timers (`cadence.js` boot `setTimeout` +
+15-min `setInterval`) and any in-flight per-doc `sleep()` cool-downs just fire late on wake, and any
+in-flight granite/embed HTTP call to Ollama either completes after wake or times out → that one doc is
+retried next tick. Nothing is lost — the durable/idempotent/no-over-claim queue (`[[k-base-ingest-safety]]`)
+makes freeze-and-thaw safe by construction. The OS crawl (LocalSearch) is idle-aware and pauses/resumes
+with the OS on its own.
+
+**The one thing left on the table:** after a long sleep, AMAdocs may wait up to a full 15-min period
+before its next tick picks up the delta. A small improvement would be an Electron `powerMonitor.on('resume')`
+hook in `amadocs-desktop/main.js` that fires `cadence.runAndChase()` (or pokes the sync endpoint)
+immediately on wake instead of waiting for the next interval. The only existing `powerMonitor` mention is
+the parked AI-Finder OCR idle-detection idea further down this log — not implemented. Low priority; the
+current behaviour is correct, just not maximally prompt.
+
 **Current state (2026-06-20):** AMAdocs is the semantic file-manager UI wired end-to-end to the
 engine (live file tree, AI state chips, folder indexing, scoped chat, context-menu actions); the
 "ride on GNOME" loop and safe ingest queue are proven live; the LanceDB schema bug is fixed and the
@@ -25,9 +201,176 @@ not the old read-only markdown status — both 2026-06-21, verified live in the 
 granite `aiSummary` (was collector/upload-only); test batch + the 40-doc /STEM eval folder backfilled and
 verified, and a real `aiSummaryForPath` query bug (unquoted DataFusion identifier) found + fixed so
 Option-A summary chat finally works — see the top entry. A **full-778 backfill is now in progress**
-(bounded cadence drain, ~4h, $0). Open: **packaging** (stale AppImage, icon, Windows/macOS) + the
+(bounded cadence drain, ~4h, $0). The summariser was then **upgraded to emit a `Keywords:` line**
+(2026-06-24, top entry) — exact names/dates/codes/technical terms appended to each card so breadth search
+recovers the rare-term recall the prose paragraph drops; applies to new summaries / on Re-summarise. Open: **packaging** (stale AppImage, icon, Windows/macOS) + the
 summary-search *routing* redesign this backfill unblocks. The "Phase 1 / Phase 2" labels below are
 historical build-stage names — the product is just AMAdocs now.
+
+## ✅ CORRECTION (2026-06-24 PM) — the "wedge" was a MISDIAGNOSIS; drain is healthy, just slow + late-embedding
+
+The incident entry below blamed a **frozen LanceDB delete** holding `inFlight`. **That was wrong** —
+proven by instrumenting the EXECUTE delete phase + the materialize loop and watching a clean boot-resume
+in the live desktop app:
+
+- `removeDocuments` = **89ms** (the 175 deletes were already-gone no-ops), `deleteSummaryVectors` = **~14s**
+  (175 sequential card-deletes over the small `__summaries` table). **Both COMPLETE every pass** — no freeze.
+- The materialize loop runs fine: `loop START — toEmbed=163, paused=false`, docs 1..N `result: materialized`,
+  **0 materialize failures**, `queued` count steadily decreasing.
+
+**Why it LOOKED frozen (three compounding artifacts, none a hang):**
+1. **Pace.** The saved Homepage slider was **55000 ms** (55 s rest per doc) → 163 docs ≈ **~2.5h** materialize
+   phase. (Read live per-doc via `getPaceMs()`, so it can be changed without a restart.)
+2. **GPU idle is expected here.** The head of the queue is short calendar/SLE notes (<200 chars) →
+   `summariseDoc` returns `""` and **skips granite entirely** → `nvidia-smi` reads 0% for long stretches.
+   Granite only fires on longer docs. So "GPU idle + no progress" ≠ wedged.
+3. **`embedFiles` runs ONCE, after the whole loop.** The main `amadocs-library` table does **not** grow until
+   every doc in the pass has materialized — so sampling `countRows()` shows **1123 flat for the entire ~2.5h**,
+   which is indistinguishable from a freeze if you only watch the row count. (This is the real trap that
+   produced the "main table sampled twice 8s apart = identical" observation.)
+
+**What's actually true:** the library is degraded (1123 rows / 72 summary cards / `workspace_documents` ~79)
+because the 163-doc rebuild simply **hasn't finished a pass yet** — not because it can't. Recovery = let ONE
+uninterrupted pass complete (user chose to keep the **55 s** thermal-safe pace 2026-06-24 → ~2.5h, then
+`embedFiles` rebuilds the lance table + `upsertSummaryVector` rebuilds the cards at end-of-pass). The incident's
+real damage cause stands (curl/restart churn mid-drain); the *mechanism* was slow-pace + deferred-embed, not a
+lock.
+
+**Shipped this session (kept):** `withTimeout()` helper + `GNOME_DELETE_TIMEOUT_MS` (default 120s) wrapping
+both delete calls — cheap insurance against a *genuine* future lance hang (converts a freeze → logged error →
+retried). Plus diagnostic markers `[gnome-delete]` (delete-phase timings) and `[gnome-drain]` (loop size +
+first-6-doc results) — low-noise, safe to leave; trim the per-doc `[gnome-drain]` lines on the next restart if
+desired. The 2026-06-24-AM robustness fixes (collector/sparql timeouts, per-doc try-catch) also stand.
+
+**Possible real improvement (NOT done, deferred):** the end-of-loop `embedFiles` means search stays degraded
+for the whole pass and an interruption leaves everything un-embedded (only `pendingEmbed`-checkpointed for the
+*next* pass). Embedding in smaller batches *during* the loop would make recovery incremental + visible. Bigger
+change; left for after this recovery completes.
+
+## ⚠️ INCIDENT (2026-06-24 AM) — re-summarise drain "wedge" (see CORRECTION above — misdiagnosed) + robustness fixes
+
+**State at exit:** stack UP (server :3001, collector :8888, Electron app). **The library is DEGRADED — ~79 docs vs 255** — and a boot-resume `runSync` is **wedged holding the `inFlight` lock** (GPU idle, no progress). Pace = 120000 ms. This is NOT fixed; it needs one more focused session. Honest account below.
+
+**How it happened (self-inflicted during diagnosis):** validating the new summariser keyword line (entry below), a `curl` to `POST /workspace/amadocs-library/resummarize` flipped **176** docs to "changed" (delete-old + re-embed). The delete phase ran — **`workspace_documents` 255→79, main lance `amadocs-library` 1957→1123** — then `runSync` **stalled before rebuilding them**. Repeated `curl --max-time` aborts + restarts compounded it. The 176 are durably queued in state (`mtime:""`), source files intact → recoverable once the drain works.
+
+**Where the hang is (localized by elimination, NOT yet pinned to a line):**
+- NOT `computeDelta` / `queryFileList` / `queryBlindSpots` — those go through `sparql()`, now 30s-bounded; a hang would throw → cadence logs `sync error`. None logged.
+- NOT the materialize loop / collector / granite — added a 60s collector timeout + the existing 120s granite timeout; **neither ever fired** across multiple runs. So execution never reached the loop.
+- **FROZEN (not grinding)** in the **EXECUTE delete phase**: `Document.removeDocuments` (index.js:623) or `deleteSummaryVectors` (:624) — both LanceDB writes. Main table sampled twice 8s apart = identical (1123). Suspected **LanceDB lock/conflict** on this changed-set (possibly aggravated by my many concurrent `lancedb.connect()` probes during debugging — but it re-wedged after I stopped probing, so likely a genuine removeDocuments/lance hang). **Reproduces across clean restarts** (the boot-resume `cadence.tick()` → `runSync(limit:0, reconcile:false)` re-enters and re-wedges).
+
+**Robustness fixes SHIPPED this session (all `node --check` clean — KEEP them; they're correct, but they do NOT fix this wedge since it's pre-loop):**
+- **(A)** `collectorApi.parseDocument()` now takes an optional bounded `timeoutMs` (AbortController; default = no timeout, so the upload path is unchanged). `materializeViaCollector` passes `GNOME_BACKSTOP_TIMEOUT_MS` (default **300000**) so one un-parseable/OCR-stuck backstop file can't wedge the serial drain forever (→ null → retried next sync).
+- **(B)** `sparql()`'s synchronous `execFileSync` got a `timeout` (`GNOME_SPARQL_TIMEOUT_MS`, default **30000**) — a hung tinysparql query can no longer freeze the whole event loop.
+- **(C)** Per-doc `try/catch` in `runSync`'s `toEmbed` loop — one bad file is skipped (left ABSENT, retried) instead of aborting/wedging the batch.
+
+**NEXT SESSION — to actually fix + recover:**
+1. **Instrument the EXECUTE delete phase** (markers before/after `removeDocuments` and `deleteSummaryVectors` in `runSync`, index.js:626-633) and let one boot-resume reveal the exact stuck call. Then bound/guard it (likely a timeout or a lance-lock check around `removeDocuments`).
+2. **Recover the library:** once the drain completes a clean pass, the 176 flipped (`mtime:""`) docs rebuild (re-embed + re-summarise with the new keyword prompt) → back to ~255 docs + summary cards. Run it at the 120s pace, **uninterrupted** (the biggest lesson: do NOT poke it with `curl`/restarts mid-drain — that caused most of the churn).
+3. **Cleanup surfaced:** **1930 orphan doc-JSON sidecars** on disk (only 250 tracked; **361 with `aiSummary`** = the source of the user-reported "380 summaries" mismatch — a disk-derived count over orphans; the live counter is 74/250). Breadth `__summaries` table = only **72 cards** for 255 docs (the original "search only works sometimes" cause). Both resolve when the drain + an orphan-JSON sweep run.
+
+## 🔑 SUMMARISER (2026-06-24) — `Keywords:` line for rare-term breadth recall
+
+The catalog-card summariser now extracts exact searchable tokens, not just prose. **Why:** breadth
+(folder/global) chat ranks against the embedded `aiSummary` string (lance `upsertSummaryVector` embeds it
+verbatim — `vectorDbProviders/lance/index.js:335-339`), and the search-redesign eval already pinned the one
+failure mode: *exact rare terms the 120-word card omits* (e.g. `microbit` → summary Recall@5 0.50). A polished
+prose paragraph naturally drops proper nouns, codes and rare terms, so breadth search can't match them — which
+is why folder search felt "good only some of the time."
+
+**Change (both `DocSummary` copies — `server/` + `collector/utils/DocSummary/index.js`, kept identical):**
+- **New prompt, two parts:** the same ≤120-word factual paragraph, then a final line beginning exactly
+  `Keywords:` listing the specific terms present in the excerpt — proper names (people/orgs/places),
+  dates/years, reference numbers/codes, and distinctive technical/topic terms. `Keywords: none` when there are
+  none.
+- **`NUM_PREDICT` 200 → 300** so the extra line isn't truncated.
+- **New `DocSummary.finalize()`** replaces the bare `trimToSentence` call in `summarize()`. It splits the
+  keyword line off *first*, then sentence-trims only the prose, then re-attaches the line. Necessary because
+  `trimToSentence` cuts at the last `.`/`!`/`?` — which lives in the paragraph — and would otherwise silently
+  lop the keyword line off the end. `Keywords: none` / empty is dropped; the last `keywords:` marker wins so a
+  stray mention in prose can't false-split.
+
+**Validated (no backfill — thermal):** 5-case parser unit test (newline / inline / none / no-line fallback /
+stray-mention) + one REAL `granite4.1:3b` call on `0500_…Specimen_Insert_1.pdf` →
+`Keywords: 0500/01, tundra, Pleistocene` — the paper code plus rare terms the paragraph omitted, exactly the
+intended recall win (names already in the prose, e.g. Lyuba/Siberia, are embedded regardless). The keyword line
+is **visible on the catalog card** too (deliberate — the ask was to append it into the summary; embed-only is a
+one-line switch if the card reads cluttered).
+
+**Only affects NEW summaries** — existing cards are unchanged until **🧠 Re-summarise** is run (use
+`onlyMissing: false` to re-do all surviving docs under the new prompt, not just the gaps). Not yet re-eval'd:
+re-run `tooling/search-eval.js` after re-summarising /STEM for a before/after Recall@5 number. Planned next:
+user culls the corpus, then runs Re-summarise.
+
+## 🧭 PLANNING (2026-06-23) — two-build split + Gemma size data + virtual-folders design settled
+
+Planning session, no code shipped. Three outcomes:
+
+**1. Two builds, not one.** **Build 1 "AMAdocs Lite"** = this 4 GB GTX 1650 Ti box, near complete, keeps the
+granite + moondream + Tesseract + MiniLM stack (NO Gemma). **Build 2 "AMAdocs"** = the Gemma 4 consolidation,
+designed for an **~8 GB VRAM floor**, parked until Build 1 ships. The split exists because of hard data below.
+
+**2. Gemma 4 sizing — corrected with real numbers (the earlier memory was wrong).**
+- Measured this box: `nvidia-smi` → **3713 MiB free**, and the **dGPU is compute-dedicated** (display runs on
+  the Intel iGPU → nearly the whole 4 GB is usable, not "4 GB minus desktop").
+- `gemma4:e2b-it-q4_K_M` = **7.2 GB** — wrong tag, far too big. The real candidate is Google's official QAT
+  int4, **`gemma4:e2b-it-qat`**. Pulled the **registry manifest** (no weights download): text weights
+  **3.35 GB** + vision projector (mmproj) **0.99 GB** = **4.34 GB** total.
+- Verdict: even text-only (3.35 GB + ~1 GB KV/runtime) overshoots the ~3.3 GB effective budget → ~15–25 % CPU
+  layer offload → reintroduces the chassis-heat problem. So Gemma can't hold both modalities resident on 4 GB;
+  on an 8 GB card `e2b-qat` fits clean. Perf math: TU117 GDDR6 ~192 GB/s → fully-resident ~3.35 GB tops
+  ~50 tok/s (real 20–30); each ~10 % offload ≈ halves it. Settling test on any box = `ollama run … --verbose`
+  + `ollama ps` (shows the GPU/CPU layer split). Build 2 re-bases on `e2b-qat` @ 8 GB floor, full consolidation
+  clean (no granite fallback needed at that tier).
+
+**3. Virtual semantic folders → promoted into Build 1 ship scope, design settled.** Full design now in
+`AMAdocs-SPEC.md`. Headline: **classification, not clustering** — same "small model = classifier/router, not
+generator" principle as the CSS-theming skill. The **user owns the structure** (chooses folder names from a
+simple *default structure*), the **AI owns the placement** (which file goes where), with a few **optional,
+bounded questions** to sharpen edges. Mechanism is **zero-GPU + deterministic**: each folder is a named
+**anchor** (name + description) embedded with MiniLM; each doc assigns to its **nearest anchor** by cosine over
+its existing summary vector (floor → "Unsorted"); editing re-flows live. Questions reuse the same primitive —
+folder-intent answers enrich an anchor's description, per-file tiebreaks pin a file; both skippable. One
+unifying primitive (`anchor` | `query` | `pinned`, or a mix) covers Mode 1 (AI-auto), Mode 2 (user-edited),
+and multiple named **structures** the user **toggles** between in the left panel (a switchable lens: real FS ↔
+AI structure ↔ own structures). Engine delta = scope by a `sourcePath` **set** (`IN`/OR) not just
+`starts_with(prefix)`, + a small anchor-embed/nearest-assign util + a `virtual-folders.json` store.
+
+**Build 1 finish sequence:** (1) cull the demo corpus → (2) re-summarise keepers + eyeball breadth search live
+→ (3) virtual folders → (4) Homepage/UI polish.
+
+## 🐛 FIX + ✨ FEATURE (2026-06-22) — pace slider now applies per-FILE; Homepage shows summary progress
+
+Two changes this session, both verified against the live running stack (server :3001 nodemon reload +
+Electron renderer reload over the `--remote-debugging-port=9222` CDP socket).
+
+**1. BUG: the Homepage "Indexing pace" slider was ignored mid-backfill.** `runSync` captured the pace
+ONCE per batch (`const docCooldownMs = getPaceMs()` at the top of the EXECUTE block) but `GNOME_SYNC_CAP`
+defaults to **200 docs/batch** ≈ ~40 min at ~12 s/doc — so dragging the slider had no effect until the
+in-flight batch finished, contradicting the UI toast's promise ("takes effect on the next file"). **Fix:**
+read the pace **live inside the per-doc loop**, right before the rest `sleep`, in
+`server/utils/GnomeBridge/index.js` (~line 633/679). The batch now only captures `paceDisabled =
+summariesDisabled()` (a constant per process); the actual `getPaceMs()` is re-read each doc, so a slider
+change applies on the very next file with no restart. Verified live: user moved the slider to **95 s**
+mid-session and it took hold (persisted to `storage/gnome-sync/amadocs-settings.json`). Separately noted
+the saved value had been sitting at `0` (no rest at all = the "GPU firing constantly" the user saw).
+
+**2. FEATURE: Homepage now documents summary progress (answers "how many docs have a summary?").** The
+status payload + Homepage previously showed total docs but NOT how many carry an AI catalog card —
+backfill progress was only visible via `grep -c Summarised server.log` or the state file. Added:
+- `GnomeBridge.summaryStats(slug)` → `{ total, summarised, queued }` per synced folder. `summarised` =
+  tracked docs whose stored JSON has a non-empty `aiSummary` (reuses `docHasSummary`); `queued` = no
+  summary yet but stamped `mtime===""`/`pendingEmbed` (in the backfill pipeline). **Live** — reads each
+  doc JSON, so the number climbs as the cadence drains. Exported in `module.exports`.
+- `/api/amadocs-status` (`server/endpoints/workspaces.js`) now returns a library-wide
+  `summaries:{total,summarised,queued}` aggregate **and** per-folder `summarised`/`queued` on each
+  `synced[]` entry. Best-effort (guards `typeof Gnome.summaryStats === "function"`).
+- Homepage (`tooling/amadocs-ui/index.html` → mirrored to `amadocs-desktop/ui/index.html`): a new
+  **"Summaries"** card (`128 / 778`, sub-line `AI catalog cards · N queued` / "all done") + the Indexed
+  folders line now reads `N files · M summarised (K queued) · last sync …`.
+- Verified live: endpoint returned `{total:778, summarised:128, queued:352}` and climbed during the
+  session (37 → 128) = the count tracks the backfill in real time. Both server files `node --check` clean;
+  both UI copies vm-parse clean. **Possible follow-up (not done):** auto-refresh the Homepage counts on a
+  timer while a backfill runs (currently refreshes on load / ⟳ only).
 
 ## 🔬 FINDING (2026-06-22) — "GPU idle, CPU hot" = the heat is the native ONNX embedder, NOT granite
 

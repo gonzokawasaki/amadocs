@@ -55,6 +55,17 @@ filesystem, and the AI catalogs, summarises, and answers questions about what yo
 - Shows file icon, name, modified date, size.
 - Indexed files show their `aiSummary` as a subtitle/tooltip.
 - Clicking a file in this view opens it in preview mode (adds a tab).
+- **Cover thumbnails (grid, built 2026-06-24).** Each grid card carries a **cover** above its summary card —
+  a **legible top-left crop** of the document, not a shrunk-to-fit full page (*crop, don't scale*: the title /
+  letterhead / opening line is what the eye recognises). Visual types (PDF, image) get a real raster cover;
+  text-heavy types (Word, Markdown, spreadsheets, text/code) reuse the **existing live-HTML preview renderer**
+  clipped to the tile — so there's no raster pipeline and no LibreOffice dependency for Office docs. Covers
+  read straight off disk (the `readFile` bridge), so they render for **unindexed files too** (decoupled from
+  indexing, like preview). HTML files render as an actual **sandboxed webpage** (scripts + network disabled),
+  not raw source. Lazy (IntersectionObserver) + serial (one cover rendered at a time) + bounded (skip files
+  >12 MB; clamp spreadsheet covers to a top-left block) so no single pathological file can freeze the UI.
+  See `AMAdocs-DEV-NOTES.md` → "document COVER thumbnails". A **carousel** view (cover-flow over the same
+  files) is the planned next mode.
 
 **Preview mode** (when a file is selected):
 - Tabbed — multiple files can be open simultaneously.
@@ -95,9 +106,12 @@ Three states depending on selection:
    no duplicate-chunk domination, matching *what a doc is*. Chunk-level retrieval is reserved for **file
    scope** ("deep search" — click into a single document). An offline eval on a 40-doc folder showed
    summary-search beats current chunk-search on recall (0.93 vs 0.86 R@5) and kills the "random hits"
-   scatter; a fused **lexical (TinySPARQL FTS) + summary via RRF** leg lifts recall further (0.95) as a
-   safety net for exact rare terms the 120-word summary doesn't echo (e.g. "microbit"). See
-   `AMAdocs-DEV-NOTES.md` → "LLM search redesign". **Hard prerequisite — now being satisfied (2026-06-22):**
+   scatter. The one weakness — exact rare terms the 120-word prose drops (e.g. "microbit") — is handled
+   **inside the summary itself (2026-06-24):** the summariser now appends a `Keywords:` line of exact
+   names/dates/codes/technical terms to each card, and that line is embedded with the rest, so those tokens
+   are matchable without a separate lexical index. (A fused TinySPARQL-FTS + summary RRF leg was the earlier
+   plan but the eval showed summary-only already wins, so it wasn't shipped.) See
+   `AMAdocs-DEV-NOTES.md` → "Summariser" + "LLM search redesign". **Hard prerequisite — now being satisfied (2026-06-22):**
    summaries must exist for every indexed file. gnome-sync now summarises by default; the /STEM eval folder
    (40 docs) is backfilled and a full-778 backfill is in progress (~4h bounded cadence drain). Once complete,
    the breadth summary-search routing can be built on top.
@@ -105,8 +119,8 @@ Three states depending on selection:
 **Nothing selected:**
 1. Brief explainer: "Select a file to see its summary. Ask a question to search your files."
 2. Chat input — searches the whole indexed filesystem. Like folder scope, this is a **breadth**
-   query: it retrieves over per-document summaries (+ optional RRF lexical leg) and returns
-   files-as-results, not chunk fragments.
+   query: it retrieves over per-document summaries (whose `Keywords:` line carries exact-term recall) and
+   returns files-as-results, not chunk fragments.
 
 ### Top bar
 
@@ -168,7 +182,7 @@ different icon) since without it they are invisible to the AI.
 
 **LanceDB** holds all AI-generated data, keyed by file path:
 - Embeddings (vectors for semantic search)
-- `aiSummary` (the ~120-word catalog card)
+- `aiSummary` (the ~120-word catalog card + a `Keywords:` line of exact names/dates/codes/terms)
 - OCR extracted text (for scanned docs / images)
 - Vision captions (moondream descriptions of images)
 - Index status and mtime (for incremental sync)
@@ -228,6 +242,8 @@ The AMAdocs engine and its proven components are reused directly under the file-
 - **File tree component** — real filesystem tree, left panel.
 - **Folder browser view** — middle panel mode 1, with metadata + summary subtitles.
 - **File preview tabs** — middle panel mode 2, reusing existing viewers.
+- **Grid cover thumbnails** — clipped top-left crops per card; raster for PDF/image, clipped live-render for
+  text-heavy types (reuses the preview renderers). Built 2026-06-24. **Carousel/cover-flow** view = next mode.
 - **Right panel: summary card + scoped chat.**
 - **Top search bar** — TinySPARQL FTS, separate from AI chat.
 - **Onboarding screen** — one honest progress moment for initial indexing.
@@ -247,9 +263,10 @@ The AMAdocs engine and its proven components are reused directly under the file-
    the earlier mixed-schema LanceDB problem is moot. (The schema bug was also fixed directly
    via `withAmadocsSchema()` — see DEV-NOTES.)
 
-## Future direction — Virtual semantic folders (the AI abstraction layer)
+## Virtual semantic folders (the AI abstraction layer) — IN BUILD 1 SHIP SCOPE
 
-> ⭐ Flagship future feature (2026-06-21). *"An abstraction layer for your hard drive built on AI."*
+> ⭐ Flagship feature, **promoted into Build 1 ship scope (2026-06-23)** — the main remaining engineering
+> before release. *"An abstraction layer for your hard drive built on AI."*
 > The apex of the semantic-file-manager idea: not just understanding files, but **organising them by
 > meaning** — the physical filesystem becomes a presentation layer, AI the organising principle underneath.
 
@@ -265,12 +282,37 @@ is therefore not fake organisation over "real" folders: **both are indexes over 
 tree is the OS's index; semantic folders are a meaning-based index beside it — there is no privileged "real"
 structure, only indexes, and AMAdocs simply offers a smarter one.
 
-**Tier 1 — Virtual "smart folders" (safe; build first).** Cluster the per-document summary vectors
-(k-means / HDBSCAN), have the local LLM name each cluster ("STEM resources", "Student grade reports",
-"Exam papers"), and render the clusters as virtual folders in the left tree *alongside* the real
-filesystem — like macOS Smart Folders / Gmail labels / playlists. **Files never move** (it's a saved query
-over LanceDB), one file can appear in several semantic groups, and it reuses the summary-vector +
-`scopePath` machinery the search redesign already builds — nearly free once summaries-by-default exists.
+**Tier 1 — Virtual "smart folders" (safe; this is what Build 1 ships).** Rendered in the left tree
+*alongside* the real filesystem — like macOS Smart Folders / Gmail labels / playlists. **Files never move**
+(each is a saved view over LanceDB), one file can appear in several groups, and it reuses the
+summary-vector + `scopePath` machinery the search redesign already builds.
+
+**Design (settled 2026-06-23) — classification, not clustering.** A small local model is a *classifier/router*,
+not a generator (the same principle as the CSS-theming skill), so we don't ask it to invent clusters and
+names from nothing. Instead:
+
+- **Division of labour:** the **user owns the structure** (chooses folder names, starting from a simple
+  *default structure*); the **AI owns the placement** (decides which file goes where); a few **optional,
+  bounded questions** sharpen the edges.
+- **Mechanism (zero-GPU, deterministic):** every smart folder is a named **anchor** (name + short
+  description) embedded with the existing MiniLM embedder. Each document is assigned to its **nearest anchor**
+  by cosine over its already-stored summary vector (argmax; a similarity floor → an automatic **Unsorted**
+  folder). No clustering, no new model. **Editing re-flows live** — rename/retune a folder → re-embed that one
+  anchor → files re-assign instantly.
+- **The "questions" stay cheap and reuse the same primitive:** (a) folder-*intent* disambiguation up front
+  (e.g. *"does 'Work' include study?"*) whose answer **enriches that folder's anchor description**; (b) a
+  per-*file* tiebreak only on genuinely ambiguous files (top-two anchors near-tied) whose answer **pins** the
+  file. Both are fully skippable — bare folder names auto-classify.
+- **One unifying primitive:** a smart folder is `anchor` (semantic) | `query` (top-N) | `pinned` (manual), or
+  a mix. So **Mode 1 (AI-automated)** = anchor folders the AI fills, **Mode 2 (user-edited)** = the user
+  creates/curates any type, and the two are the same machinery.
+- **Multiple structures + toggle:** the user can hold several named *structures* (each = a set of smart
+  folders); the left panel is a **switchable lens** — real FS tree ↔ an AI structure ↔ the user's own
+  structures — toggled at will. Both modes are reached from the Homepage "Smart Folders" card.
+- **Engine delta:** the one new piece is scoping search by an explicit **`sourcePath` set** (`IN` / OR-list)
+  rather than only the current `starts_with(prefix)`; plus a tiny anchor-embed + nearest-assignment util and a
+  `virtual-folders.json` store. Optional unsupervised clustering ("let the AI discover groups") becomes a
+  later add-on, not the default path.
 
 **Tier 2 — Suggested physical reorganisation (powerful; opt-in, heavily guarded; much later).** Moving real
 files collides with THE #1 RULE — it breaks Obsidian vault links, git repos, symlinks, and fights cloud
@@ -278,8 +320,27 @@ sync. If ever built: propose a plan → user reviews every move → execute with
 a hard denylist (`.git`, vaults, cloud-synced dirs, system paths). Non-destructive middle path: materialise
 the semantic tree with **symlinks** (visible in Nautilus too, originals untouched).
 
-**Sequencing:** after search is refined and per-document summary vectors exist — meaningless until every
-file has a summary vector. Status: captured direction, not scheduled.
+**Sequencing (Build 1 finish line, 2026-06-23):** (1) **cull the demo corpus** to a curated keeper set;
+(2) **re-summarise the keepers + eyeball the summary-vector breadth search live** (Recall@5 1.000 in the
+harness, not yet verified in-app) — this populates the substrate virtual folders sit on; (3) **virtual
+folders** (the design above); (4) **Homepage / UI polish**. Virtual folders is meaningless until every file
+has a summary vector, hence steps 1–2 first.
+
+## Roadmap — two builds (decided 2026-06-23)
+
+AMAdocs is now planned as **two builds** so the model stack matches the hardware instead of fighting it:
+
+- **Build 1 — "AMAdocs Lite" (near complete).** Targets modest machines like the 4 GB GTX 1650 Ti dev box.
+  Keeps the current stack: **granite4.1:3b** (chat + summaries, 2.1 GB — fits with headroom), **moondream**
+  (vision), **Tesseract** (OCR), **MiniLM** (embeddings). Finish line = the 4-step sequence above. **No Gemma.**
+- **Build 2 — "AMAdocs" (next track, parked until Build 1 ships).** Consolidates the stack onto **one Gemma 4
+  multimodal model** (chat + summaries + image analysis + a handwriting-OCR fallback), keeping Tesseract for
+  verbatim printed scans and MiniLM for embeddings. Designed for an **~8 GB VRAM floor**, where the real
+  candidate **`gemma4:e2b-it-qat`** (4.34 GB = 3.35 GB text weights + 0.99 GB vision projector, per the Ollama
+  registry manifest) sits resident with both modalities + context headroom. It does **not** fit the 4 GB box
+  (measured 3713 MiB free), which is exactly why the two builds are split. The earlier `e2b-it-q4_K_M` (7.2 GB)
+  was the wrong tag. Gemma 4 is plain **Apache-2.0**, so it clears the MIT/Apache-only model-catalog gate that
+  blocked Gemma 3. Full detail in `AMAdocs-DEV-NOTES.md`.
 
 ## Open questions
 
