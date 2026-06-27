@@ -479,6 +479,10 @@ function listSyncedSlugs() {
     return fs
       .readdirSync(syncStateDir)
       .filter((f) => f.endsWith(".json"))
+      // The settings file (pace slider, etc.) lives in this same dir but is NOT a
+      // folder-sync state — exclude it so it doesn't surface as a phantom "?" folder
+      // on the Homepage's indexed-folders list.
+      .filter((f) => f !== "amadocs-settings.json")
       .map((f) => f.slice(0, -5));
   } catch (_) {
     return [];

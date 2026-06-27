@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>AMAdocs — semantic file manager</title>
+  <title>Coracle — semantic file manager</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -191,15 +191,17 @@
     }
     .topbar__path  { color: var(--accent);     font-size: 0.82rem; white-space: nowrap; }
     .topbar__arrow { color: var(--text-xfaint); font-size: 0.82rem; }
-    .topbar__verb  { color: var(--text-muted); font-size: 0.82rem; }
-    .topbar__term  { color: var(--amber);      font-size: 0.82rem; }
-    .topbar__cursor {
-      display: inline-block; width: 0.5rem; height: 1rem;
-      background: var(--accent); opacity: 0.85; vertical-align: middle;
-      animation: blink 1.1s step-end infinite;
+    .topbar__input {
+      flex: 1; min-width: 4rem; border: none; outline: none; background: transparent;
+      color: var(--text); font-family: inherit; font-size: 0.82rem; padding: 0;
+      caret-color: var(--accent);
     }
-    @keyframes blink { 0%,100%{opacity:.85} 50%{opacity:0} }
-    .topbar__hint { flex:1; font-size:0.71rem; color:var(--text-faint); text-align:right; white-space:nowrap; }
+    .topbar__input::placeholder { color: var(--text-faint); }
+    .topbar__hint { font-size:0.71rem; color:var(--text-faint); text-align:right; white-space:nowrap; }
+    /* Filename filter (top bar): reveal every LOADED tree row regardless of collapse
+       state, then hide the rows that don't match / aren't on the path to a match. */
+    .tree-filtered .tree-children.hidden { display: block !important; }
+    .tree-row.fhide { display: none !important; }
     .topbar__actions { display:flex; gap:0.71rem; align-items:center; color:var(--text-faint); font-size:0.75rem; }
 
     .theme-btn {
@@ -567,7 +569,8 @@
     .home-hero__gen { margin-top:0.5rem; font-size:0.71rem; color:var(--text-faint); }
     .home-link { color:var(--accent); cursor:pointer; }
     .home-link:hover { text-decoration:underline; }
-    .home-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr)); gap:0.71rem; margin-bottom:1.43rem; }
+    .home-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(9.5rem,1fr)); gap:0.71rem; margin-bottom:0.5rem; }
+    .home-cards-note { font-size:0.69rem; color:var(--text-faint); margin-bottom:1.43rem; line-height:1.4; }
     .home-card { background:var(--bg-hover); border:1px solid var(--border); border-radius:var(--radius); padding:0.79rem 0.86rem; }
     .home-card__label { font-size:0.6rem; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--text-faint); }
     .home-card__big { margin-top:0.29rem; font-size:1.07rem; font-weight:600; color:var(--text); line-height:1.25; word-break:break-word; }
@@ -581,6 +584,12 @@
     .home-synced__path { display:block; font-family:var(--font-mono,monospace); font-size:0.75rem; color:var(--text); word-break:break-all; }
     .home-synced__meta { display:block; margin-top:0.14rem; font-size:0.68rem; color:var(--text-faint); }
     .home-empty { font-size:0.79rem; color:var(--text-muted); background:var(--bg-hover); border:1px dashed var(--border); border-radius:var(--radius); padding:0.71rem 0.86rem; }
+    .home-stack { background:var(--bg-hover); border:1px solid var(--border); border-radius:var(--radius); padding:0.21rem 0.86rem; }
+    .home-stack__row { display:flex; justify-content:space-between; align-items:baseline; gap:1rem; padding:0.43rem 0; border-bottom:1px solid var(--border); font-size:0.79rem; }
+    .home-stack__row:last-child { border-bottom:none; }
+    .home-stack__role { color:var(--text-faint); white-space:nowrap; }
+    .home-stack__tool { color:var(--text); text-align:right; word-break:break-word; }
+    .home-stack__via { color:var(--text-faint); }
     .home-actions { display:flex; flex-wrap:wrap; gap:0.5rem; }
     .home-act {
       background:var(--bg-alt); border:1px solid var(--border); border-radius:var(--radius-sm);
@@ -725,20 +734,20 @@
   <!-- ── TOP BAR ── -->
   <div class="topbar">
     <div class="topbar__nav">
-      <button class="nav-btn" id="navHome" onclick="navHome()" title="Home — AMAdocs overview & status" aria-label="Home">⌂</button>
+      <button class="nav-btn" id="navHome" onclick="navHome()" title="Dashboard — Coracle overview & status" aria-label="Dashboard">⌂</button>
       <button class="nav-btn" id="navBack" onclick="navBack()" title="Back" aria-label="Back" disabled>‹</button>
       <button class="nav-btn" id="navFwd"  onclick="navForward()" title="Forward" aria-label="Forward" disabled>›</button>
     </div>
-    <div class="topbar__search">
-      <span class="topbar__path" id="searchPath">~/Documents/Reports</span>
+    <div class="topbar__search" onclick="document.getElementById('treeSearch').focus()">
       <span class="topbar__arrow">❯</span>
-      <span class="topbar__verb">find</span>
-      <span class="topbar__term">&nbsp;infrastructure</span>
-      <span class="topbar__cursor"></span>
-      <span class="topbar__hint">filename · regex off</span>
+      <input type="text" id="treeSearch" class="topbar__input" autocomplete="off"
+        spellcheck="false" placeholder="filter files by name…"
+        oninput="applyTreeFilter(this.value)"
+        onkeydown="if(event.key==='Escape'){this.value='';applyTreeFilter('');this.blur();}">
+      <span class="topbar__hint" id="searchHint">filename · in tree</span>
     </div>
     <div class="topbar__actions">
-      <span>⌘P</span>
+      <span title="Focus the filename filter" style="cursor:pointer" onclick="document.getElementById('treeSearch').focus()">⌘P</span>
       <button class="theme-btn" id="themeBtn" onclick="toggleTheme()">light</button>
     </div>
   </div>
@@ -1699,9 +1708,18 @@ function renderStatusMd(md){
 function fmtUtc(ts){
   try{ return new Date(ts).toISOString().replace("T"," ").slice(0,16)+" UTC"; }catch(_){ return "—"; }
 }
-function homeCard(label, big, sub){
-  return `<div class="home-card"><div class="home-card__label">${esc(label)}</div>
+function homeCard(label, big, sub, tip){
+  const t = tip ? ` title="${esc(tip)}"` : "";
+  return `<div class="home-card"${t}><div class="home-card__label">${esc(label)}</div>
     <div class="home-card__big">${big}</div><div class="home-card__sub">${sub}</div></div>`;
+}
+// The "Stack" section: one job-first row per component (server builds d.stack).
+function renderStackHtml(stack){
+  if(!stack || !stack.length) return "";
+  return `<div class="home-stack">` + stack.map(r =>
+    `<div class="home-stack__row"><span class="home-stack__role">${esc(r.role)}</span>` +
+    `<span class="home-stack__tool">${esc(r.tool)}${r.via?` <span class="home-stack__via">· ${esc(r.via)}</span>`:""}</span></div>`
+  ).join("") + `</div>`;
 }
 // Human label for an indexing-pace value (ms of rest between summaries).
 function fmtPace(ms){
@@ -1713,8 +1731,8 @@ function fmtPace(ms){
 }
 function renderHomeHtml(d){
   d = d || {};
-  const eng=d.engine||{}, model=d.model||{}, gn=d.gnome||{}, lib=d.library||{}, synced=d.synced||[];
-  const docs = lib.totalDocs ?? 0, wsN = lib.workspaces ?? 0;
+  const eng=d.engine||{}, gn=d.gnome||{}, lib=d.library||{}, synced=d.synced||[];
+  const docs = lib.totalDocs ?? 0;
   const sm = d.summaries||{}, smDone = sm.summarised??0, smTot = sm.total??0, smQ = sm.queued??0;
   // "Summaries" card: how many indexed docs carry an AI catalog card. While a backfill drains,
   // smQ counts the files still waiting for granite — surfaced as a live "N queued" sub-line.
@@ -1722,18 +1740,17 @@ function renderHomeHtml(d){
     ? `${smDone} <span style="color:var(--text-faint);font-weight:400">/ ${smTot}</span>`
     : "—";
   const smSub = smTot
-    ? (smQ>0 ? `AI catalog cards · ${smQ} queued` : "AI catalog cards · all done")
+    ? (smQ>0 ? `described · ${smQ} queued` : "described")
     : "no indexed files yet";
   const cards =
     homeCard("Index",
       `<span class="${gn.connected?"home-ok":"home-warn"}">●</span> ${gn.connected?"Connected":"Unavailable"}`,
       "GNOME LocalSearch") +
-    homeCard("Library", `${docs}`,
-      `document${docs===1?"":"s"} · ${wsN} workspace${wsN===1?"":"s"}`) +
-    homeCard("Summaries", smBig, smSub) +
-    homeCard("Model", esc(model.chat||"—"), `chat · via ${esc(eng.llmProvider||"ollama")}`) +
-    homeCard("Engine", `v${esc(eng.version||"?")}`,
-      `Node ${esc(eng.node||"")} · ${esc(eng.vectorDb||"lancedb")}`);
+    homeCard("Library", `${docs}`, "searchable",
+      "Indexed — the AI can search inside these files.") +
+    homeCard("Summaries", smBig, smSub,
+      "Summarised — the AI has read each file and written a short card. Powers folder-wide search.");
+  const stackHtml = renderStackHtml(d.stack);
   const paceMs = (d.pace && Number(d.pace.summaryCooldownMs)) || 0;
   const paceS = Math.round(paceMs/1000);
   const paceHtml = `<div class="home-pace">
@@ -1759,11 +1776,13 @@ function renderHomeHtml(d){
     : `<div class="home-empty">No folders indexed yet. Use <strong>＋ Index a folder</strong> below, or open a folder and hit <strong>⟳ index</strong>.</div>`;
   return `<div class="home">
     <div class="home-hero">
-      <div class="home-hero__title">◆ AMAdocs<span class="home-ver">v${esc(eng.version||"?")}</span></div>
+      <div class="home-hero__title">◆ Coracle<span class="home-ver">v${esc(eng.version||"?")}</span></div>
       <div class="home-hero__tag">Your private, local AI file browser. Everything stays on this computer.</div>
       <div class="home-hero__gen">Status generated ${fmtUtc(d.generatedAt||Date.now())} · <a class="home-link" onclick="showStatusDoc()">⟳ refresh</a></div>
     </div>
     <div class="home-cards">${cards}</div>
+    <div class="home-cards-note">Indexing makes files searchable. Summarising lets the AI describe them — slower, runs in the background.</div>
+    ${stackHtml ? `<div class="home-sec"><h3 class="home-h">Stack</h3>${stackHtml}</div>` : ""}
     <div class="home-sec"><h3 class="home-h">Indexed folders</h3>${syncedHtml}</div>
     <div class="home-sec"><h3 class="home-h">Quick actions</h3>
       <div class="home-actions">
@@ -1782,8 +1801,8 @@ async function showStatusDoc(){
   view.filePath=null; view.fileName=null;
   $("#viewFolder")?.classList.add("hidden");
   $("#viewPreview")?.classList.remove("hidden");
-  const backBtn=$(".back-btn"); if(backBtn) backBtn.textContent="‹ Home/";
-  const activeTab=$(".tab.tab-active"); if(activeTab) activeTab.innerHTML='<span class="icon-md">⌂</span> Home';
+  const backBtn=$(".back-btn"); if(backBtn) backBtn.textContent="‹ Dashboard";
+  const activeTab=$(".tab.tab-active"); if(activeTab) activeTab.innerHTML='<span class="icon-md">⌂</span> Dashboard';
   document.querySelectorAll(".tabs .tab:not(.tab-active)").forEach(t=>t.classList.add("hidden"));
   const meta=$(".tabs__meta"); if(meta) meta.innerHTML="";
   const ms=$(".metastrip"); if(ms) ms.innerHTML="";
@@ -2134,6 +2153,54 @@ function closeCtx() { ctxMenu.classList.add('hidden'); }
 document.addEventListener('click',       closeCtx);
 document.addEventListener('contextmenu', closeCtx);
 document.addEventListener('keydown', e => { if (e.key === 'Escape') closeCtx(); });
+
+/* ─── Filename filter (top bar) ───────────────────────────────────────────────
+   Live-filters the LOADED file tree by filename substring. Scope = every row
+   already in the tree (across expanded folders); collapsed-but-loaded folders are
+   revealed while a filter is active (see .tree-filtered CSS) so matches surface.
+   A row is kept if its own name matches OR it is an ancestor directory on the path
+   to a match (so matches stay reachable in context). Empty query restores the tree. */
+function applyTreeFilter(raw){
+  const tree = document.getElementById('tree');
+  if(!tree) return;
+  const term = (raw||'').trim().toLowerCase();
+  const hint = document.getElementById('searchHint');
+  const rows = Array.from(tree.querySelectorAll('.tree-row[data-path]'));
+  if(!term){
+    tree.classList.remove('tree-filtered');
+    rows.forEach(r => r.classList.remove('fhide'));
+    if(hint) hint.textContent = 'filename · in tree';
+    return;
+  }
+  tree.classList.add('tree-filtered');
+  const matchPaths = [];
+  const matched = new Map();
+  for(const r of rows){
+    const p = r.dataset.path || '';
+    const name = (p.split('/').filter(Boolean).pop() || p).toLowerCase();
+    const m = name.includes(term);
+    matched.set(r, m);
+    if(m) matchPaths.push(p);
+  }
+  for(const r of rows){
+    const p = r.dataset.path || '';
+    let keep = matched.get(r);
+    if(!keep){                                   // keep ancestor dirs on the path to any match
+      for(const mp of matchPaths){ if(mp.startsWith(p + '/')){ keep = true; break; } }
+    }
+    r.classList.toggle('fhide', !keep);
+  }
+  if(hint) hint.textContent = matchPaths.length
+    ? `${matchPaths.length} match${matchPaths.length===1?'':'es'}`
+    : 'no matches';
+}
+/* ⌘P / Ctrl+P focuses the filename filter (overrides the browser print dialog). */
+document.addEventListener('keydown', e => {
+  if((e.metaKey || e.ctrlKey) && (e.key === 'p' || e.key === 'P')){
+    const el = document.getElementById('treeSearch');
+    if(el){ e.preventDefault(); el.focus(); el.select(); }
+  }
+});
 
 // attach right-click to all static file rows / grid cards / tree files
 document.querySelectorAll('.fl-row').forEach(row => {

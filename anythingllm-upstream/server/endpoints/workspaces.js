@@ -135,6 +135,8 @@ async function buildAmadocsStatus() {
 
   // ---- model / engine ----
   const chatModel = process.env.OLLAMA_MODEL_PREF || "(system default)";
+  const summaryModel = process.env.SUMMARY_MODEL_PREF || chatModel;
+  const visionModel = process.env.VISION_MODEL_PREF || "moondream";
   const embedder = process.env.EMBEDDING_MODEL_PREF || "Xenova/all-MiniLM-L6-v2";
   const llmProvider = process.env.LLM_PROVIDER || "ollama";
   const vectorDb = process.env.VECTOR_DB || "lancedb";
@@ -144,6 +146,29 @@ async function buildAmadocsStatus() {
   } catch (_) {
     /* ignore */
   }
+
+  // ---- the full stack, job-first (Homepage "Stack" section) ----
+  // One row per component, labelled by what it does for the user. Everything is
+  // on-device; the `via` field names the runtime only where it's an Ollama model.
+  const stack = [
+    { role: "Reads your files", tool: "GNOME LocalSearch" },
+    { role: "Search", tool: embedder },
+  ];
+  if (summaryModel === chatModel) {
+    stack.push({ role: "Chat & summaries", tool: chatModel, via: llmProvider });
+  } else {
+    stack.push({ role: "Chat", tool: chatModel, via: llmProvider });
+    stack.push({ role: "Summaries", tool: summaryModel, via: llmProvider });
+  }
+  stack.push(
+    { role: "Images", tool: visionModel, via: llmProvider },
+    { role: "Scanned text (OCR)", tool: "Tesseract" },
+    { role: "Storage", tool: vectorDb },
+    {
+      role: "Engine",
+      tool: `v${engineVersion} · Node ${process.version} · all on-device`,
+    }
+  );
 
   // ---- indexing pace (the user-set rest between summaries; Homepage slider) ----
   let paceMs = 30000;
@@ -157,7 +182,8 @@ async function buildAmadocsStatus() {
   const data = {
     generatedAt: Date.now(),
     engine: { version: engineVersion, node: process.version, llmProvider, vectorDb },
-    model: { chat: chatModel, embedder },
+    model: { chat: chatModel, summary: summaryModel, vision: visionModel, embedder },
+    stack,
     gnome: { connected: gnomeUp },
     library: { totalDocs, workspaces: wsRows.length, wsRows },
     summaries,
@@ -194,16 +220,10 @@ async function buildAmadocsStatus() {
     lines.push("");
   }
 
-  lines.push(`## Model`);
+  lines.push(`## Stack`);
   lines.push("");
-  lines.push(`Chat model: **${chatModel}** (via ${llmProvider})`);
-  lines.push("");
-  lines.push(`Embedder: **${embedder}**`);
-  lines.push("");
-
-  lines.push(`## Version`);
-  lines.push("");
-  lines.push(`Engine: **${engineVersion}** · Node ${process.version}`);
+  for (const r of stack)
+    lines.push(`- ${r.role}: **${r.tool}**${r.via ? ` (via ${r.via})` : ""}`);
   lines.push("");
 
   return { markdown: lines.join("\n"), data };
