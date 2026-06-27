@@ -1640,18 +1640,93 @@ function workspaceEndpoints(app) {
         if (!data)
           return response.status(404).json({ error: "Document not found" });
 
-        if (data.aiSummary && !force)
+        // AMAdocs: persist a generated summary EVERYWHERE the app reads it. The disk doc
+        // JSON is only one of three places — the UI's file cards read `aiSummary` from the
+        // workspace_documents.metadata DB row (snapshotted at embed time, NOT re-read from
+        // disk), and breadth search reads the summary-vector card. Writing only the JSON
+        // (the old behaviour) meant right-click summaries were saved but never displayed
+        // and never searchable. This syncs all three, idempotently. Returns true on a real
+        // DB change so callers can decide whether the response is "fresh".
+        const syncSummaryEverywhere = async (summaryText) => {
+          if (!summaryText) return;
+          // 1) disk doc JSON (path-traversal safe)
+          try {
+            const fs = require("fs");
+            const fullPath = path.resolve(documentsPath, normalizePath(docpath));
+            if (isWithin(documentsPath, fullPath) && fs.existsSync(fullPath)) {
+              data.aiSummary = summaryText;
+              fs.writeFileSync(fullPath, JSON.stringify(data, null, 4), {
+                encoding: "utf-8",
+              });
+            }
+          } catch (werr) {
+            console.error("[doc-summarize] JSON write-back failed:", werr.message);
+          }
+          // 2) workspace_documents.metadata DB row (what the UI's docIndex reads)
+          try {
+            const { Document } = require("../models/documents");
+            const row = await Document.get({
+              workspaceId: workspace.id,
+              docpath,
+            });
+            if (row) {
+              let meta = {};
+              try {
+                meta = JSON.parse(row.metadata || "{}");
+              } catch (_) {}
+              if (meta.aiSummary !== summaryText) {
+                meta.aiSummary = summaryText;
+                await Document._updateAll(
+                  { id: row.id },
+                  { metadata: JSON.stringify(meta) }
+                );
+              }
+            }
+          } catch (derr) {
+            console.error("[doc-summarize] DB metadata sync failed:", derr.message);
+          }
+          // 3) summary-vector "catalog card" (breadth search) — best-effort, reads the
+          // just-written JSON, no-op when summaries are globally disabled.
+          try {
+            const Gnome = require("../utils/GnomeBridge");
+            await Gnome.upsertSummaryVectors(workspace.slug, [docpath]);
+          } catch (verr) {
+            console.error("[doc-summarize] summary-vector sync failed:", verr.message);
+          }
+        };
+
+        if (data.aiSummary && !force) {
+          // Already summarised on disk — still reconcile the DB row + card in case a prior
+          // run wrote the JSON but not the DB (the old split-brain bug). Self-healing.
+          await syncSummaryEverywhere(data.aiSummary);
           return response
             .status(200)
             .json({ summary: data.aiSummary, cached: true });
+        }
 
         const DocSummary = require("../utils/DocSummary");
-        const summary = await new DocSummary({
+        let summary = await new DocSummary({
           model: workspace?.chatModel || process.env.OLLAMA_MODEL_PREF || null,
         }).summarize(data.pageContent || "", {
           title: data.title,
           pages: Array.isArray(data.pages) ? data.pages : null,
         });
+
+        // AMAdocs: image fallback. The granite "catalogue this document" prompt expects a
+        // real document (type, sections, named entities) and returns nothing useful for a
+        // 2-sentence vision caption — it emits only "Keywords: none", which finalises to "".
+        // But for an image the caption already IS the summary, so use it directly rather
+        // than leaving the card blank. Covers any doc whose extracted text is a vision
+        // caption (image mime, or the "Image description:" prefix our captioner emits).
+        if (!summary) {
+          const body = (data.pageContent || "").trim();
+          const isCaption =
+            /^image\//i.test(data.sourceMime || "") ||
+            /^image description:/i.test(body);
+          if (isCaption && body) {
+            summary = body.replace(/^image description:\s*/i, "").trim();
+          }
+        }
 
         if (!summary)
           return response.status(200).json({
@@ -1661,19 +1736,7 @@ function workspaceEndpoints(app) {
               "Couldn’t generate a summary — the AI model may still be downloading.",
           });
 
-        // Persist the summary back onto the document JSON (path-traversal safe).
-        try {
-          const fs = require("fs");
-          const fullPath = path.resolve(documentsPath, normalizePath(docpath));
-          if (isWithin(documentsPath, fullPath) && fs.existsSync(fullPath)) {
-            data.aiSummary = summary;
-            fs.writeFileSync(fullPath, JSON.stringify(data, null, 4), {
-              encoding: "utf-8",
-            });
-          }
-        } catch (werr) {
-          console.error("[doc-summarize] write-back failed:", werr.message);
-        }
+        await syncSummaryEverywhere(summary);
 
         response.status(200).json({ summary, cached: false });
       } catch (e) {
