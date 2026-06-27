@@ -350,7 +350,8 @@ function createWindow() {
     height: 760,
     minWidth: 720,
     minHeight: 520,
-    title: "AMAdocs",
+    title: "Coracle",
+    icon: path.join(__dirname, "build", "icon.png"),
     backgroundColor: "#f6f7fb",
     webPreferences: {
       contextIsolation: true,
