@@ -712,13 +712,74 @@ async function runSync(opts = {}) {
         files: nextFiles,
       });
 
-    const pending = new Map();
-    const adds = [];
+    // ---- BATCHED FINALIZE (the "index never finalizes" fix) ----
+    // Embed + summary-vector writes happen in small batches DURING the drain, not once at
+    // end-of-loop. The old end-of-loop finalize meant a multi-hour pass that was interrupted
+    // (e.g. a nodemon restart on a source edit, or a crash) lost EVERY embed — all docs stayed
+    // pendingEmbed and __summaries stayed empty, so the index appeared to rebuild forever.
+    // Flushing per batch keeps everything up to the last flushed batch finalized; only the
+    // in-flight batch stays pendingEmbed and resumes next sync.
+    const BATCH = Number(process.env.GNOME_EMBED_BATCH) || 8;
+    let batch = [];
+    let pending = new Map();
+    let queuedTotal = 0;
+
+    // Embed one batch of materialized docpaths, confirm them (drop pendingEmbed), then mirror
+    // them into the summary-vector table. A STOP mid-drain leaves the batch pendingEmbed.
+    const flush = async (docpaths, pmap) => {
+      if (docpaths.length === 0) return;
+      // If STOP arrived, do NOT dispatch a fresh embed worker; the docs stay pendingEmbed and
+      // resume on the next sync.
+      if (Embed.isIngestPaused()) return;
+      if (Embed.isNativeEmbedder()) {
+        await Embed.embedFiles(currWorkspace.slug, docpaths, currWorkspace.id, userId, {
+          onDocComplete: (docpath) => {
+            const e = pmap.get(docpath);
+            if (!e) return;
+            nextFiles[e.url] = { docpath, mtime: e.mtime }; // confirmed → drop pendingEmbed
+            try {
+              persist();
+            } catch (err) {
+              console.error("[gnome-sync] persist:", err.message);
+            }
+          },
+          onComplete: () => {
+            try {
+              persist();
+            } catch (err) {
+              console.error("[gnome-sync] persist:", err.message);
+            }
+          },
+        });
+      } else {
+        await Document.addDocuments(currWorkspace, docpaths, userId);
+        for (const dp of docpaths) {
+          const e = pmap.get(dp);
+          if (e) nextFiles[e.url] = { docpath: dp, mtime: e.mtime };
+        }
+        persist();
+      }
+      // Mirror the freshly-embedded docs into the summary-vector table (breadth search).
+      await upsertSummaryVectors(slug, docpaths);
+      queuedTotal += docpaths.length;
+    };
+
+    // Flush the accumulated batch once it fills (or force a final partial flush). Resets the
+    // buffer so the next batch's onDocComplete closes over its own pending map.
+    const maybeFlush = async (force = false) => {
+      if (batch.length === 0 || (!force && batch.length < BATCH)) return;
+      const docpaths = batch;
+      const pmap = pending;
+      batch = [];
+      pending = new Map();
+      await flush(docpaths, pmap);
+    };
 
     // Resume docs whose summary was already generated last pass (embed-only, no granite).
     for (const { url, mtime, docpath } of toResume) {
-      adds.push(docpath);
+      batch.push(docpath);
       pending.set(docpath, { url, mtime });
+      await maybeFlush();
     }
 
     // AMAdocs diag (2026-06-24 recovery): pin where the drain stalls — loop sizes +
@@ -760,7 +821,7 @@ async function runSync(opts = {}) {
           `[gnome-drain] doc ${_di} result: ${docpath ? "materialized" : "NULL (empty/unextractable text)"}`
         );
       if (docpath) {
-        adds.push(docpath);
+        batch.push(docpath);
         pending.set(docpath, { url, mtime });
         // CHECKPOINT the expensive summary the instant it's written: record the doc as
         // pendingEmbed so an interruption before the embed is confirmed re-embeds THIS
@@ -773,6 +834,8 @@ async function runSync(opts = {}) {
         } catch (err) {
           console.error("[gnome-sync] persist:", err.message);
         }
+        // Finalize in batches DURING the drain so an interruption can't lose the whole pass.
+        await maybeFlush();
         // Read the pace LIVE here so the Homepage slider takes effect on the next file.
         const docCooldownMs = paceDisabled ? 0 : getPaceMs();
         if (docCooldownMs) await sleep(docCooldownMs); // rest only after real GPU work
@@ -782,46 +845,16 @@ async function runSync(opts = {}) {
 
     persist(); // persist deletions / dormant refreshes even if nothing materialized
 
-    // If STOP arrived during the loop, do NOT dispatch a fresh embed worker (it would defeat
-    // the kill switch). The materialized docs stay pendingEmbed and resume on the next sync.
-    const paused = Embed.isIngestPaused();
-
-    if (adds.length > 0 && !paused && Embed.isNativeEmbedder()) {
-      await Embed.embedFiles(currWorkspace.slug, adds, currWorkspace.id, userId, {
-        onDocComplete: (docpath) => {
-          const e = pending.get(docpath);
-          if (!e) return;
-          nextFiles[e.url] = { docpath, mtime: e.mtime }; // confirmed → drop pendingEmbed
-          try {
-            persist();
-          } catch (err) {
-            console.error("[gnome-sync] persist:", err.message);
-          }
-        },
-        onComplete: () => {
-          try {
-            persist();
-          } catch (err) {
-            console.error("[gnome-sync] persist:", err.message);
-          }
-        },
-      });
-    } else if (adds.length > 0 && !paused) {
-      await Document.addDocuments(currWorkspace, adds, userId);
-      for (const [docpath, e] of pending)
-        nextFiles[e.url] = { docpath, mtime: e.mtime };
-      persist();
-    }
-
-    // Mirror the freshly-embedded docs into the summary-vector table (breadth search).
-    if (adds.length > 0 && !paused) await upsertSummaryVectors(slug, adds);
+    // Flush the final partial batch. flush() no-ops while paused (STOP), so those docs stay
+    // pendingEmbed and resume next sync — the per-batch flushes above already finalized the rest.
+    await maybeFlush(true);
 
     return {
       status: 202,
       body: {
         mode,
         indexed: current.length,
-        queued: adds.length,
+        queued: queuedTotal,
         deleted: toDelete.length,
         remaining,
         tracked: Object.keys(nextFiles).length,
@@ -1046,10 +1079,26 @@ function summaryStats(slug) {
   return out;
 }
 
+// AMAdocs (Homepage Library card): how many distinct files are actually SEARCHABLE — i.e.
+// embedded into LanceDB and confirmed (docpath present, not still pendingEmbed). The old
+// Library card summed Document.count() over workspaces, but the GNOME bulk path writes vectors
+// straight to LanceDB without a workspace_documents row per file, so that count was nearly
+// blind to the real corpus. The sync state is the registry of what the GNOME path embedded,
+// so it's the right source of truth. A pendingEmbed doc has its summary written but its embed
+// not yet confirmed → not searchable yet, so it's excluded.
+function indexedDocCount(slug) {
+  const state = loadState(slug);
+  if (!state || !state.files) return 0;
+  let n = 0;
+  for (const e of Object.values(state.files))
+    if (e && e.docpath && !e.pendingEmbed) n++;
+  return n;
+}
+
 module.exports = {
   available, ensureIndexer, queryFileList, queryBlindSpots, fetchMeta, fetchText,
   buildDoc, writeDoc, materialize, materializeViaCollector, pathToFileUrl,
   loadState, saveState, computeDelta, docSubfolder,
-  listSyncedSlugs, runSync, backstopFile, resummarize, summaryStats,
+  listSyncedSlugs, runSync, backstopFile, resummarize, summaryStats, indexedDocCount,
   getPaceMs, setPaceMs,
 };

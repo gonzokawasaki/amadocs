@@ -83,13 +83,18 @@ async function buildAmadocsStatus() {
   };
 
   // ---- database / workspaces ----
+  // NOTE: Document.count() reads the workspace_documents SQLite table, which the GNOME bulk
+  // index path bypasses (it writes vectors straight to LanceDB). So wsDocs is NOT the real
+  // searchable-corpus size — the Library card uses the GNOME sync state instead (see
+  // indexedDocs below) and only falls back to wsDocs when there are no synced folders (the
+  // drag-drop-upload-only case).
   let wsRows = [];
-  let totalDocs = 0;
+  let wsDocs = 0;
   try {
     const workspaces = await Workspace.where();
     for (const ws of workspaces) {
       const n = await Document.count({ workspaceId: ws.id });
-      totalDocs += n;
+      wsDocs += n;
       wsRows.push({ slug: ws.slug, docs: n });
     }
   } catch (_) {
@@ -105,10 +110,17 @@ async function buildAmadocsStatus() {
   }
   const synced = [];
   const summaries = { total: 0, summarised: 0, queued: 0 }; // library-wide AI-summary progress
+  let indexedDocs = 0; // distinct files actually searchable in LanceDB (GNOME path)
   try {
     for (const slug of Gnome.listSyncedSlugs()) {
       const st = Gnome.loadState(slug);
       if (!st) continue;
+      try {
+        if (typeof Gnome.indexedDocCount === "function")
+          indexedDocs += Gnome.indexedDocCount(slug);
+      } catch (_) {
+        /* keep the running total if one folder's count fails */
+      }
       // Per-folder summary progress (summarised / queued of embedded files) — live while a
       // backfill drains. Best-effort: a bridge without summaryStats just omits the counts.
       let ss = { total: 0, summarised: 0, queued: 0 };
@@ -177,6 +189,11 @@ async function buildAmadocsStatus() {
   } catch (_) {
     /* keep the default if the bridge can't report it */
   }
+
+  // Library headline = the real searchable corpus (GNOME-indexed files). Fall back to the
+  // workspace_documents count only when nothing is synced (drag-drop-upload-only setup), so a
+  // fresh upload-only user still sees their docs.
+  const totalDocs = synced.length > 0 ? indexedDocs : wsDocs;
 
   // ---- structured data (consumed by the homepage; mirrors the markdown below) ----
   const data = {
