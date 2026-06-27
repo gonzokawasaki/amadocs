@@ -563,6 +563,8 @@
     /* ── HOMEPAGE (the app's launch surface — informs + offers options) ──── */
     .home { max-width:46rem; }
     .home-hero { margin-bottom:1.43rem; }
+    .home-hero__brand { display:flex; align-items:center; gap:0.64rem; }
+    .home-hero__logo { height:2.6rem; width:auto; display:block; }
     .home-hero__title { font-size:1.5rem; font-weight:600; color:var(--page-h); letter-spacing:.01em; }
     .home-ver { font-size:0.71rem; color:var(--text-faint); font-weight:400; margin-left:0.43rem; vertical-align:middle; }
     .home-hero__tag { margin-top:0.21rem; font-size:0.86rem; color:var(--page-p); }
@@ -596,6 +598,8 @@
       color:var(--text); font-family:inherit; font-size:0.79rem; padding:0.43rem 0.86rem; cursor:pointer; transition:.12s;
     }
     .home-act:hover { border-color:var(--accent); color:var(--accent); }
+    .home-sec--pace { margin-bottom:1.43rem; }
+    .home-sec--pace .home-pace { border-color:var(--accent); border-left-width:3px; }
     .home-pace { background:var(--bg-hover); border:1px solid var(--border); border-radius:var(--radius); padding:0.71rem 0.86rem; }
     .home-pace__row { display:flex; align-items:center; gap:0.71rem; }
     .home-pace__slider { flex:1; min-width:6rem; accent-color:var(--accent); cursor:pointer; }
@@ -1776,10 +1780,14 @@ function renderHomeHtml(d){
     : `<div class="home-empty">No folders indexed yet. Use <strong>＋ Index a folder</strong> below, or open a folder and hit <strong>⟳ index</strong>.</div>`;
   return `<div class="home">
     <div class="home-hero">
-      <div class="home-hero__title">◆ Coracle<span class="home-ver">v${esc(eng.version||"?")}</span></div>
+      <div class="home-hero__brand">
+        <img class="home-hero__logo" src="coracle-logo.png" alt="Coracle">
+        <div class="home-hero__title">Coracle<span class="home-ver">v${esc(eng.version||"?")}</span></div>
+      </div>
       <div class="home-hero__tag">Your private, local AI file browser. Everything stays on this computer.</div>
       <div class="home-hero__gen">Status generated ${fmtUtc(d.generatedAt||Date.now())} · <a class="home-link" onclick="showStatusDoc()">⟳ refresh</a></div>
     </div>
+    <div class="home-sec home-sec--pace"><h3 class="home-h">Indexing pace</h3>${paceHtml}</div>
     <div class="home-cards">${cards}</div>
     <div class="home-cards-note">Indexing makes files searchable. Summarising lets the AI describe them — slower, runs in the background.</div>
     ${stackHtml ? `<div class="home-sec"><h3 class="home-h">Stack</h3>${stackHtml}</div>` : ""}
@@ -1792,7 +1800,6 @@ function renderHomeHtml(d){
         <button class="home-act" onclick="showStatusDoc()">⟳ Refresh status</button>
       </div>
     </div>
-    <div class="home-sec"><h3 class="home-h">Indexing pace</h3>${paceHtml}</div>
   </div>`;
 }
 async function showStatusDoc(){
