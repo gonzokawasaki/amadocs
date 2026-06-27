@@ -1159,5 +1159,5 @@ module.exports = {
   buildDoc, writeDoc, materialize, materializeViaCollector, pathToFileUrl,
   loadState, saveState, computeDelta, docSubfolder,
   listSyncedSlugs, runSync, backstopFile, resummarize, summaryStats, indexedDocCount,
-  getPaceMs, setPaceMs,
+  getPaceMs, setPaceMs, upsertSummaryVectors,
 };
