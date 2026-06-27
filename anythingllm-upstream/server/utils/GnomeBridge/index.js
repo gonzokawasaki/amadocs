@@ -17,6 +17,7 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const os = require("os");
+const { fileURLToPath } = require("url");
 
 const DBUS = "org.freedesktop.LocalSearch3";
 const US = "\u001F"; // field delimiter (U+001F unit separator; never in document text)
@@ -184,14 +185,17 @@ async function ensureIndexer({ restart = false } = {}) {
 // Lightweight listing for delta diffing: every file under `folder` that HAS
 // extracted text, with its newest last-modified time. GROUP BY ?u + MAX(?m)
 // because nfo:fileLastModified is stored with two (identical) values per file,
-// which would otherwise double every row. Returns [{ url, mtime }].
+// which would otherwise double every row. nfo:fileSize rides along (same GROUP BY/MAX
+// guard) — it's the cheap GNOME-native second signal the delta uses before any hashing.
+// Returns [{ url, mtime, size }] (size = bytes, or null if GNOME has none).
 function queryFileList({ folder, exclude }) {
   const q = `
-SELECT (CONCAT(STR(?u), "${US}", COALESCE(MAX(STR(?m)), "")) AS ?row)
+SELECT (CONCAT(STR(?u), "${US}", COALESCE(MAX(STR(?m)), ""), "${US}", COALESCE(MAX(STR(?sz)), "")) AS ?row)
 WHERE {
   ?ie nie:plainTextContent ?t ; nie:isStoredAs ?do .
   ?do nie:url ?u .
   OPTIONAL { ?do nfo:fileLastModified ?m }
+  OPTIONAL { ?do nfo:fileSize ?sz }
   FILTER(STRSTARTS(STR(?u), "file://${folder}/"))
   FILTER(STR(?t) != "")
   ${excludeClause(exclude)}
@@ -199,7 +203,10 @@ WHERE {
 GROUP BY ?u
 ORDER BY ?u`;
   return parseRows(sparql(q))
-    .map((r) => { const [url, mtime] = r.split(US); return { url, mtime: mtime || "" }; })
+    .map((r) => {
+      const [url, mtime, size] = r.split(US);
+      return { url, mtime: mtime || "", size: size ? Number(size) : null };
+    })
     .filter((x) => x.url);
 }
 
@@ -222,18 +229,20 @@ const BACKSTOP_EXTS = [
 // otherwise slip past queryFileList's non-empty filter AND a bare NOT EXISTS check,
 // leaving the file counted-but-never-embedded. The inner FILTER(?a != "") makes the
 // NOT EXISTS fire on empty text too, so the collector backstop picks these up.
-// Same GROUP BY ?u + MAX(?m) double-row guard. Returns [{ url, mtime, mime }].
+// Same GROUP BY ?u + MAX(?m) double-row guard, with nfo:fileSize riding along like
+// queryFileList. Returns [{ url, mtime, mime, size }].
 function queryBlindSpots({ folder, exclude }) {
   const extFilter = BACKSTOP_EXTS
     .map((e) => `STRENDS(LCASE(STR(?u)), "${e}")`)
     .join(" || ");
   const q = `
-SELECT (CONCAT(STR(?u), "${US}", COALESCE(MAX(STR(?m)), ""), "${US}", COALESCE(STR(?mime), "")) AS ?row)
+SELECT (CONCAT(STR(?u), "${US}", COALESCE(MAX(STR(?m)), ""), "${US}", COALESCE(STR(?mime), ""), "${US}", COALESCE(MAX(STR(?sz)), "")) AS ?row)
 WHERE {
   ?ie nie:isStoredAs ?do .
   ?do nie:url ?u .
   OPTIONAL { ?do nfo:fileLastModified ?m }
   OPTIONAL { ?ie nie:mimeType ?mime }
+  OPTIONAL { ?do nfo:fileSize ?sz }
   FILTER(STRSTARTS(STR(?u), "file://${folder}/"))
   FILTER NOT EXISTS { ?ie nie:plainTextContent ?anytext . FILTER(STR(?anytext) != "") }
   FILTER(${extFilter})
@@ -243,8 +252,8 @@ GROUP BY ?u ?mime
 ORDER BY ?u`;
   return parseRows(sparql(q))
     .map((r) => {
-      const [url, mtime, mime] = r.split(US);
-      return { url, mtime: mtime || "", mime: mime || "" };
+      const [url, mtime, mime, size] = r.split(US);
+      return { url, mtime: mtime || "", mime: mime || "", size: size ? Number(size) : null };
     })
     .filter((x) => x.url);
 }
@@ -456,19 +465,54 @@ const newer = (a, b) => {
   return da > db;
 };
 
-// Diff the current index listing against saved state → {news, changed, deleted}.
+// Largest file we'll read whole to content-hash. The hash-confirm only triggers on the
+// rare "mtime moved but byte-size identical" case, and a doc corpus is small, so this is a
+// guard against a pathological multi-GB file, not a normal path — over it we decline the
+// hash (→ treated as changed → re-summarised, the safe default).
+const HASH_MAX_BYTES = Number(process.env.GNOME_HASH_MAX_BYTES) || 64 * 1024 * 1024;
+
+// SHA-256 of a file's bytes, addressed by GNOME's file:// url. CPU/disk only, NEVER GPU —
+// and it REDUCES GPU by letting genuine no-ops skip the granite summary. Used in exactly
+// one place: to disambiguate the "mtime advanced but nfo:fileSize unchanged" case GNOME's
+// index can't resolve on its own (touch / git-checkout / restore-in-place / same-length
+// re-save). Returns null if the file is unreadable or over the size cap → caller then
+// treats the file as genuinely changed (re-summarise), never as a silent skip.
+function hashFile(url, size = null) {
+  if (Number.isFinite(size) && size > HASH_MAX_BYTES) return null;
+  try {
+    const p = url.startsWith("file://") ? fileURLToPath(url) : url;
+    return crypto.createHash("sha256").update(fs.readFileSync(p)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+// Diff the current index listing against saved state → {news, changed, maybeChanged, deleted}.
+// Path-keyed, decided from GNOME's own signals (mtime + nfo:fileSize) only — NO file I/O here:
+//   • !prev                                → news
+//   • mtime advanced, size DIFFERS         → changed (content definitely differs, no hash)
+//   • mtime advanced, size SAME + have a
+//     stored hash                          → maybeChanged (ambiguous → caller hash-confirms)
+//   • mtime advanced, no usable size/hash  → changed (migration / GNOME gave no size: behave
+//                                            exactly as the old mtime-only logic did)
+// A moved file still surfaces as deleted(oldpath)+news(newpath); correlating those by content
+// hash is option 2 (see [[reconstructable-index]]), deliberately NOT done here.
 function computeDelta(stateFiles, current) {
   const curByUrl = new Map(current.map((c) => [c.url, c.mtime]));
-  const news = [], changed = [], deleted = [];
-  for (const { url, mtime } of current) {
+  const news = [], changed = [], maybeChanged = [], deleted = [];
+  for (const { url, mtime, size } of current) {
     const prev = stateFiles[url];
-    if (!prev) news.push({ url, mtime });
-    else if (newer(mtime, prev.mtime)) changed.push({ url, mtime, prev });
+    if (!prev) { news.push({ url, mtime, size }); continue; }
+    if (!newer(mtime, prev.mtime)) continue; // unchanged per GNOME's mtime
+    const sizeSame =
+      Number.isFinite(size) && Number.isFinite(prev.size) && size === prev.size;
+    if (sizeSame && prev.contentHash) maybeChanged.push({ url, mtime, size, prev });
+    else changed.push({ url, mtime, size, prev });
   }
   for (const url of Object.keys(stateFiles)) {
     if (!curByUrl.has(url) && stateFiles[url].docpath) deleted.push({ url, prev: stateFiles[url] });
   }
-  return { news, changed, deleted };
+  return { news, changed, maybeChanged, deleted };
 }
 
 // List the slugs that currently have a persisted sync state — i.e. folders that have
@@ -561,8 +605,8 @@ async function runSync(opts = {}) {
     ...blindSpots.map((f) => [f.url, "collector"]),
   ]);
   const current = [
-    ...textFiles.map((f) => ({ url: f.url, mtime: f.mtime })),
-    ...blindSpots.map((f) => ({ url: f.url, mtime: f.mtime })),
+    ...textFiles.map((f) => ({ url: f.url, mtime: f.mtime, size: f.size })),
+    ...blindSpots.map((f) => ({ url: f.url, mtime: f.mtime, size: f.size })),
   ];
   const prevState = loadState(slug);
 
@@ -577,16 +621,26 @@ async function runSync(opts = {}) {
   } else {
     mode = "sync";
     nextFiles = { ...(prevState.files || {}) };
-    const { news, changed, deleted } = computeDelta(nextFiles, current);
+    const { news, changed, maybeChanged, deleted } = computeDelta(nextFiles, current);
+    // Resolve the ambiguous "mtime moved, size unchanged" candidates — the ONE place we
+    // build on top of GNOME. Hash matches the stored hash → content is identical (touch /
+    // checkout / restore): refresh mtime/size only, NO granite. Mismatch (or unreadable →
+    // null) → fold into the real changed set and re-summarise.
+    for (const c of maybeChanged) {
+      const h = hashFile(c.url, c.size);
+      if (h && h === c.prev.contentHash)
+        nextFiles[c.url] = { ...c.prev, mtime: c.mtime, size: c.size }; // no-op churn
+      else changed.push(c);
+    }
     const changedManaged = changed.filter((c) => c.prev.docpath);
-    for (const c of changed.filter((c) => !c.prev.docpath)) // dormant: refresh mtime only
-      nextFiles[c.url] = { docpath: c.prev.docpath, mtime: c.mtime };
+    for (const c of changed.filter((c) => !c.prev.docpath)) // dormant: refresh mtime/size only
+      nextFiles[c.url] = { docpath: c.prev.docpath, mtime: c.mtime, size: c.size };
     toDelete = [
       ...changedManaged.map((c) => c.prev.docpath),
       ...deleted.map((d) => d.prev.docpath),
     ];
     toEmbed = [
-      ...changedManaged.map((c) => ({ url: c.url, mtime: c.mtime })),
+      ...changedManaged.map((c) => ({ url: c.url, mtime: c.mtime, size: c.size })),
       ...news,
     ];
     for (const d of deleted) delete nextFiles[d.url];
@@ -602,7 +656,7 @@ async function runSync(opts = {}) {
   const toResume = [];
   for (const [url, e] of Object.entries(nextFiles)) {
     if (e && e.pendingEmbed && e.docpath && curUrls.has(url) && !planned.has(url))
-      toResume.push({ url, mtime: e.mtime, docpath: e.docpath });
+      toResume.push({ url, mtime: e.mtime, docpath: e.docpath, size: e.size, contentHash: e.contentHash });
   }
 
   // ---- BOUND the per-call work (THE #1 RULE) ----
@@ -614,8 +668,8 @@ async function runSync(opts = {}) {
     toEmbed = toEmbed.slice(0, cap);
     remaining = overflow.length;
     if (explicitLimit)
-      for (const { url, mtime } of overflow)
-        nextFiles[url] = { docpath: null, mtime }; // dormant baseline
+      for (const { url, mtime, size } of overflow)
+        nextFiles[url] = { docpath: null, mtime, size }; // dormant baseline
     // no-limit overflow: intentionally NOT recorded → retried next sync.
   }
 
@@ -736,7 +790,8 @@ async function runSync(opts = {}) {
           onDocComplete: (docpath) => {
             const e = pmap.get(docpath);
             if (!e) return;
-            nextFiles[e.url] = { docpath, mtime: e.mtime }; // confirmed → drop pendingEmbed
+            // confirmed → drop pendingEmbed; keep size/contentHash so future deltas can hash-confirm
+            nextFiles[e.url] = { docpath, mtime: e.mtime, size: e.size, contentHash: e.contentHash };
             try {
               persist();
             } catch (err) {
@@ -755,7 +810,7 @@ async function runSync(opts = {}) {
         await Document.addDocuments(currWorkspace, docpaths, userId);
         for (const dp of docpaths) {
           const e = pmap.get(dp);
-          if (e) nextFiles[e.url] = { docpath: dp, mtime: e.mtime };
+          if (e) nextFiles[e.url] = { docpath: dp, mtime: e.mtime, size: e.size, contentHash: e.contentHash };
         }
         persist();
       }
@@ -776,9 +831,9 @@ async function runSync(opts = {}) {
     };
 
     // Resume docs whose summary was already generated last pass (embed-only, no granite).
-    for (const { url, mtime, docpath } of toResume) {
+    for (const { url, mtime, docpath, size, contentHash } of toResume) {
       batch.push(docpath);
-      pending.set(docpath, { url, mtime });
+      pending.set(docpath, { url, mtime, size, contentHash });
       await maybeFlush();
     }
 
@@ -789,7 +844,7 @@ async function runSync(opts = {}) {
       `[gnome-drain] loop START — toEmbed=${toEmbed.length} (collector=${collectorN}, gnome=${toEmbed.length - collectorN}), toResume=${toResume.length}, paused=${Embed.isIngestPaused()}`
     );
     let _di = 0;
-    for (const { url, mtime } of toEmbed) {
+    for (const { url, mtime, size } of toEmbed) {
       _di++;
       const _diag = _di <= 6;
       if (_diag)
@@ -821,14 +876,18 @@ async function runSync(opts = {}) {
           `[gnome-drain] doc ${_di} result: ${docpath ? "materialized" : "NULL (empty/unextractable text)"}`
         );
       if (docpath) {
+        // Content-hash the file we just summarised (CPU only) so a future delta can tell a
+        // real edit from no-op churn on this path. Stored on both the checkpoint + confirmed
+        // entries and threaded through the embed batch so onDocComplete preserves it.
+        const contentHash = hashFile(url, size);
         batch.push(docpath);
-        pending.set(docpath, { url, mtime });
+        pending.set(docpath, { url, mtime, size, contentHash });
         // CHECKPOINT the expensive summary the instant it's written: record the doc as
         // pendingEmbed so an interruption before the embed is confirmed re-embeds THIS
         // docpath next pass instead of re-running granite. Cleared to a plain done-entry in
         // onDocComplete. This is what makes GNOME_SYNC_CAP irrelevant to durability, so the
         // user only ever needs the one pace knob.
-        nextFiles[url] = { docpath, mtime, pendingEmbed: true };
+        nextFiles[url] = { docpath, mtime, size, contentHash, pendingEmbed: true };
         try {
           persist();
         } catch (err) {
