@@ -41,6 +41,44 @@ on top. Files are never modified; all AI data lives in a separate local database
   and a hard global STOP button. It will never lock up your machine.
 - **Zero cloud.** GPU recommended; everything runs on-device.
 
+## Download
+
+Linux x86_64 AppImage from [**Releases**](https://github.com/gonzokawasaki/coracle/releases/latest):
+
+```bash
+chmod +x Coracle-0.1.0-x86_64.AppImage
+./Coracle-0.1.0-x86_64.AppImage
+```
+
+On first launch Coracle offers to download its AI models (chat: `granite4.1:3b`; optional
+image/scan reading: `moondream`). All app state lives under `~/.config/Coracle/`.
+
+## Requirements
+
+Coracle currently relies on two local services:
+
+**GNOME file indexing (LocalSearch / TinySPARQL)** — how Coracle finds and reads your files.
+On a full **GNOME desktop** this is usually already running. **On Arch / non-GNOME setups the
+packages are often installed but _not enabled_ by default** — so install if missing, then enable
+and start the user service:
+
+```bash
+sudo pacman -S tinysparql localsearch                  # install if missing
+systemctl --user enable --now localsearch-3.service    # not auto-enabled outside GNOME
+tinysparql status                                       # verify it's indexing
+```
+
+Without a running indexer, file indexing and document search won't work.
+
+**Ollama** — runs the local AI models. **Not bundled** (keeps the download ~662 MB). Coracle
+reuses a running Ollama or starts your installed copy; if it can't find one, it shows an
+"Install Ollama" screen.
+
+```bash
+sudo pacman -S ollama                          # Arch / Manjaro
+curl -fsSL https://ollama.com/install.sh | sh  # other Linux
+```
+
 ## Status
 
 🚧 Early development, GNOME (Linux) first. The engine works end-to-end, fully offline.
@@ -57,4 +95,4 @@ the CSS are exposed for customisation. (Zero-config-for-non-technical-users is n
 
 ## License
 
-MIT (planned) — see forthcoming `LICENSE` and `THIRD_PARTY_LICENSES`.
+MIT — see [`LICENSE`](LICENSE) and [`THIRD_PARTY_LICENSES`](THIRD_PARTY_LICENSES).
