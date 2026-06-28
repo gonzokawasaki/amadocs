@@ -1,6 +1,6 @@
 # Coracle
 
-**A private, local AI file browser.**
+**A gnome based private, local AI file browser.**
 
 > Coracle was originally developed under the name **AMAdocs**. You'll still see
 > `amadocs-*` in code, file paths, env vars, and config — those internal names are
