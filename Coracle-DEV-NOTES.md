@@ -1,13 +1,13 @@
 # Coracle — Developer Notes
 
-> **Coracle** (formerly *AMAdocs*) — a private, local AI document assistant. The name is the new
+> **Coracle** (formerly *Coracle*) — a private, local AI document assistant. The name is the new
 > project theme: a **coracle** is a small, light, single-person boat you carry to the water and that
 > carries you across it — the metaphor for a lightweight, personal, private vessel for navigating your
 > own documents. It runs on a modest machine (one person's corpus, local models, no cloud), and the
 > product language leans into the metaphor — *navigate / chart / waters* — for search and the file
 > view. See the rename entry below for what changed and what deliberately did not.
 
-Technical companion to `K-base.md` (overview) and `AMAdocs-SPEC.md` (product spec). This is the
+Technical companion to `K-base.md` (overview) and `Coracle-SPEC.md` (product spec). This is the
 **engineering log** — newest entries on top, kept in chronological/archaeological order on purpose.
 
 ## SESSION (2026-06-27 PM) — new logo + tab-✕ close fix + AppImage packaging recon [UNCOMMITTED]
@@ -110,7 +110,7 @@ full from-scratch re-summarise for a clean/consistent index.
   `.git`, node_modules — `/home/user` scope currently sweeps in the project source). NOT BUILT — design captured
   in agent memory `reconstructable-index`.
 
-## 🪶 RENAME (2026-06-25) — the project is now **Coracle** (was AMAdocs); branding-only this pass
+## 🪶 RENAME (2026-06-25) — the project is now **Coracle** (was Coracle); branding-only this pass
 
 The GitHub repo was renamed `amadocs` → **`coracle`** and the product adopts the **Coracle theme**:
 the name plus the **coracle metaphor as product language** (a small personal boat for navigating your
@@ -125,7 +125,7 @@ Renaming those would mean **migrating/re-indexing the live recovered corpus** (2
 and rewriting baked-in references — a separate, planned task, not worth the breakage for a brand pass.
 
 **Not done yet (easy follow-ups, intentionally deferred):** renaming the doc *files* themselves
-(`AMAdocs-DEV-NOTES.md` / `AMAdocs-SPEC.md` → `Coracle-*`) + their cross-references; user-facing strings
+(`Coracle-DEV-NOTES.md` / `Coracle-SPEC.md` → `Coracle-*`) + their cross-references; user-facing strings
 (app/window title, Homepage hero); and a possible visual **Coracle skin** (water/wood palette) alongside
 Terminal/Slate/Desktop. Branding language is being adopted in the docs now; code + UI strings follow when
 we choose to.
@@ -178,7 +178,7 @@ illegible grey texture. Render a **legible top-left crop** instead (title / lett
 opening line — exactly what the eye uses to recognise a doc on a shelf). *Crop, don't scale.*
 
 **This dissolves the hard category instead of solving it.** Text-heavy types were only hard for *raster*
-thumbnails — but they're exactly the types AMAdocs already renders as **live HTML/DOM** (Word→mammoth,
+thumbnails — but they're exactly the types Coracle already renders as **live HTML/DOM** (Word→mammoth,
 Markdown→marked.js, spreadsheets→SheetJS, text/code as text). So the cover for those is the **existing
 preview renderer dropped into a small clipped tile** — no raster pipeline, no LibreOffice, no Electron
 screenshot, crisp at any DPI, themeable. The LibreOffice/Office-thumbnail dependency problem just goes away
@@ -339,14 +339,14 @@ retried next tick. Nothing is lost — the durable/idempotent/no-over-claim queu
 makes freeze-and-thaw safe by construction. The OS crawl (LocalSearch) is idle-aware and pauses/resumes
 with the OS on its own.
 
-**The one thing left on the table:** after a long sleep, AMAdocs may wait up to a full 15-min period
+**The one thing left on the table:** after a long sleep, Coracle may wait up to a full 15-min period
 before its next tick picks up the delta. A small improvement would be an Electron `powerMonitor.on('resume')`
 hook in `amadocs-desktop/main.js` that fires `cadence.runAndChase()` (or pokes the sync endpoint)
 immediately on wake instead of waiting for the next interval. The only existing `powerMonitor` mention is
 the parked AI-Finder OCR idle-detection idea further down this log — not implemented. Low priority; the
 current behaviour is correct, just not maximally prompt.
 
-**Current state (2026-06-20):** AMAdocs is the semantic file-manager UI wired end-to-end to the
+**Current state (2026-06-20):** Coracle is the semantic file-manager UI wired end-to-end to the
 engine (live file tree, AI state chips, folder indexing, scoped chat, context-menu actions); the
 "ride on GNOME" loop and safe ingest queue are proven live; the LanceDB schema bug is fixed and the
 `teaching` table re-indexed. Three CSS skins (Terminal / Slate / Desktop) ship on top of the wired
@@ -357,7 +357,7 @@ directory by default, so the whole `teaching_docs` vault was invisible — corpu
 client-side (PDF.js/mammoth/SheetJS, **+ marked.js for markdown** as of 2026-06-21), decoupled from
 indexing (any local file previews from disk), and wide spreadsheets/markdown no longer bleed off the page. The app now **opens to a live status doc** (index/db/model/version). The **GNOME
 extraction blind spots are now backstopped** (top entry): docx/xlsx/pptx that GNOME mis-routes, scanned
-PDFs, and images now run through AMAdocs' own collector extractors and embed — folder sync handles office
+PDFs, and images now run through Coracle' own collector extractors and embed — folder sync handles office
 docs + scanned PDFs automatically, right-click "analyse with AI" handles images (OCR + vision) on demand.
 The **`p.N` citation label** is now restored for backstop PDFs (carry `asPDF`'s page ranges) and the
 **dryRun over-count is fixed** (empty-text files route to the backstop instead of being phantom-counted)
@@ -372,7 +372,7 @@ Option-A summary chat finally works — see the top entry. A **full-778 backfill
 (2026-06-24, top entry) — exact names/dates/codes/technical terms appended to each card so breadth search
 recovers the rare-term recall the prose paragraph drops; applies to new summaries / on Re-summarise. Open: **packaging** (stale AppImage, icon, Windows/macOS) + the
 summary-search *routing* redesign this backfill unblocks. The "Phase 1 / Phase 2" labels below are
-historical build-stage names — the product is just AMAdocs now.
+historical build-stage names — the product is just Coracle now.
 
 ## ✅ CORRECTION (2026-06-24 PM) — the "wedge" was a MISDIAGNOSIS; drain is healthy, just slow + late-embedding
 
@@ -472,8 +472,8 @@ user culls the corpus, then runs Re-summarise.
 
 Planning session, no code shipped. Three outcomes:
 
-**1. Two builds, not one.** **Build 1 "AMAdocs Lite"** = this 4 GB GTX 1650 Ti box, near complete, keeps the
-granite + moondream + Tesseract + MiniLM stack (NO Gemma). **Build 2 "AMAdocs"** = the Gemma 4 consolidation,
+**1. Two builds, not one.** **Build 1 "Coracle Lite"** = this 4 GB GTX 1650 Ti box, near complete, keeps the
+granite + moondream + Tesseract + MiniLM stack (NO Gemma). **Build 2 "Coracle"** = the Gemma 4 consolidation,
 designed for an **~8 GB VRAM floor**, parked until Build 1 ships. The split exists because of hard data below.
 
 **2. Gemma 4 sizing — corrected with real numbers (the earlier memory was wrong).**
@@ -490,7 +490,7 @@ designed for an **~8 GB VRAM floor**, parked until Build 1 ships. The split exis
   clean (no granite fallback needed at that tier).
 
 **3. Virtual semantic folders → promoted into Build 1 ship scope, design settled.** Full design now in
-`AMAdocs-SPEC.md`. Headline: **classification, not clustering** — same "small model = classifier/router, not
+`Coracle-SPEC.md`. Headline: **classification, not clustering** — same "small model = classifier/router, not
 generator" principle as the CSS-theming skill. The **user owns the structure** (chooses folder names from a
 simple *default structure*), the **AI owns the placement** (which file goes where), with a few **optional,
 bounded questions** to sharpen edges. Mechanism is **zero-GPU + deterministic**: each folder is a named
@@ -644,7 +644,7 @@ resumed it now runs at the user's chosen pace, checkpoints per file, and honours
 
 ## ✅ DONE (2026-06-22) — Summary-vector breadth search (the "AI librarian by default" retrieval)
 
-Built + measured the search redesign from `AMAdocs-DEV-NOTES → "LLM search redesign"`: **breadth-scope
+Built + measured the search redesign from `Coracle-DEV-NOTES → "LLM search redesign"`: **breadth-scope
 chat (a folder, or the whole workspace) now retrieves over ONE per-document summary vector instead of
 full-text chunks**, so results are one librarian card per document rather than scattered chunk fragments
 (which in a big folder dominate the topN with duplicate chunks of one doc and miss the right doc). File
@@ -904,7 +904,7 @@ The audience is now explicitly the **techy Linux crowd who like to play with all
 including the CSS.** Consequence for the build: the Homepage becomes the surface where we **expose
 every tunable, the prompts, and the theme CSS for customisation**, each with a recommended default
 + rationale ("worked on this machine"). Captured in `K-base.md` ("Who it's for"), `README.md`
-(Status), and `AMAdocs-SPEC.md` (Homepage → "Tuning / Advanced panel" direction). Not built yet —
+(Status), and `Coracle-SPEC.md` (Homepage → "Tuning / Advanced panel" direction). Not built yet —
 direction only; recommended phasing is read-only "what we use & why" card → live numeric knobs →
 editable prompts (the prompt one needs the `openAiPrompt` write-through, see the strict-prompt notes).
 
@@ -913,7 +913,7 @@ chat answers come ONLY from LanceDB similarity search (`performSimilaritySearch`
 match the *question*), with zero positional bias, so the title page / first few pages — which hold the
 key orienting info — are seldom retrieved for a specific question. Meanwhile `aiSummary` is built from
 exactly those pages (`DocSummary.leadingSlice` = first 5 pages / 8000 chars) yet was **never read by
-the chat path** (it only fed the UI card). Fix reuses that good summary. Two edits, tagged `AMAdocs:`:
+the chat path** (it only fed the UI card). Fix reuses that good summary. Two edits, tagged `Coracle:`:
 - `server/utils/vectorDbProviders/lance/index.js` → new `aiSummaryForPath({namespace, sourcePath})`:
   exact-path query `.query().where("sourcePath = '…'").select(["aiSummary"]).limit(1).toArray()`
   (confirmed present in lancedb 0.15.0), returns `""` on miss, never throws. Exact `=` (not
@@ -1022,11 +1022,11 @@ load). `updateNavButtons()` toggles the disabled state at the ends.
 **Homepage (repoints `showStatusDoc`).** The old launch surface rendered the server markdown read-only via
 `renderStatusMd` (now unused but left in place; the on-disk `AMADOCS-STATUS.md` artifact still generates).
 `showStatusDoc` now renders a structured HTML homepage (`renderHomeHtml`) inside the `.vsheet-page` paper sheet:
-hero (◆ AMAdocs · version · tagline · generated-time + refresh), a 4-card status grid (**Index** GNOME
+hero (◆ Coracle · version · tagline · generated-time + refresh), a 4-card status grid (**Index** GNOME
 connected? · **Library** docs · workspaces · **Model** chat · provider · **Engine** version · Node · vectorDb),
 an **Indexed folders** list (or empty-state hint), and **Quick actions** — three wired buttons:
 `🗂 Browse my files` (`desktop.homePath`→`selectFolder`), `＋ Index a folder…` (`desktop.pickFolder`→`selectFolder`
-→`onSyncFolder`), `⟳ Refresh status`. Active tab label is now `⌂ Home` (was `◆ AMAdocs Status`).
+→`onSyncFolder`), `⟳ Refresh status`. Active tab label is now `⌂ Home` (was `◆ Coracle Status`).
 
 **Engine — `server/endpoints/workspaces.js`:** renamed `buildAmadocsStatusMarkdown()` → `buildAmadocsStatus()`,
 which now computes a structured `data` object (engine/model/gnome/library/synced) **and** derives the markdown
@@ -1043,8 +1043,8 @@ Electron app (`--no-sandbox --remote-debugging-port=9222`, driven via `tooling/c
 - `node --check` (workspaces.js) + `vm.Script` over both inline UI scripts: 0 failures. Source synced
   `tooling/amadocs-ui/index.html` → `amadocs-desktop/ui/index.html` (identical).
 
-**Cosmetic nits left open:** (1) hero reads "◆ AMAdocs**v1.14.0**" with no space before the version chip — a
-margin tweak. (2) The version shown (`v1.14.0`, Node 22) is the **AnythingLLM engine** version, not an AMAdocs
+**Cosmetic nits left open:** (1) hero reads "◆ Coracle**v1.14.0**" with no space before the version chip — a
+margin tweak. (2) The version shown (`v1.14.0`, Node 22) is the **AnythingLLM engine** version, not an Coracle
 product version — surface a real product version when one exists.
 
 ## ✅ DONE (2026-06-21) — Preview decoupled from indexing: any local file previews from disk
@@ -1155,7 +1155,7 @@ text for (`nie:plainTextContent`), so **docx/xlsx/pptx that GNOME's OOXML extrac
 WPS-mime sniffing bug — 175 recorded `"Document must begin with an element <book>"` failures on this box),
 **scanned/image-only PDFs**, and **images** were invisible. This was also why right-click **"analyse with
 AI" on an image was a dead end** — `ctxAnalyse` needed a `docpath`, but images are excluded from bulk
-index and had no ingest route to ever get one. **Both were one root cause:** AMAdocs' own collector
+index and had no ingest route to ever get one. **Both were one root cause:** Coracle' own collector
 extractors (`asDocx`→mammoth/officeparser, `asPDF`→OCR fallback `ocrPDF`, `asImage`→OCR + moondream
 caption) existed but were never called from the sync path. Fix reuses them wholesale — **no new
 extraction code.**
@@ -1248,7 +1248,7 @@ skips them. The 2 phantom "queued" files are the known **`.docx` extraction fail
 So the dryRun preview count is misleading (over-reports by the count of text-less GNOME entries) even
 though actual indexing is correct and complete. **Two follow-ups:** (1) make the dryRun `queued`/`indexed`
 count only text-bearing files so the preview matches what executes; (2) the root cause is the GNOME docx
-blind spot AMAdocs' own parser/OCR is *meant* to backstop — that backstop isn't wired into the gnome-sync
+blind spot Coracle' own parser/OCR is *meant* to backstop — that backstop isn't wired into the gnome-sync
 path, so those docx stay invisible. Neither is a regression; the cadence loop itself is correct.
 
 ## ✅ RESOLVED (2026-06-20) — sparse index = the `.git` ignore rule; preview not broken; status doc shipped
@@ -1275,7 +1275,7 @@ systemctl --user restart localsearch-3.service
 The first un-skips git repos; the second (ignore-**by-name**) keeps `.git` internals and `node_modules`
 out — needed because dropping `.git` from with-content pulled in **124,386** node_modules files. After the
 ~45s purge: **14 → 901 files with extractable text**, teaching_docs **0 → 973 (804 with text)**,
-node_modules → 0. Settings persist in dconf. (For non-GNOME builds later, this argues for AMAdocs' own
+node_modules → 0. Settings persist in dconf. (For non-GNOME builds later, this argues for Coracle' own
 watcher+extractor over OS-default behavior.)
 
 **(2) Document preview was never broken — and never used LibreOffice.** It's 100% client-side: `doc-original`
@@ -1311,13 +1311,13 @@ thin**:
   `index-recursive-directories = ['$HOME']` (single-dirs empty). D-Bus reachable, `GnomeBridge.available()`
   = true.
 - **Only 32 files / 72 folders indexed**, of which **just 14 have extractable text**
-  (`nie:plainTextContent`) — and 14 is *all AMAdocs currently has to ride on*. That's a tiny fraction of
+  (`nie:plainTextContent`) — and 14 is *all Coracle currently has to ride on*. That's a tiny fraction of
   a real `$HOME` (the `teaching_docs/` corpus alone is hundreds of docs) → the crawl is **incomplete**,
   not warm yet. (Idle-aware: it defers; leaving the box idle for a few hours should let it deepen.)
 - **~169 recorded extraction failures**: 155 `.mts` (AVCHD video — no text extractor, expected/benign),
   **9 `.docx`** failing with `"Could not open: Error on line 1 char 1: Document must begin with an
   element (e.g. <book>)"` (a parser error in LocalSearch's docx path), 4 `.xls`, 1 `.png`. The `.docx`
-  failures are a **genuine blind spot** — exactly the seam AMAdocs' own parser/OCR is meant to cover,
+  failures are a **genuine blind spot** — exactly the seam Coracle' own parser/OCR is meant to cover,
   and notable because `teaching_docs/` is `.docx`-heavy.
 
 **Plan:** leave the machine idling a few hours, then re-check `localsearch status` + the text-bearing
@@ -1435,7 +1435,7 @@ if `:3001` already answers (`main.js:197`), so launching it alongside `start-sta
 
 ## ✅ DONE (2026-06-19) — Phase 2 wiring (port prototype → real UI) — ALL STAGES A–D COMPLETE
 
-Built the Phase 2 "semantic file manager" UI per `AMAdocs-SPEC.md`, staged in 4 stages (A–D).
+Built the Phase 2 "semantic file manager" UI per `Coracle-SPEC.md`, staged in 4 stages (A–D).
 Source of truth = `tooling/amadocs-ui/index.html`, `cp`'d to `amadocs-desktop/ui/index.html`.
 Phase 1 UI backed up at `index.phase1.html` in both locations.
 
@@ -1586,12 +1586,12 @@ SSE fetch stub:
 
 ## 🧭 CURRENT PHASE (2026-06-16) — Semantic search by *riding on* GNOME (TinySPARQL/LocalSearch)
 
-**The bet:** AMAdocs' real value = a semantic/LLM layer on top of the full-text + metadata
+**The bet:** Coracle' real value = a semantic/LLM layer on top of the full-text + metadata
 extraction the OS desktop indexer (**GNOME LocalSearch**, storing into **TinySPARQL**, the
-renamed Tracker3) already does for free. Whole-folder semantic search **from AMAdocs**, without
+renamed Tracker3) already does for free. Whole-folder semantic search **from Coracle**, without
 re-implementing crawl/extract. Test corpus = **`/mnt/space/teaching_docs`**. Architecture chosen
 (2026-06-16): **"Ride on TinySPARQL (hybrid)"** — read extracted text from the OS index for the
-digital-text majority; use AMAdocs' own parser/OCR/vision only for the blind spots.
+digital-text majority; use Coracle' own parser/OCR/vision only for the blind spots.
 
 **Machine reality (this Arch + ML4W/Hyprland box):** `tinysparql` + `localsearch` **3.11.1**
 installed but were **DORMANT** — never run, no index. The user unit `localsearch-3.service` has
@@ -1601,7 +1601,7 @@ installed but were **DORMANT** — never run, no index. The user unit `localsear
 systemctl --user set-environment XDG_SESSION_CLASS=user
 systemctl --user start localsearch-3.service
 ```
-⚠️ **Thesis caveat:** outside a real GNOME Shell session the OS index does **nothing** — AMAdocs
+⚠️ **Thesis caveat:** outside a real GNOME Shell session the OS index does **nothing** — Coracle
 must *enable & own* LocalSearch, not just read a populated store. On a real GNOME box it'd already
 be warm.
 
@@ -1618,7 +1618,7 @@ gsettings set org.freedesktop.Tracker3.Miner.Files index-single-directories "@as
   each; forms; resource packs). Rich metadata too (pageCount/wordCount/created/author/generator).
   Instant FTS5 keyword search (this *is* GNOME Files search). PDF text-layer coverage ~97%
   (29/30 sampled have a digital text layer).
-- **3 blind spots = where AMAdocs earns its place:**
+- **3 blind spots = where Coracle earns its place:**
   1. ⚠️ **Office docs silently dropped.** **WPS Office** installed user mime defs in
      `~/.local/share/mime/` (`application/wps-office.docx`, …) that win **content-sniffing**;
      LocalSearch's OOXML extractor rule (`/usr/share/localsearch3/extract-rules/11-msoffice-xml.rule`)
@@ -1627,13 +1627,13 @@ gsettings set org.freedesktop.Tracker3.Miner.Files index-single-directories "@as
      perfect text+metadata; only the daemon's content-type *routing* fails. (Lesson: riding on the
      OS index inherits the OS's silent blind spots.)
   2. **No OCR / vision** — PDF extractor is poppler text-layer only; scanned PDFs (~3%) and the 26
-     jpegs come back empty. (AMAdocs' existing OCR + moondream captioning fills this.)
+     jpegs come back empty. (Coracle' existing OCR + moondream captioning fills this.)
   3. **Lexical only** — FTS is keyword-OR (e.g. `"narrative writing feedback"` → 0 as a phrase, 44
-     by word-OR); no concept→wording bridge. That semantic layer is AMAdocs' job.
+     by word-OR); no concept→wording bridge. That semantic layer is Coracle' job.
 
 **Division of labor (now evidence-based):** GNOME owns crawl/monitor/extract of digital text +
 metadata (the "don't melt the laptop" problem, already solved by the OS — cf. the parked AI Finder,
-"AI Finder (#3)" below). AMAdocs owns embeddings + semantic retrieval + the LLM-answer/citation
+"AI Finder (#3)" below). Coracle owns embeddings + semantic retrieval + the LLM-answer/citation
 loop + backstop extraction for the 3 blind spots.
 
 **Querying TinySPARQL:** `tinysparql query --dbus-service=org.freedesktop.LocalSearch3 -q '<SPARQL>'`.
@@ -1650,10 +1650,10 @@ U+001F field delimiter + a newline sentinel so each result row stays one physica
 shape `collector/.../asPDF` emits) into `server/storage/documents/tinysparql-teaching/`, plus an
 embed manifest `tooling/tinysparql-adds.json`. Those paths feed the normal embed path
 `POST /workspace/:slug/update-embeddings {adds:[...]}` (native ONNX embedder, **no Ollama needed**).
-So AMAdocs adds embeddings on top of the OS-extracted text **without re-parsing**. Verified: writes
+So Coracle adds embeddings on top of the OS-extracted text **without re-parsing**. Verified: writes
 correct JSON with real full text + metadata (e.g. a 9,343-char markdown doc). The blind-spot files
 have no `plainTextContent` in the index, so they're naturally absent — handled separately by
-AMAdocs' own pipeline.
+Coracle' own pipeline.
 - ⚠️ **Consequence:** TinySPARQL text is **flat — no per-page ranges**. So bridged docs lose the
   citation chip's **page-number label** (`matchPage` has no `pages` to map). The **passage
   highlight** still works (it text-matches against the rendered PDF). Reconstruct `pages` via
@@ -1679,7 +1679,7 @@ AMAdocs' own pipeline.
   `SELECT ?url WHERE { ?do nfo:fileLastModified ?m . FILTER(?m > "<last-sync>"^^xsd:dateTime) }`
   (tested working). Optional push alternative: **`TrackerNotifier`** D-Bus events
   (created/updated/deleted) for event-driven sync instead of polling — v2 nicety, not needed for v1.
-- **AMAdocs already has the per-file ops:** changed/new → re-embed just that file (the
+- **Coracle already has the per-file ops:** changed/new → re-embed just that file (the
   `doc-deep-search` delete-vectors-by-docId → re-add path); deleted/moved → `update-embeddings
   {deletes}`. Cost scales with *changes*, not corpus size.
 - **Cadence:** delta-sync on app launch + a light periodic tick; plus an occasional cheap
@@ -1687,7 +1687,7 @@ AMAdocs' own pipeline.
   deletes/renames). All through the safe serial/cool-down queue + global STOP ([[k-base-ingest-safety]]).
 - ⚠️ **Caveat (recurring):** GNOME's store only stays live while `localsearch` runs — dormant by
   default on this non-GNOME box. So the refresh flow is **ensure the indexer has run (start it, let
-  its idle-aware crawl catch up) → read the delta**. AMAdocs owns keeping it alive, not just reading.
+  its idle-aware crawl catch up) → read the delta**. Coracle owns keeping it alive, not just reading.
 
 **✅ BUILT + VERIFIED E2E (2026-06-16) — incremental delta-sync: `tooling/tinysparql-sync.js`**
 (shares `tooling/lib/tinysparql-lib.js` with the bridge — the bridge was refactored to a thin wrapper
@@ -2115,11 +2115,11 @@ ruthless simplicity for non-technical users.
 ## Architecture
 
 ```
-┌─────────────────────────── AMAdocs (Electron app) ───────────────────────────┐
+┌─────────────────────────── Coracle (Electron app) ───────────────────────────┐
 │  Electron main process (main.js)                                              │
 │    └─ on launch: spawns child processes, shows splash, health-checks, loads UI│
 │                                                                               │
-│  AMAdocs UI (ui/index.html)  ──HTTP──► Engine API (localhost:3001)            │
+│  Coracle UI (ui/index.html)  ──HTTP──► Engine API (localhost:3001)            │
 │    drop zone · chat · doc viewer · collections                                │
 │                                                                               │
 │  Child processes (all local, spawned by Electron):                            │
@@ -2185,7 +2185,7 @@ running, it reuses it.
 **As a dev stack (for fast UI iteration in a browser):**
 ```bash
 bash /mnt/space/k-base/tooling/start-stack.sh          # server/collector/frontend
-cd /mnt/space/k-base/tooling/amadocs-ui && python3 -m http.server 8080   # the AMAdocs UI
+cd /mnt/space/k-base/tooling/amadocs-ui && python3 -m http.server 8080   # the Coracle UI
 # open http://localhost:8080
 ```
 
@@ -2208,7 +2208,7 @@ restart (server runs as plain `node`, not nodemon).
   knows): answers stayed grounded in the excerpt but phi3.5 still (a) named the work from outside
   the text (may be reading the filename via the `<document_metadata>` header) and (b) stayed
   verbose. phi3.5 verbosity is the core remaining issue.
-- **Hard answer-length cap (2026-06-13) — settled product decision: AMAdocs is a *search tool*,
+- **Hard answer-length cap (2026-06-13) — settled product decision: Coracle is a *search tool*,
   not a chatbot; answers are ~one paragraph (~120 words), never an essay.** Enforced in 3 layers:
   (1) **Engine hard stop** — `server/utils/AiProviders/ollama/index.js` sets `num_predict: 200`
   (~120 words) in the `options` of BOTH `getChatCompletion` and `streamGetChatCompletion`. This
@@ -2278,7 +2278,7 @@ restart (server runs as plain `node`, not nodemon).
   `/workspace/:slug/stream-chat` path fetched history by **workspace only** (`recentChatHistory`
   filters `user_id:null, thread_id:null, api_session_id:null`) and stored turns with
   `api_session_id:null`, so the last `openAiHistory||20` turns in `workspace_chats` replayed into
-  every prompt **forever, across app restarts**. The AMAdocs UI had no session/new-chat concept at
+  every prompt **forever, across app restarts**. The Coracle UI had no session/new-chat concept at
   all. Fix (all runtime, so **NOT subject to the openAiPrompt-baking gotcha** — applies to every
   existing workspace immediately):
   - **Session scoping** — UI generates a per-launch `SESSION_ID` (`crypto.randomUUID`, held in
@@ -2407,7 +2407,7 @@ build, not started).
 
 - Model runs 100% on GPU. Cold start (first query / model load) ~30–70 s; warm queries ~1 s.
 - Mitigation: `OLLAMA_KEEP_ALIVE=30m` (set in `main.js`) + a "warming up" hint on first question.
-- **AMAdocs is a GPU app (decided): a GPU is recommended; we make no CPU-only performance
+- **Coracle is a GPU app (decided): a GPU is recommended; we make no CPU-only performance
   claim and don't benchmark/target a CPU-only path.** It still runs on CPU via Ollama's
   fallback — just not advertised or measured as a supported experience. All numbers here are GPU.
 
@@ -2438,7 +2438,7 @@ embedding (the old default) is now opt-in per file**, via a right-click **"🔍 
    **`amadocsSearchMode`** (`"summary"` | `"deep"`). Summaries themselves now generate **by default**
    at ingest — `DOC_SUMMARY_ENABLED` default flipped to **true** (`#attachOptions` `?? "true"
    !== "false"`; start-stack.sh / packaged main.js / collector/.env). Other `addDocuments` callers
-   keep the `"deep"` default, so only the AMAdocs drop path is cataloged.
+   keep the `"deep"` default, so only the Coracle drop path is cataloged.
 2. **Deep search on demand.** New `POST /workspace/:slug/doc-deep-search {path}` re-embeds the full
    file **in place under the same docId**: `deleteDocumentFromNamespace` → `prisma.document_vectors.
    deleteMany({docId})` (the namespace delete doesn't clear the DB mapping) → `addDocumentToNamespace(
@@ -2545,10 +2545,10 @@ the returned object. Covers every current + future converter automatically (no p
 
 ### ✅ BUILT (2026-06-14, EXPANDED 2026-06-15) — Embed the FULL metadata INTO a copy of the file (right-click "Save copy with info")
 
-Take a document back **out** of AMAdocs with **everything AMAdocs understands about it** — the AI
+Take a document back **out** of Coracle with **everything Coracle understands about it** — the AI
 summary, the AI vision description, any OCR'd text, and source/provenance — written into the file's
 **own native metadata**, so that understanding travels inside the file (visible in OS file managers /
-other tools), not just in AMAdocs' store. **The user's source file is NEVER touched** — the server
+other tools), not just in Coracle' store. **The user's source file is NEVER touched** — the server
 reads its retained *copy* into a buffer, embeds, and streams a brand-new download. (Mirror of the
 never-modify-originals stance; complements the photo-export *sidecar*, which keeps the full record in
 a separate JSON — see below for why both exist.)
@@ -2561,7 +2561,7 @@ namespace (+ standard `dc:description`) — and differ only in *how the packet i
 (OOXML) doesn't use XMP; its native home for structured app metadata is **custom document properties**
 (`docProps/custom.xml`). For every family we write **both** a standard slot (so generic tools show
 something) **and** the full `amadocs:` payload, including a complete JSON blob in `amadocs:data` for a
-lossless round-trip back into AMAdocs.
+lossless round-trip back into Coracle.
 
 - **`server/utils/MetadataEmbed/index.js`** — `embedMetadata({buffer, ext, metadata})` (the old
   `embedSummary({…,summary})` is now a thin back-compat wrapper; `metadata` may be the full
@@ -2630,7 +2630,7 @@ summaries ride along on the same worker.
 **⬜ Follow-up idea (2026-06-14): surface summaries in the OS file manager (Nautilus).** The dev
 box runs ML4W Hyprland → **Nautilus (GNOME Files) 50.2.2** (GTK4; launched via
 `~/.config/ml4w/settings/filemanager`, Super+E). A `nautilus-python` extension (needs the
-`python-nautilus` package, not yet installed) could add a right-click **"Summarize with AMAdocs"**
+`python-nautilus` package, not yet installed) could add a right-click **"Summarize with Coracle"**
 action + an **"AI Summary" column / tooltip / Properties tab** (`MenuProvider` / `ColumnProvider` /
 `InfoProvider` / `PropertyPageProvider`). Engine seam already exists: the collector's
 `parseDocument` (`/parse`, takes **absolutePath**, parses WITHOUT embedding) → `DocSummary.summarize`
@@ -2638,7 +2638,7 @@ action + an **"AI Summary" column / tooltip / Properties tab** (`MenuProvider` /
 xattr (fast, no recompute). **Guardrails:** must be **pull, not push** — inference only on explicit
 right-click; the column reads **cached xattrs only, never auto-runs the model on directory view**
 (auto-summarising everything you browse to = the exact lock-up/OOM/background-inference footgun that
-PARKED [[k-base-folder-index]] / AI Finder). Note the existing `aiSummary` is keyed by AMAdocs docId
+PARKED [[k-base-folder-index]] / AI Finder). Note the existing `aiSummary` is keyed by Coracle docId
 in private storage, NOT by disk path, so this is a *separate, in-place* data path, not a reuse of
 those. Caveat: a Nautilus extension is **GNOME-only**, outside the cross-platform Electron bundle —
 a Linux/GNOME power-user companion, not part of the shippable app.
@@ -2690,14 +2690,14 @@ open for the citation loop, not a vision-specific gap.
 
 **Open / next:** the "dump 100 photos" user still needs **background/queued ingest with
 progress** (today uploads are serial with a per-row spinner). Vision inference is heavier than
-text, so it especially wants a GPU — consistent with AMAdocs being a GPU app (we don't
+text, so it especially wants a GPU — consistent with Coracle being a GPU app (we don't
 benchmark or claim a CPU-only path).
 
 ## ✅ BUILT (2026-06-13) — OCR quality (engine-side) — *v2 feature #2 (partial)*
 
 Raised scanned-document OCR accuracy with two well-established prep techniques, applied to
 **both** OCR paths (`collector/utils/OCRLoader/index.js`). No new deps — `sharp` and
-`tesseract.js` were already in the pipeline. All changes tagged `AMAdocs:`.
+`tesseract.js` were already in the pipeline. All changes tagged `Coracle:`.
 
 **What was built:**
 - **Rasterization DPI bumped + made tunable.** `PDFSharp` hard-coded **70 DPI** (a slight
@@ -2791,7 +2791,7 @@ text feeds better search.
 
 ## ✅ BUILT (2026-06-13) — Export photo with metadata
 
-Lets the user take a photo back **out** of AMAdocs with everything the app understands about
+Lets the user take a photo back **out** of Coracle with everything the app understands about
 it attached, so the AI's understanding travels *with* the file into other tools. **Sidecar
 form** (decided with user): export a ZIP of the **original file (untouched)** + a readable
 **JSON sidecar** — chosen over embedding into EXIF/XMP because it's format-agnostic
@@ -2811,7 +2811,7 @@ docId, wordCount) + basic `image` facts (dimensions/format/space/density from sh
   `<base>.amadocs.json`) as an attachment. Originals are never modified — it's a copy.
 - **One new dep:** `exifr@7` (pure-JS, **no native build** → dodges the Node-18 native-module
   fragility) — installed with `--legacy-peer-deps` (the tree's standard workaround). `archiver`
-  was already present. (Added AMAdocs runtime deps: `exifr` here + later `piexifjs@1.0.6` for the
+  was already present. (Added Coracle runtime deps: `exifr` here + later `piexifjs@1.0.6` for the
   embed-summary feature — both pure-JS, no native build. That's the full added-dep list.)
 - **UI** (`amadocs-ui/index.html` → synced to `amadocs-desktop/ui/`): a `⬇️ Export with info`
   button in the viewer header, shown **only for images** (`curDoc.isImage`). Click builds an
@@ -2838,10 +2838,10 @@ will need the **Electron folder picker** (a packaged-app capability).
    below). The UI **language** picker is **deferred** — build 1 is **English-only** (decided
    2026-06-13), so it's a post-build-1 nicety, not unfinished scope. "Never drop a file" is
    already covered by #1's caption fallback for images.
-3. 🅿️ **AI Finder — one-shot folder index** — **PARKED / off the AMAdocs roadmap (2026-06-14,
+3. 🅿️ **AI Finder — one-shot folder index** — **PARKED / off the Coracle roadmap (2026-06-14,
    user's call: "too many pitfalls").** Not deferred-behind-build-1 anymore — dropped from this
    project. The lock-up/OOM risk, the idle-aware + durable-queue machinery, and the entanglement
-   with heavy on-device inference (even on a GPU) make it a different problem shape than AMAdocs' focused
+   with heavy on-device inference (even on a GPU) make it a different problem shape than Coracle' focused
    drop-and-ask tool; if revisited it should be its own product. The settled design below is kept
    as the starting point for whenever/wherever it resumes.
 
@@ -2865,7 +2865,7 @@ absolutePath — `processDocument` (`collectorApi/index.js:111`) hits `/process`
 takes no absolutePath. The absolutePath seam is `parseDocument` (`:331`, hits `/parse`), which
 *parses without processing* and **bypasses the originals-retention path the citation→viewer loop
 depends on**. So v1 leans **copy-into-Library** (reuse the normal drop path per file): consistent
-with the existing "AMAdocs keeps its own private copy" model, keeps citations/vision working;
+with the existing "Coracle keeps its own private copy" model, keeps citations/vision working;
 cost is disk duplication. In-place is a later optimization if big folders make duplication hurt.
 
 **Safe-by-default execution (the whole point):**
@@ -2895,7 +2895,7 @@ guards. Aggressive/full-speed = config escape hatch only. Whole-drive and live f
 out. Even on a GPU, a big image folder is the worst case this design protects against
 (sustained vision inference pinning the machine).
 
-> **PARKED 2026-06-14 — off the AMAdocs roadmap.** The above is a preserved design, not active
+> **PARKED 2026-06-14 — off the Coracle roadmap.** The above is a preserved design, not active
 > scope. See the "v2 feature wave" note for the parking rationale ("too many pitfalls"; likely a
 > separate project).
 
@@ -2907,7 +2907,7 @@ out. Even on a GPU, a big image folder is the worst case this design protects ag
    (`llama-server` + GPU/CPU libs, ~2.1 GB) bundled, not just the binary, or all inference
    404s; (b) the collector's `hotdir`/`tmp` must be relocated to writable `userData` (it
    runs from the read-only mount). Proactive first-run model download ✅ **BUILT (2026-06-14)**
-   — a "Welcome to AMAdocs" setup overlay pulls the AI (+ opt-in vision) over the `pull-model`
+   — a "Welcome to Coracle" setup overlay pulls the AI (+ opt-in vision) over the `pull-model`
    SSE before first use (shared `streamModelPull()` helper; see `PACKAGING.md`). Node-18 EOL
    exit ✅ **DONE (migrated to Node 22, AppImage rebuilt + verified end-to-end, 2026-06-14)**.
    Still open: icon, Windows/macOS builds. (API session token ✅ BUILT

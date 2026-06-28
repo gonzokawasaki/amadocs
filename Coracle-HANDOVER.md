@@ -1,4 +1,4 @@
-# AMAdocs — Handover (for Claude on the Ubuntu/GNOME machine)
+# Coracle — Handover (for Claude on the Ubuntu/GNOME machine)
 
 You are picking up an in-progress project that was developed on an **Arch + Hyprland** box and
 moved to **Ubuntu (standard GNOME)** — deliberately, because the core bet rides on GNOME's desktop
@@ -6,10 +6,10 @@ indexer (LocalSearch/TinySPARQL), which is **dormant on non-GNOME** but **runs w
 
 **Read these first, in order** — they are the source of truth and far more detailed than this file:
 1. `K-base.md` — what the product is: a private, local AI file browser that rides on the GNOME indexer.
-2. `AMAdocs-SPEC.md` — the canonical product spec (three-panel semantic file manager).
-3. `AMAdocs-DEV-NOTES.md` — architecture, every custom change, current state, open items. **Start at the top header.**
+2. `Coracle-SPEC.md` — the canonical product spec (three-panel semantic file manager).
+3. `Coracle-DEV-NOTES.md` — architecture, every custom change, current state, open items. **Start at the top header.**
 4. `PACKAGING.md` — the AppImage build (on hold) and packaging gotchas.
-5. `AMAdocs-FABLE-RECOMMENDATIONS.md` — an external review / checklist.
+5. `Coracle-FABLE-RECOMMENDATIONS.md` — an external review / checklist.
 
 **Agent memory** — `agent-memory/` holds a snapshot of the previous Claude Code session's persistent
 memory (the distilled decision log + the `[[wikilinks]]` the docs reference). Read `agent-memory/MEMORY.md`
@@ -71,10 +71,10 @@ but the intended path is to re-index this machine's own GNOME corpus fresh.
 
 ## The engine is flattened (no submodule)
 
-`anythingllm-upstream/` was a shallow clone of `Mintplex-Labs/anything-llm` with the AMAdocs changes
+`anythingllm-upstream/` was a shallow clone of `Mintplex-Labs/anything-llm` with the Coracle changes
 **uncommitted** in its working tree. To make the handover a single clean clone, the nested `.git`
 was **removed** and all files committed directly into this repo. Consequences:
-- All custom work is here as plain files; every change is tagged **`AMAdocs:`** in-code (grep for it).
+- All custom work is here as plain files; every change is tagged **`Coracle:`** in-code (grep for it).
 - The upstream-rebase link is preserved as artifacts in `tooling/`:
   `amadocs-engine-base-commit.txt` (the upstream base commit `6442ea9` + upstream URL),
   `amadocs-engine.patch` (the tracked-file diff), `amadocs-engine-changed-files.txt`.
@@ -118,9 +118,9 @@ ollama pull moondream                # vision captioning (optional)
 **Run the dev stack:**
 ```bash
 bash tooling/start-stack.sh          # server :3001, collector :8888, frontend :3000
-cd tooling/amadocs-ui && python3 -m http.server 8080   # the real AMAdocs UI → http://localhost:8080
+cd tooling/amadocs-ui && python3 -m http.server 8080   # the real Coracle UI → http://localhost:8080
 ```
-**Or run the Electron desktop app** (`amadocs-desktop/`) — see `AMAdocs-DEV-NOTES.md` → "Run it".
+**Or run the Electron desktop app** (`amadocs-desktop/`) — see `Coracle-DEV-NOTES.md` → "Run it".
 The native embedder model downloads from HuggingFace on the **first embed** (needs internet once).
 
 ---
@@ -194,7 +194,7 @@ the grounded visual citation loop.
    granite (`default:true`); phi3.5 demoted, no longer labelled "the default".
 3. ✅ **Collector backstop for GNOME's extraction blind spots** — DONE + VERIFIED LIVE (2026-06-20 PM).
    Files GNOME can't extract text for (docx/xlsx/pptx OOXML-routing failures, scanned PDFs, images) now
-   run through AMAdocs' own collector extractors and embed: office docs + scanned PDFs **automatically
+   run through Coracle' own collector extractors and embed: office docs + scanned PDFs **automatically
    during folder sync**, images **on-demand via right-click "analyse with AI"** (which previously
    dead-ended on images). Engine: `GnomeBridge.queryBlindSpots`/`materializeViaCollector`/`backstopFile`
    (idempotent by `sourcePath`), `POST /workspace/:slug/analyse-file`, generalized `doc-original`

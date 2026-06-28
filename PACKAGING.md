@@ -1,4 +1,4 @@
-# AMAdocs — Packaging (AppImage)
+# Coracle — Packaging (AppImage)
 
 Status as of 2026-06-14. Target: a single-file **AppImage** (Linux first; the machine
 we develop on). Goal: one download → double-click → runs, fully local, no setup.
@@ -24,7 +24,7 @@ everything at once. Until then, the dev stack is the source of truth; the `dist/
 
 ## Status: BUILT & verified end-to-end ✅ *(of the 06:54 build — see staleness warning above)*
 
-`yarn dist` produces `amadocs-desktop/dist/AMAdocs-0.1.0-x86_64.AppImage` (**~2.3 GB**).
+`yarn dist` produces `amadocs-desktop/dist/Coracle-0.1.0-x86_64.AppImage` (**~2.3 GB**).
 Verified live on the dev box (GTX 1650 Ti, 2026-06-14): boots fully offline from the
 read-only AppImage mount, seeds a clean writable `userData` on first run, and the whole
 stack works — **document ingest, image vision-captioning, and grounded chat** all
@@ -34,7 +34,7 @@ download — see "Remaining for a shippable build").
 ## How to build
 
 ```bash
-cd amadocs-desktop && yarn dist     # → dist/AMAdocs-0.1.0-x86_64.AppImage (~2.3 GB)
+cd amadocs-desktop && yarn dist     # → dist/Coracle-0.1.0-x86_64.AppImage (~2.3 GB)
 ```
 
 All prerequisites below are already staged in the repo. To rebuild from scratch on a new
@@ -44,12 +44,12 @@ machine, re-do the "Prep (one-time)" steps first.
 
 ```bash
 cd amadocs-desktop/dist
-./AMAdocs-0.1.0-x86_64.AppImage --no-sandbox
+./Coracle-0.1.0-x86_64.AppImage --no-sandbox
 ```
 
-State lives in `~/.config/AMAdocs/` (storage, ollama-models, secrets.json). Delete that
+State lives in `~/.config/Coracle/` (storage, ollama-models, secrets.json). Delete that
 dir to test a true first run. The bundle has no LLM, so to actually chat/caption, pull
-models into the running app (or pre-seed `~/.config/AMAdocs/ollama-models`):
+models into the running app (or pre-seed `~/.config/Coracle/ollama-models`):
 
 ```bash
 curl http://127.0.0.1:11434/api/pull -d '{"name":"granite4.1:3b"}'  # chat (~2.1 GB) — the default
@@ -123,7 +123,7 @@ preserves the lib symlinks (verified — not dereferenced).
 ## ⚠️ Collector writable dirs (read-only mount)
 
 The collector runs from the read-only AppImage mount, so its `hotdir` (upload landing
-zone) and `tmp` scratch must live in writable `userData`. Fixed (all tagged `AMAdocs:`):
+zone) and `tmp` scratch must live in writable `userData`. Fixed (all tagged `Coracle:`):
 `collector/utils/constants.js` exports `WATCH_DIRECTORY` + `TMP_DIRECTORY`, both
 `NODE_ENV`-gated → packaged = `STORAGE_DIR/hotdir` & `STORAGE_DIR/tmp` (dev unchanged);
 server `utils/files/multer.js` writes uploads to the same `STORAGE_DIR/hotdir`;
@@ -135,10 +135,10 @@ absent dir).
 
 - ✅ **Proactive first-run model download — BUILT (2026-06-14).** On boot, if the engine
   answers `custom-models` with no installed *chat* model (hidden/vision models excluded;
-  a network error is treated as "engine warming up", not first-run), AMAdocs shows a full-screen
-  **"Welcome to AMAdocs"** setup overlay (`#firstRun`, `amadocs-ui/index.html` → synced to
+  a network error is treated as "engine warming up", not first-run), Coracle shows a full-screen
+  **"Welcome to Coracle"** setup overlay (`#firstRun`, `amadocs-ui/index.html` → synced to
   desktop). One button downloads the default AI (granite4.1:3b) with a live progress bar, plus an
-  opt-in (checked) "Let AMAdocs read images & scans" that pulls the vision model (moondream)
+  opt-in (checked) "Let Coracle read images & scans" that pulls the vision model (moondream)
   afterwards — both over the existing `pull-model` SSE endpoint. The chat model pulled is the
   catalog's `default:true` entry (now **granite4.1:3b**, Apache-2.0). Sizes come from the catalog
   (best-effort, with fallbacks). On success it refreshes the model picker and dismisses; on

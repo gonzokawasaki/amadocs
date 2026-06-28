@@ -1,8 +1,8 @@
-# AMAdocs — Recommendations (Fable review, 2026-06-12)
+# Coracle — Recommendations (Fable review, 2026-06-12)
 
 Project evaluation by Claude (Fable 5) of the build and the idea, as of Phase 0
 (engine proven end-to-end, packaging parked). Companion to `K-base.md` and
-`AMAdocs-DEV-NOTES.md`. Use this as a working checklist — tick items off or strike
+`Coracle-DEV-NOTES.md`. Use this as a working checklist — tick items off or strike
 them out as they're addressed or rejected.
 
 ---
@@ -11,13 +11,13 @@ them out as they're addressed or rejected.
 
 A well-executed Phase 0. The strategy — fork AnythingLLM for the hard RAG parts,
 wrap it in a purpose-built simple UI — is right, and the execution shows discipline:
-the entire engine diff is ~215 lines across 4 files, every change tagged `AMAdocs:`,
+the entire engine diff is ~215 lines across 4 files, every change tagged `Coracle:`,
 the custom UI is one dependency-free HTML file with vendored libs. Maintainable by
 one person, rebasable on upstream.
 
 The idea is sound but lives or dies on one thing the current build hasn't fully
 proven in-browser: **the citation loop**. (CPU-only performance is no longer chased
-— AMAdocs is positioned as a GPU app; see Risk 1.)
+— Coracle is positioned as a GPU app; see Risk 1.)
 
 ---
 
@@ -29,10 +29,10 @@ installer with a bundled LLM. What's genuinely rare is the **grounded visual
 citation loop**: click a citation → see the actual page of the actual document.
 None of the local tools do that well. **That should be the product.**
 
-### Risk 1 — RESOLVED by decision: AMAdocs is a GPU app, no CPU-only claim
+### Risk 1 — RESOLVED by decision: Coracle is a GPU app, no CPU-only claim
 All benchmarks (~1 s warm, 100% GPU) come from a GTX 1650 Ti. A 4B model on CPU
 would be noticeably slower with a worse cold start, and we won't publish a number we
-can't stand behind. **Decision:** AMAdocs is positioned as a GPU app — a discrete
+can't stand behind. **Decision:** Coracle is positioned as a GPU app — a discrete
 GPU is recommended; we make **no CPU-only performance claim** and don't market to
 no-dGPU laptops. (It will still *run* on CPU via Ollama's fallback; we simply don't
 advertise, target, or benchmark that as a supported experience.)
@@ -56,7 +56,7 @@ Phi-3.5-mini is a mid-2024 model. Better permissive options exist:
 
 > ⬜ **Action:** bake-off before freezing the bundled model. *(Now easy — the in-app
 > model picker + downloader, built 2026-06-13, swaps between installed models and pulls
-> new ones; see `AMAdocs-DEV-NOTES.md`. `phi4-mini` / `qwen3:4b` are in the download catalog.)*
+> new ones; see `Coracle-DEV-NOTES.md`. `phi4-mini` / `qwen3:4b` are in the download catalog.)*
 > ✅ **Done:** non-commercial models can no longer end up in front of the user — the download
 > catalog is an MIT/Apache allowlist (`pull-model` refuses anything else) and the picker filters
 > `qwen2.5` out (`HIDDEN_MODELS`). `qwen2.5` may still sit in `tooling/ollama-models` for dev but
@@ -222,7 +222,7 @@ scoping) the include-filter plumbing above.
    built 2026-06-12**; matcher validated against real PDF.js extraction (build item
    #1). Remaining: a human needs to eyeball the in-browser highlight alignment/scroll.
 2. ✅ ~~**Run the stack on a CPU-only laptop and measure**~~ — **dropped (see
-   Risk 1): AMAdocs is a GPU app and makes no CPU-only claim, so there's nothing to
+   Risk 1): Coracle is a GPU app and makes no CPU-only claim, so there's nothing to
    measure.**
 3. ✅ ~~Fix the filename XSS~~ (done, build item #2). ✅ ~~Node-18 EOL exit (#4)~~ —
    **migrated to Node 22, packaged AppImage rebuilt + verified, 2026-06-14.**
@@ -234,4 +234,4 @@ scoping) the include-filter plumbing above.
 what's borrowed vs. built. The risk isn't in the code; it's that the one thing that
 would make this a product rather than a nicer AnythingLLM skin — visual citations —
 still wants an in-browser eyeball. (CPU performance is no longer on the hook:
-AMAdocs is a GPU app and makes no CPU-only claim.)*
+Coracle is a GPU app and makes no CPU-only claim.)*

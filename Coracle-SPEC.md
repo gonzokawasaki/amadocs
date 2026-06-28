@@ -1,8 +1,8 @@
 # Coracle — Product Spec: Semantic File Manager
 
-> The canonical product spec. Overview in `K-base.md`; engineering log in `AMAdocs-DEV-NOTES.md`.
+> The canonical product spec. Overview in `K-base.md`; engineering log in `Coracle-DEV-NOTES.md`.
 >
-> **Coracle** (formerly *AMAdocs*) — a coracle is a small, light, single-person boat you carry to the
+> **Coracle** (formerly *Coracle*) — a coracle is a small, light, single-person boat you carry to the
 > water and that carries you across it: the theme for a lightweight, private, personal vessel for
 > navigating your own documents. Product language leans on the metaphor (*navigate / chart / waters*).
 > Rename is branding-only so far — runtime identifiers stay `amadocs-*`; see the DEV-NOTES rename entry.
@@ -69,7 +69,7 @@ filesystem, and the AI catalogs, summarises, and answers questions about what yo
   indexing, like preview). HTML files render as an actual **sandboxed webpage** (scripts + network disabled),
   not raw source. Lazy (IntersectionObserver) + serial (one cover rendered at a time) + bounded (skip files
   >12 MB; clamp spreadsheet covers to a top-left block) so no single pathological file can freeze the UI.
-  See `AMAdocs-DEV-NOTES.md` → "document COVER thumbnails". A **carousel** view (cover-flow over the same
+  See `Coracle-DEV-NOTES.md` → "document COVER thumbnails". A **carousel** view (cover-flow over the same
   files) is the planned next mode.
 
 **Preview mode** (when a file is selected):
@@ -99,7 +99,7 @@ Three states depending on selection:
    title page + first ~5 pages (`DocSummary.leadingSlice`), so it gives the model whole-document
    orientation that pure similarity search misses — the title/opening pages rarely match a
    specific question and so are seldom retrieved. Added to context only, never as a citation.
-   See `AMAdocs-DEV-NOTES.md`. (Option B — pinning the first N real chunks for a citable title
+   See `Coracle-DEV-NOTES.md`. (Option B — pinning the first N real chunks for a citable title
    page — is deferred pending how A performs on its own.)
 
 **Folder/drive selected:**
@@ -116,7 +116,7 @@ Three states depending on selection:
    names/dates/codes/technical terms to each card, and that line is embedded with the rest, so those tokens
    are matchable without a separate lexical index. (A fused TinySPARQL-FTS + summary RRF leg was the earlier
    plan but the eval showed summary-only already wins, so it wasn't shipped.) See
-   `AMAdocs-DEV-NOTES.md` → "Summariser" + "LLM search redesign". **Hard prerequisite — now being satisfied (2026-06-22):**
+   `Coracle-DEV-NOTES.md` → "Summariser" + "LLM search redesign". **Hard prerequisite — now being satisfied (2026-06-22):**
    summaries must exist for every indexed file. gnome-sync now summarises by default; the /STEM eval folder
    (40 docs) is backfilled and a full-778 backfill is in progress (~4h bounded cadence drain). Once complete,
    the breadth summary-search routing can be built on top.
@@ -131,7 +131,7 @@ Three states depending on selection:
 
 - **Nav buttons (top-left): ⌂ Home / ‹ Back / › Forward.** Home opens the Homepage (below); Back/Forward
   walk a browser-style history over the middle panel's destinations (Home / folder / file). Built 2026-06-21
-  (replaced the old decorative window-style dots) — see `AMAdocs-DEV-NOTES.md`.
+  (replaced the old decorative window-style dots) — see `Coracle-DEV-NOTES.md`.
 - Simple filename / keyword search (TinySPARQL FTS — instant, no LLM, no embeddings).
 - Separate from the AI chat. Answers the "find file named X" question; AI chat answers
   the "find files about X" question. Two distinct modes, clearly labelled.
@@ -161,7 +161,7 @@ process; the summary constants are duplicated in two `DocSummary` copies); the c
 `openAiPrompt`-baking trap (must write through to the workspace, not just `saneDefault`); and changes
 don't retro-apply (only new summaries reflect a new summary setting → pairs with a re-summarise action).
 Recommended phasing: a read-only "here's what we use & why" card first, then live numeric knobs, then
-editable prompts. See `AMAdocs-DEV-NOTES.md` and the next-session plan.
+editable prompts. See `Coracle-DEV-NOTES.md` and the next-session plan.
 
 ---
 
@@ -200,7 +200,7 @@ only path that writes AI data into a file — and it writes a copy, not the orig
 ## Initial setup
 
 On first launch (or when a new drive/folder is added), a one-shot indexing pass runs. It is
-presented as **one honest onboarding moment** — "AMAdocs is building your search index" — not
+presented as **one honest onboarding moment** — "Coracle is building your search index" — not
 a piecemeal drip-feed. Under the hood it runs in two phases:
 
 **Embedding pass (fast: minutes to ~1 hour depending on corpus size)**
@@ -226,7 +226,7 @@ scales with changes, not corpus size.
 
 ## Reused engine components
 
-The AMAdocs engine and its proven components are reused directly under the file-manager shell:
+The Coracle engine and its proven components are reused directly under the file-manager shell:
 
 - **TinySPARQL bridge + gnome-sync** — the indexing backbone. `POST /gnome-sync` is the embed
   trigger; the file tree makes the folder the natural unit of organisation.
@@ -278,14 +278,14 @@ The AMAdocs engine and its proven components are reused directly under the file-
 **Motivation.** Physical folders force ONE rigid hierarchy, but a document is semantically
 multi-dimensional — a VEX-robotics newsletter sitting in `/Generated_Documents` is *also* "STEM",
 "robotics", "Term 4". Folders can't express that; semantic views can. (Surfaced directly by the search
-experiment — see `AMAdocs-DEV-NOTES.md`.)
+experiment — see `Coracle-DEV-NOTES.md`.)
 
 **Why this is legitimate, not a gimmick.** The physical folder tree is *already* an abstraction. On an
 SSD there is no physical "folder" — the flash controller scatters bytes across blocks, and the directory
 hierarchy is itself just a metadata **index** the OS presents to make the bytes navigable. A semantic view
 is therefore not fake organisation over "real" folders: **both are indexes over the same bytes.** The folder
 tree is the OS's index; semantic folders are a meaning-based index beside it — there is no privileged "real"
-structure, only indexes, and AMAdocs simply offers a smarter one.
+structure, only indexes, and Coracle simply offers a smarter one.
 
 **Tier 1 — Virtual "smart folders" (safe; this is what Build 1 ships).** Rendered in the left tree
 *alongside* the real filesystem — like macOS Smart Folders / Gmail labels / playlists. **Files never move**
@@ -333,19 +333,19 @@ has a summary vector, hence steps 1–2 first.
 
 ## Roadmap — two builds (decided 2026-06-23)
 
-AMAdocs is now planned as **two builds** so the model stack matches the hardware instead of fighting it:
+Coracle is now planned as **two builds** so the model stack matches the hardware instead of fighting it:
 
-- **Build 1 — "AMAdocs Lite" (near complete).** Targets modest machines like the 4 GB GTX 1650 Ti dev box.
+- **Build 1 — "Coracle Lite" (near complete).** Targets modest machines like the 4 GB GTX 1650 Ti dev box.
   Keeps the current stack: **granite4.1:3b** (chat + summaries, 2.1 GB — fits with headroom), **moondream**
   (vision), **Tesseract** (OCR), **MiniLM** (embeddings). Finish line = the 4-step sequence above. **No Gemma.**
-- **Build 2 — "AMAdocs" (next track, parked until Build 1 ships).** Consolidates the stack onto **one Gemma 4
+- **Build 2 — "Coracle" (next track, parked until Build 1 ships).** Consolidates the stack onto **one Gemma 4
   multimodal model** (chat + summaries + image analysis + a handwriting-OCR fallback), keeping Tesseract for
   verbatim printed scans and MiniLM for embeddings. Designed for an **~8 GB VRAM floor**, where the real
   candidate **`gemma4:e2b-it-qat`** (4.34 GB = 3.35 GB text weights + 0.99 GB vision projector, per the Ollama
   registry manifest) sits resident with both modalities + context headroom. It does **not** fit the 4 GB box
   (measured 3713 MiB free), which is exactly why the two builds are split. The earlier `e2b-it-q4_K_M` (7.2 GB)
   was the wrong tag. Gemma 4 is plain **Apache-2.0**, so it clears the MIT/Apache-only model-catalog gate that
-  blocked Gemma 3. Full detail in `AMAdocs-DEV-NOTES.md`.
+  blocked Gemma 3. Full detail in `Coracle-DEV-NOTES.md`.
 
 ## Open questions
 
@@ -359,5 +359,5 @@ AMAdocs is now planned as **two builds** so the model stack matches the hardware
    by design (would require re-parsing every PDF). Verified live on the 83-page scanned "Year 6 ICT"
    book (chips `p.11`/`p.18`). See DEV-NOTES.
 
-3. **Name.** AMAdocs is the working name; "Finder++" was a candidate. To be decided before
+3. **Name.** Coracle is the working name; "Finder++" was a candidate. To be decided before
    public release.

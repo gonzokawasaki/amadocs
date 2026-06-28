@@ -1,13 +1,13 @@
-# AMAdocs — Product Overview
+# Coracle — Product Overview
 
-> The entry-point doc: what AMAdocs is, who it's for, and the core bet.
-> Detailed product spec in `AMAdocs-SPEC.md`. Engineering log in `AMAdocs-DEV-NOTES.md`.
+> The entry-point doc: what Coracle is, who it's for, and the core bet.
+> Detailed product spec in `Coracle-SPEC.md`. Engineering log in `Coracle-DEV-NOTES.md`.
 
 ---
 
 ## What it is
 
-**AMAdocs is a private, local AI file browser** — a desktop file manager that already
+**Coracle is a private, local AI file browser** — a desktop file manager that already
 understands what's inside your files. You browse your real filesystem (like Finder/Nautilus),
 and a local AI can summarise any file, answer questions about it, and show you the exact page
 its answer came from. Everything stays on-device. Nothing is uploaded.
@@ -22,13 +22,13 @@ every file without melting the machine. On Linux/GNOME the OS **already does thi
 **LocalSearch** (the filesystem miner) continuously extracts full text + metadata into
 **TinySPARQL** (the RDF/SPARQL store), idle-aware and system-wide, for free.
 
-So AMAdocs doesn't own the crawl. It **rides on the OS index**: reads the OS-extracted text,
+So Coracle doesn't own the crawl. It **rides on the OS index**: reads the OS-extracted text,
 adds embeddings + AI summaries + the grounded answer/citation loop on top, and only does its
 own heavier work (OCR, image vision, formats the OS mishandles) for the gaps.
 
 Proven on a real 1.1 GB / 805-doc folder: the OS extracted 648 docs / ~19.8M chars in seconds.
 Two honest caveats this surfaced: the OS index has **blind spots** (no OCR, keyword-only
-search, occasional mime-override skips) — which is exactly the seam where AMAdocs adds value —
+search, occasional mime-override skips) — which is exactly the seam where Coracle adds value —
 and the integration is **GNOME-first** (see below).
 
 ## What's different
@@ -44,7 +44,7 @@ and the integration is **GNOME-first** (see below).
 
 ## Who it's for
 
-AMAdocs is for **technical Linux users who like to play with their tools** — privacy /
+Coracle is for **technical Linux users who like to play with their tools** — privacy /
 self-hoster / Ollama folks who find it on AUR + GitHub, expect a GPU, tolerate rough edges,
 and file issues. This is an "experiment that may have legs," not a finished product — rough
 edges are the spec, not bugs.
@@ -53,10 +53,10 @@ edges are the spec, not bugs.
 non-technical user who never sees the words "model," "embedder," or "vector database" — is
 dropped. We are catering to a tinkerer audience who *want* the knobs: every tunable, the
 prompts, and even the CSS are exposed for customisation (each with a recommended default and
-a note on what worked on our machine — see the Homepage "Tuning" direction in `AMAdocs-SPEC.md`).
+a note on what worked on our machine — see the Homepage "Tuning" direction in `Coracle-SPEC.md`).
 GPU-required, needs-Ollama, and GNOME-first are honest specs for this audience, not failures.
 
-## The shape (see `AMAdocs-SPEC.md` for the full spec)
+## The shape (see `Coracle-SPEC.md` for the full spec)
 
 A three-panel desktop app:
 - **Left** — file tree (real filesystem). Click a file → preview; click a folder → scope the AI.
@@ -79,7 +79,7 @@ After that, incremental maintenance tracks file changes.
 - The "ride on GNOME" loop: TinySPARQL bridge → embed → semantic query, with incremental
   delta-sync (new/changed/deleted). Engine endpoint `POST /workspace/:slug/gnome-sync`.
 - The Phase 2 semantic-file-manager UI, wired to the real engine (live file tree, AI state
-  chips, folder indexing, scoped chat, context-menu actions). See `AMAdocs-DEV-NOTES.md`.
+  chips, folder indexing, scoped chat, context-menu actions). See `Coracle-DEV-NOTES.md`.
 - Safe ingest queue (serial, cool-downs, durable, hard STOP) — proven live through the UI.
 - AI summaries, vision captioning (moondream), OCR; model picker (MIT/Apache models only);
   metadata-embed export; API auth token gate; session-scoped chat.
@@ -87,9 +87,9 @@ After that, incremental maintenance tracks file changes.
 ## Stack & licensing
 
 - **AnythingLLM** (MIT, RAG engine) + **Ollama** (MIT, local LLM) + **Electron** (MIT, shell) +
-  native embedder/OCR (Apache-2.0). AMAdocs itself ships **MIT**.
+  native embedder/OCR (Apache-2.0). Coracle itself ships **MIT**.
 - **Default model: granite4.1:3b** (Apache-2.0) — cleaner output than phi3.5. The model catalog
   is MIT/Apache-only by policy.
 - GPU recommended; ~1s warm query on a GTX 1650 Ti dev machine.
 
-See `AMAdocs-DEV-NOTES.md` for architecture and how to run it.
+See `Coracle-DEV-NOTES.md` for architecture and how to run it.
