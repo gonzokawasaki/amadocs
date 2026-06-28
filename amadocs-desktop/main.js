@@ -14,10 +14,10 @@ const crypto = require("crypto");
 //   resources/engine/{server,collector}   the AnythingLLM fork (with node_modules)
 //   resources/node/node                    a Node 18 binary (engine native modules
 //                                          are built against its ABI)
-//   resources/ollama/bin/ollama            the Ollama runtime binary; its inference
-//                                          runner (llama-server) + GPU/CPU libs ship
-//                                          alongside in resources/ollama/lib/ollama,
-//                                          which ollama finds via ../lib/ollama
+//   (Ollama is NOT bundled — "require Ollama" build.) We reuse an Ollama that's
+//   already serving on :11434, else spawn the user's system `ollama` (resolved
+//   from PATH / the usual install dirs). If it isn't installed we tell the user
+//   to install it rather than failing cryptically.
 //   resources/storage-seed/                read-only assets seeded into userData on
 //                                          first run (models/, a migrated empty DB)
 //
@@ -31,9 +31,26 @@ const RES = process.resourcesPath;
 const ENGINE = isPackaged
   ? path.join(RES, "engine")
   : path.join(ROOT, "anythingllm-upstream");
-const OLLAMA_BIN = isPackaged
-  ? path.join(RES, "ollama", "bin", "ollama")
-  : path.join(ROOT, "tooling", "ollama", "bin", "ollama");
+// "Require Ollama" build: Ollama is not bundled. In dev we keep the old local
+// path; packaged, locate the user's system install (PATH + the usual dirs).
+// Returns null when Ollama isn't installed, so bootEngine can prompt the user.
+function resolveOllama() {
+  if (!isPackaged) return path.join(ROOT, "tooling", "ollama", "bin", "ollama");
+  const dirs = [
+    "/usr/local/bin",
+    "/usr/bin",
+    "/bin",
+    path.join(process.env.HOME || "", ".local/bin"),
+    ...(process.env.PATH || "").split(path.delimiter),
+  ];
+  for (const d of dirs) {
+    if (!d) continue;
+    const c = path.join(d, "ollama");
+    if (fs.existsSync(c)) return c;
+  }
+  return null;
+}
+const OLLAMA_BIN = resolveOllama();
 
 // Writable locations (packaged: userData; dev: the repo's existing dirs).
 const STORAGE_DIR = isPackaged
@@ -197,6 +214,16 @@ async function bootEngine() {
   const serverUp = await ping("http://127.0.0.1:3001/api/ping");
   if (!serverUp) {
     if (!(await ping("http://127.0.0.1:11434/api/version"))) {
+      if (!OLLAMA_BIN) {
+        throw new Error(
+          "Ollama isn't installed.\n\n" +
+            "Coracle runs its AI models locally with Ollama, but couldn't find it.\n" +
+            "Install Ollama, then relaunch Coracle:\n\n" +
+            "  Arch / Manjaro:  sudo pacman -S ollama\n" +
+            "  Other Linux:     curl -fsSL https://ollama.com/install.sh | sh\n" +
+            "  Or download from https://ollama.com/download"
+        );
+      }
       startProc("ollama", OLLAMA_BIN, ["serve"]);
       await waitFor("http://127.0.0.1:11434/api/version", "Ollama");
     }
@@ -376,8 +403,9 @@ app.whenReady().then(async () => {
     win.loadURL(
       "data:text/html," +
         encodeURIComponent(
-          `<body style="font-family:sans-serif;padding:40px;color:#b91c1c">
-           <h2>AMAdocs couldn't start its engine</h2><pre>${e.message}</pre></body>`
+          `<body style="font-family:sans-serif;padding:40px;color:#1f2937;background:#f6f7fb">
+           <h2 style="color:#b91c1c">Coracle couldn't start its engine</h2>
+           <pre style="white-space:pre-wrap;font-size:14px;line-height:1.5">${e.message}</pre></body>`
         )
     );
   }

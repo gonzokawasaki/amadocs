@@ -5,6 +5,7 @@
   "description": "Ask your documents anything — private, local AI for your files.",
   "main": "main.js",
   "author": "Coracle",
+  "homepage": "https://github.com/gonzokawasaki/coracle",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
@@ -63,10 +64,6 @@
       {
         "from": "vendor/node",
         "to": "node"
-      },
-      {
-        "from": "vendor/ollama",
-        "to": "ollama"
       },
       {
         "from": "../LICENSE",
