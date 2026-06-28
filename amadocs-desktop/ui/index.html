@@ -462,7 +462,8 @@
     }
     .tab:hover:not(.tab-active) { color:var(--text-muted); }
     .tab.tab-active { background:var(--tab-active-bg); border-top:2px solid var(--accent); color:var(--text); }
-    .tab__x { font-size:0.71rem; color:var(--text-xfaint); margin-left:0.14rem; }
+    .tab__x { font-size:0.71rem; color:var(--text-xfaint); margin-left:0.14rem; cursor:pointer; border-radius:3px; padding:0 0.18rem; }
+    .tab__x:hover { color:var(--text); background:var(--tab-active-bg); }
     .icon-pdf { color:var(--red); }
     .icon-md  { color:var(--blue); }
     .icon-xl  { color:var(--accent); }
@@ -1029,7 +1030,7 @@
           <div class="tab tab-active">
             <span class="icon-pdf">▤</span>
             Annual-Infrastructure-Review-2025.pdf
-            <span class="tab__x">✕</span>
+            <span class="tab__x" title="Close" onclick="event.stopPropagation();showFolder()">✕</span>
           </div>
           <div class="tab"><span class="icon-md">▤</span>Roadmap.md</div>
           <div class="tab"><span class="icon-xl">▤</span>Q2-Budget.xlsx</div>
@@ -1143,19 +1144,15 @@
     <div class="ctx-filename" id="ctxFilename">filename.pdf</div>
     <div class="ctx-filemeta" id="ctxFilemeta">PDF · 1.4 MB</div>
   </div>
-  <!-- primary action: analyse (shown for images / unanalysed; shown for all as re-analyse) -->
+  <!-- primary action: ONE harmonised step — indexes the file (if needed) THEN writes the
+       granite summary card. Replaces the old split "analyse with AI" + "summarise". -->
   <div class="ctx-section" id="ctxAnalyseSection">
     <div class="ctx-item primary" id="ctxAnalyse">
-      <span class="ctx-icon">⚡</span>
-      <span class="ctx-label" id="ctxAnalyseLabel">analyse with AI</span>
+      <span class="ctx-icon">✦</span>
+      <span class="ctx-label" id="ctxAnalyseLabel">Index &amp; summarise</span>
     </div>
   </div>
   <div class="ctx-section">
-    <div class="ctx-item" id="ctxSummarise">
-      <span class="ctx-icon">✦</span>
-      <span class="ctx-label">summarise</span>
-      <span class="ctx-hint">refresh</span>
-    </div>
     <div class="ctx-item" id="ctxPrioritise">
       <span class="ctx-icon">↑</span>
       <span class="ctx-label">prioritise indexing</span>
@@ -1737,6 +1734,15 @@ function renderHomeHtml(d){
   d = d || {};
   const eng=d.engine||{}, gn=d.gnome||{}, lib=d.library||{}, synced=d.synced||[];
   const docs = lib.totalDocs ?? 0;
+  // Tracked = every file the indexer is handling across synced folders; docs = those
+  // already embedded/searchable. While a drain runs, docs < tracked → shows progress.
+  const tracked = synced.reduce((a,s)=>a+(s.files||0),0);
+  const libBig = tracked
+    ? `${docs} <span style="color:var(--text-faint);font-weight:400">/ ${tracked}</span>`
+    : `${docs}`;
+  // The total ("tracked") is what GNOME's LocalSearch catalogued in the synced folders, not
+  // our own scan — credit it so the user knows where the file count comes from.
+  const libSub = tracked ? `indexed · ${tracked} found by GNOME` : "indexed";
   const sm = d.summaries||{}, smDone = sm.summarised??0, smTot = sm.total??0, smQ = sm.queued??0;
   // "Summaries" card: how many indexed docs carry an AI catalog card. While a backfill drains,
   // smQ counts the files still waiting for granite — surfaced as a live "N queued" sub-line.
@@ -1750,8 +1756,8 @@ function renderHomeHtml(d){
     homeCard("Index",
       `<span class="${gn.connected?"home-ok":"home-warn"}">●</span> ${gn.connected?"Connected":"Unavailable"}`,
       "GNOME LocalSearch") +
-    homeCard("Library", `${docs}`, "searchable",
-      "Indexed — the AI can search inside these files.") +
+    homeCard("Library", libBig, libSub,
+      "Indexed — the AI can search inside these files. The total is the count GNOME's LocalSearch catalogued in your folders; the first number is how many are searchable so far.") +
     homeCard("Summaries", smBig, smSub,
       "Summarised — the AI has read each file and written a short card. Powers folder-wide search.");
   const stackHtml = renderStackHtml(d.stack);
@@ -2139,14 +2145,12 @@ function openCtx(e, entryPath) {
   $("#ctxFilemeta").textContent = data.meta;
   const analyseItem  = $("#ctxAnalyse");
   const analyseLabel = $("#ctxAnalyseLabel");
-  if (data.isImage) {
-    analyseItem.classList.add('primary');
-    analyseLabel.textContent = 'analyse with AI';
-    $("#ctxAnalyseSection").style.borderBottomWidth = '1px';
-  } else {
-    analyseItem.classList.remove('primary');
-    analyseLabel.textContent = 're-analyse with AI';
-  }
+  // ONE harmonised action: indexes (if needed) then summarises. Label just reflects
+  // whether the file is already indexed (so a re-run reads as a refresh, not a first pass).
+  const isIndexed = !!(ai && ai.indexed);
+  analyseItem.classList.add('primary');
+  analyseLabel.textContent = isIndexed ? 'Re-index & summarise' : 'Index & summarise';
+  $("#ctxAnalyseSection").style.borderBottomWidth = '1px';
   const vw = window.innerWidth, vh = window.innerHeight;
   ctxMenu.classList.remove('hidden');
   const mw = ctxMenu.offsetWidth, mh = ctxMenu.offsetHeight;
@@ -2477,7 +2481,7 @@ function showFilePreview(full, name, ent){
   const backBtn = $(".back-btn");
   if(backBtn) backBtn.textContent = `‹ ${view.folderName || baseName(parentPath(full))}/`;
   const activeTab = $(".tab.tab-active");
-  if(activeTab) activeTab.innerHTML = `<span class="icon-md">▤</span> ${esc(name)} <span class="tab__x">✕</span>`;
+  if(activeTab) activeTab.innerHTML = `<span class="icon-md">▤</span> ${esc(name)} <span class="tab__x" title="Close" onclick="event.stopPropagation();showFolder()">✕</span>`;
   document.querySelectorAll(".tabs .tab:not(.tab-active)").forEach(t => t.classList.add("hidden"));
   const meta = $(".tabs__meta");
   if(meta) meta.innerHTML = `<span>${esc(fmtBytes(ent.size||0))}</span><span>⤢</span>`;
@@ -2504,13 +2508,13 @@ function showFilePreview(full, name, ent){
       da.innerHTML = `<div class="vnote" style="margin:2rem;max-width:34rem;line-height:1.5">
         <strong>${esc(name)}</strong><br><br>
         ${ai.chipCls==="ai-analyse"
-          ? 'Right-click → <em>analyse with AI</em> to index this image on demand.'
-          : 'Right-click → <em>analyse with AI</em> to index this file, or use <strong>⟳ index</strong> on the folder header to index the whole folder.'}
+          ? 'Right-click → <em>Index &amp; summarise</em> to process this image on demand.'
+          : 'Right-click → <em>Index &amp; summarise</em> to make this file searchable, or use <strong>⟳ index</strong> on the folder header for the whole folder.'}
       </div>`;
     }
   }
   $("#replFile").innerHTML =
-    `<div class="sum-block"><div class="sum-label">summary</div><div class="sum-text${ai.summary?"":" tree-ghost"}">${ai.summary ? esc(ai.summary) : (ai.indexed ? "Indexed — no summary yet. Right-click → summarise to generate one." : "Not yet indexed — previewing from disk. Right-click → analyse with AI to make it searchable.")}</div></div>
+    `<div class="sum-block"><div class="sum-label">summary</div><div class="sum-text${ai.summary?"":" tree-ghost"}">${ai.summary ? esc(ai.summary) : (ai.indexed ? "Indexed — no summary yet. Right-click → Index & summarise to generate one." : "Not yet indexed — previewing from disk. Right-click → Index & summarise to make it searchable.")}</div></div>
      <div id="replFileConv"></div>`;
 }
 
@@ -2619,6 +2623,23 @@ async function onSyncFolder(){
     toast(plan.data.indexed ? "Every catalogued file here is already indexed." : "GNOME hasn’t catalogued any files in this folder yet.");
     await refreshAiState();
     return;
+  }
+  // SAFETY (THE #1 RULE): this index tracks ONE folder at a time, so indexing a NEW
+  // folder REPLACES the old corpus — the dryRun shows that as a large `deleted`. Don't
+  // let a stray click silently wipe the existing index (this is exactly how the
+  // Pictures-folder incident lost the corpus). Confirm when the deletes are substantial.
+  const del = plan.data.deleted || 0;
+  if(del >= 5){
+    const ok = window.confirm(
+      `Indexing “${baseName(folder)}” will REMOVE ${del} already-indexed file(s) that aren’t in this folder.\n\n`+
+      `This index follows ONE folder at a time, so your previously-indexed folder will stop being searchable until you re-index it.\n\n`+
+      `Switch the index to this folder?`
+    );
+    if(!ok){
+      if(btn){ btn.textContent = "⟳ index"; btn.classList.remove("busy"); }
+      toast("Cancelled — your current index is unchanged.");
+      return;
+    }
   }
   syncing = true;
   if(btn) btn.textContent = `⟳ indexing ${queued}…`;
@@ -2799,46 +2820,49 @@ async function runRepl(){
 
 /* ═══════════════════════ CONTEXT MENU ACTIONS (Stage D2) ═══════════════════ */
 
+// ONE harmonised action: index the file (if needed) THEN summarise it. Replaces the
+// old split "analyse with AI" + "summarise" — the distinction wasn't apparent and the
+// two halves always belonged together ("make this file fully AI-ready").
 $("#ctxAnalyse").addEventListener("click", async ()=>{
   closeCtx();
   if(!ctxEntryPath){ toast("No file selected."); return; }
-  const entry=docIndex.get(ctxEntryPath);
-  const dp=entry?.docpath||null;
-  if(dp){
-    // Already indexed → "re-analyse" = full-text deep search of the existing doc.
-    toast("Analysing…");
-    const r=await deepSearchDoc(dp);
-    // Follow-up refresh: the workspace doc list can lag the embed by a beat, so a
-    // second pass guarantees the chip/dot flip (mirrors onSyncFolder).
-    if(r.ok){ await refreshAiState(); setTimeout(refreshAiState, 4000); toast("Analysis complete."); }
-    else toast("Analysis failed — check the engine logs.");
-    return;
-  }
-  // Not indexed yet → on-demand backstop. This is the working path for images and
-  // image-only PDFs (OCR + vision) and any file GNOME couldn't read.
-  if(!desktop){ toast("Analysis bridge not available in browser dev mode."); return; }
-  toast("Analysing… (OCR / vision may take a moment)");
-  const r=await analyseFile(ctxEntryPath);
-  if(r.ok){ await refreshAiState(); setTimeout(refreshAiState, 4000); toast("Analysis complete."); }
-  else toast(r.error || "Couldn’t analyse this file.");
-});
+  const path = ctxEntryPath;
+  let dp = docIndex.get(path)?.docpath || null;
 
-$("#ctxSummarise").addEventListener("click", async ()=>{
-  closeCtx();
-  if(!ctxEntryPath){ toast("No file selected."); return; }
-  const entry=docIndex.get(ctxEntryPath);
-  const dp=entry?.docpath||null;
-  if(!dp){ toast("File not indexed yet."); return; }
-  toast("Generating summary…");
-  const r=await summarizeDoc(dp);
-  if(r.ok && r.summary){
-    if(docIndex.has(ctxEntryPath)) docIndex.get(ctxEntryPath).aiSummary=r.summary;
-    if(view.filePath===ctxEntryPath){
-      const sb=document.querySelector("#replFile .sum-text");
-      if(sb){ sb.classList.remove("tree-ghost"); sb.textContent=r.summary; }
+  // 1) INDEX — backstop (OCR/vision) for un-indexed files; deep re-embed for indexed ones.
+  if(!dp){
+    if(!desktop){ toast("Indexing bridge not available in browser dev mode."); return; }
+    toast("Indexing… (OCR / vision may take a moment)");
+    const r=await analyseFile(path);
+    if(!r.ok){ toast(r.error || "Couldn’t index this file."); return; }
+    await refreshAiState();
+    dp = docIndex.get(path)?.docpath || null;   // pick up the freshly-assigned docpath
+  } else {
+    toast("Re-indexing…");
+    const r=await deepSearchDoc(dp);
+    if(r.ok) await refreshAiState();
+  }
+
+  // 2) SUMMARISE — granite catalog card (powers folder-wide search).
+  if(dp){
+    toast("Summarising…");
+    const s=await summarizeDoc(dp);
+    if(s.ok && s.summary){
+      if(docIndex.has(path)) docIndex.get(path).aiSummary=s.summary;
+      if(view.filePath===path){
+        const sb=document.querySelector("#replFile .sum-text");
+        if(sb){ sb.classList.remove("tree-ghost"); sb.textContent=s.summary; }
+      }
+      toast("Indexed & summarised.");
+    } else {
+      toast("Indexed — the summary step didn’t complete.");
     }
-    toast("Summary updated.");
-  } else toast("Summary failed.");
+  } else {
+    toast("Indexed.");
+  }
+  // Workspace doc list can lag the embed by a beat — a second pass guarantees the chip flip.
+  await refreshAiState();
+  setTimeout(refreshAiState, 4000);
 });
 
 $("#ctxReveal").addEventListener("click", ()=>{
