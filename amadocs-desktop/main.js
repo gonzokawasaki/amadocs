@@ -197,7 +197,11 @@ function startProc(name, cmd, args, opts = {}) {
     OLLAMA_MODELS,
     OLLAMA_HOST: "127.0.0.1:11434",
     OLLAMA_KEEP_ALIVE: "30m", // keep model warm -> avoid repeated cold starts
-    ...(isPackaged ? packagedEngineEnv() : { NODE_ENV: "development" }),
+    ...(isPackaged ? packagedEngineEnv() : (() => {
+      const pn = resolveProfileName();
+      const pm = MODEL_PROFILES[pn];
+      return { NODE_ENV: "development", CORACLE_PROFILE: pn, OLLAMA_MODEL_PREF: pm.chat, VISION_MODEL_PREF: pm.vision };
+    })()),
     ...(opts.env || {}),
   };
   const p = spawn(cmd, args, { env, cwd: opts.cwd, stdio: "pipe" });
