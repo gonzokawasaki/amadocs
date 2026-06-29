@@ -137,12 +137,30 @@ function installSecrets() {
 // (not persisted) so there's no token at rest to leak.
 const API_TOKEN = crypto.randomBytes(32).toString("hex");
 
+// AMAdocs: model "build profiles". The default "lite" profile keeps the
+// two-model stack (granite chat + moondream vision) that fits a ~4 GB GPU.
+// The "gemma" profile consolidates BOTH generative models onto a single
+// Apache-2.0 Gemma 4 multimodal model (chat + summaries + image captions).
+// Gemma 4 e2b-qat needs ~8 GB VRAM, so it ships as an opt-in build selected
+// with CORACLE_PROFILE=gemma — it deliberately does NOT fit this dev box.
+// The embedder (MiniLM, CPU) and Tesseract OCR are unchanged in both.
+const MODEL_PROFILES = {
+  lite: { chat: "granite4.1:3b", vision: "moondream" },
+  gemma: { chat: "gemma4:e2b-it-qat", vision: "gemma4:e2b-it-qat" },
+};
+function resolveProfileName() {
+  const name = (process.env.CORACLE_PROFILE || "lite").toLowerCase();
+  return MODEL_PROFILES[name] ? name : "lite";
+}
+
 // Full engine config for the packaged app. In dev we rely on the engine's
 // .env.development; packaged, we pass everything explicitly so there is no
 // dependency on a bundled .env, and NODE_ENV=production so the engine's
 // "is this dev?" path branches resolve to STORAGE_DIR (not repo paths).
 function packagedEngineEnv() {
   const secrets = installSecrets();
+  const profileName = resolveProfileName();
+  const models = MODEL_PROFILES[profileName];
   return {
     AMADOCS_API_TOKEN: API_TOKEN,
     NODE_ENV: "production",
@@ -153,7 +171,8 @@ function packagedEngineEnv() {
     VECTOR_DB: "lancedb",
     LLM_PROVIDER: "ollama",
     OLLAMA_BASE_PATH: "http://127.0.0.1:11434",
-    OLLAMA_MODEL_PREF: "granite4.1:3b",
+    CORACLE_PROFILE: profileName, // normalised; the server catalog reads this
+    OLLAMA_MODEL_PREF: models.chat,
     OLLAMA_MODEL_TOKEN_LIMIT: "4096",
     OLLAMA_RESPONSE_TIMEOUT: "7200000",
     EMBEDDING_ENGINE: "native",
@@ -163,7 +182,7 @@ function packagedEngineEnv() {
     STT_PROVIDER: "native",
     DISABLE_TELEMETRY: "true",
     // AMAdocs additions
-    VISION_MODEL_PREF: "moondream",
+    VISION_MODEL_PREF: models.vision,
     DOC_SUMMARY_ENABLED: "true", // catalog every file with a bounded summary at ingest (librarian default); full-text Deep search is opt-in per file
     TARGET_OCR_LANG: "eng",
     OCR_PDF_DPI: "150",

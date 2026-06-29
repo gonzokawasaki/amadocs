@@ -17,7 +17,16 @@ export OLLAMA_MODELS="${OLLAMA_MODELS:-$PROJECT_ROOT/tooling/ollama-models}"
 export OLLAMA_HOST=127.0.0.1:11434
 # AMAdocs: let the collector reach Ollama for image captioning (VisionCaption)
 export OLLAMA_BASE_PATH=http://127.0.0.1:11434
-export VISION_MODEL_PREF=moondream
+# AMAdocs: model build profile. "lite" (default) = granite chat + moondream
+# vision (~4 GB GPU). "gemma" = both consolidated onto one Apache-2.0 Gemma 4
+# multimodal model (~8 GB VRAM): CORACLE_PROFILE=gemma bash tooling/start-stack.sh
+export CORACLE_PROFILE="${CORACLE_PROFILE:-lite}"
+if [ "$CORACLE_PROFILE" = "gemma" ]; then
+  export OLLAMA_MODEL_PREF=gemma4:e2b-it-qat
+  export VISION_MODEL_PREF=gemma4:e2b-it-qat
+else
+  export VISION_MODEL_PREF=moondream
+fi
 # AMAdocs: catalog every dropped file with a bounded ~120-word AI summary at ingest
 # (the "AI librarian" default). Only the summary is embedded for search; full-text
 # "Deep search" is opt-in per file (right-click). Set =false to turn cataloging off.

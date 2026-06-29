@@ -2137,8 +2137,18 @@ function workspaceEndpoints(app) {
   // OSI-permissive licence (MIT / Apache-2.0) so the product never pulls a
   // research/non-commercial model. The pull endpoint refuses anything not here.
   // Sizes are approximate (4-bit quantised) and only used for display.
+  // AMAdocs: the "gemma" build profile (CORACLE_PROFILE=gemma) consolidates
+  // chat + summaries + vision onto one Apache-2.0 Gemma 4 multimodal model.
+  // In that build Gemma is the default chat model and moondream is dropped
+  // (Gemma sees images itself). The lite build is the unchanged 4 GB stack.
+  const GEMMA_PROFILE =
+    (process.env.CORACLE_PROFILE || "lite").toLowerCase() === "gemma";
   const AMADOCS_MODEL_CATALOG = [
-    { id: "granite4.1:3b", name: "Granite 4 (small)", license: "Apache-2.0", sizeGB: 2.1, desc: "IBM · tuned to answer from your documents, not guess · the default", default: true },
+    // Gemma 4 multimodal: one model for chat, summaries AND images. ~8 GB VRAM.
+    ...(GEMMA_PROFILE
+      ? [{ id: "gemma4:e2b-it-qat", name: "Gemma 4 (multimodal)", license: "Apache-2.0", sizeGB: 4.3, desc: "Google · one model for chat, summaries & images · needs ~8 GB VRAM · the default", default: true }]
+      : []),
+    { id: "granite4.1:3b", name: "Granite 4 (small)", license: "Apache-2.0", sizeGB: 2.1, desc: "IBM · tuned to answer from your documents, not guess · the default", default: !GEMMA_PROFILE },
     { id: "phi4-mini", name: "Phi-4 mini", license: "MIT", sizeGB: 2.5, desc: "Sharp all-rounder · Microsoft" },
     { id: "phi3.5", name: "Phi-3.5", license: "MIT", sizeGB: 2.2, desc: "Older balanced all-rounder · Microsoft" },
     { id: "qwen3:1.7b", name: "Qwen 3 (small)", license: "Apache-2.0", sizeGB: 1.4, desc: "Light & fast · great on modest laptops" },
@@ -2146,8 +2156,11 @@ function workspaceEndpoints(app) {
     { id: "mistral", name: "Mistral", license: "Apache-2.0", sizeGB: 4.1, desc: "Larger · best on a powerful computer" },
     // type:"vision" — not a chat model. It lets AMAdocs "see" images so photos,
     // whiteboards, receipts and screenshots become searchable. The UI offers it
-    // to download but never lists it as a chat model to switch to.
-    { id: "moondream", name: "Image understanding", license: "Apache-2.0", sizeGB: 1.7, desc: "Lets AMAdocs read photos & scans · makes images searchable", type: "vision" },
+    // to download but never lists it as a chat model to switch to. Dropped in
+    // the gemma build, where Gemma 4 handles vision itself.
+    ...(GEMMA_PROFILE
+      ? []
+      : [{ id: "moondream", name: "Image understanding", license: "Apache-2.0", sizeGB: 1.7, desc: "Lets AMAdocs read photos & scans · makes images searchable", type: "vision" }]),
   ];
 
   // AMAdocs: the download catalog (permissive models the app offers to fetch).
