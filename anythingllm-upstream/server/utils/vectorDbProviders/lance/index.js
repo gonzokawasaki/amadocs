@@ -475,7 +475,15 @@ class LanceDb extends VectorDatabase {
       return true;
     }
 
-    await client.createTable(namespace, data);
+    // AMAdocs: `pages` (asPDF per-page char ranges) is a disk-only doc-JSON field
+    // that leaks into the row spread. On ADD Lance silently drops keys the table
+    // schema lacks, but on CREATE an empty `pages: []` makes Arrow inference throw
+    // ("Cannot infer list vector from empty array") and the table can never be
+    // born — every doc then "fails to vectorize" on a fresh workspace. Strip it
+    // from the CREATING batch only (fresh tables get no pages column, matching
+    // the design + existing tables' behaviour; adds stay byte-identical).
+    const creatable = data.map(({ pages: _pages, ...row }) => row);
+    await client.createTable(namespace, creatable);
     return true;
   }
 

@@ -39,7 +39,24 @@ on top. Files are never modified; all AI data lives in a separate local database
   reads what the desktop indexer already extracted.
 - **Responsible by design.** A safe, serial indexing queue with cool-downs, durable resume,
   and a hard global STOP button. It will never lock up your machine.
-- **Zero cloud.** GPU recommended; everything runs on-device.
+- **Two modes.** **Private local** (the default): zero cloud, GPU recommended, everything
+  on-device. **Cloud** (experimental): file *reading* stays local, but embeddings, summaries,
+  chat and image analysis run on frontier models over one [OpenRouter](https://openrouter.ai)
+  key — dramatically better search and vision quality, indexing in minutes, no GPU needed.
+
+## Cloud mode (experimental)
+
+```bash
+CORACLE_PROFILE=cloud OPENROUTER_API_KEY=sk-or-… ./Coracle-x86_64.AppImage   # or electron .
+```
+
+Defaults: chat `anthropic/claude-sonnet-4.6`, summaries + vision `google/gemini-2.5-flash`,
+embeddings `baai/bge-m3` — all overridable via the usual env prefs. Ollama is **not** required
+in this mode. Be aware of what it means: your documents' text and images are sent to OpenRouter
+(and its underlying model providers) for processing; the search index itself stays on your
+machine. Consider enabling zero-data-retention provider filtering in your OpenRouter account.
+Cloud and local embeddings are incompatible (different dimensions) — index into separate
+workspaces, or re-index when switching modes.
 
 ## Download
 

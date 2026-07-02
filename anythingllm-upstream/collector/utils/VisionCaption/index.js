@@ -18,15 +18,57 @@ class VisionCaption {
     ".tif",
     ".tiff",
   ]);
+  static CLOUD_DEFAULT_MODEL = "google/gemini-2.5-flash";
+  // Mime types for the cloud data-URI upload. Exotic types (bmp/tiff) are sent
+  // as-is; a model that rejects them just returns an error → best-effort null.
+  static MIME = {
+    ".png": "image/png",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".webp": "image/webp",
+    ".gif": "image/gif",
+    ".bmp": "image/bmp",
+    ".tif": "image/tiff",
+    ".tiff": "image/tiff",
+  };
 
   /**
    * @param {Object} options
-   * @param {string} options.model - The Ollama vision model tag (e.g. "moondream").
+   * @param {string} options.model - Vision model tag (Ollama tag, or an OpenRouter id in cloud mode).
    * @param {string} options.basePath - Override for the Ollama base URL.
    */
   constructor({ model = null, basePath = null } = {}) {
-    this.model = model || process.env.VISION_MODEL_PREF || "moondream";
+    this.cloud = VisionCaption.cloudInference();
+    if (this.cloud) {
+      // Callers pass the server's VISION_MODEL_PREF, which in cloud mode is already
+      // an OpenRouter id; a leftover local tag (no "/") is ignored.
+      this.model =
+        VisionCaption.pickCloudModel(model, process.env.VISION_MODEL_PREF) ||
+        VisionCaption.CLOUD_DEFAULT_MODEL;
+    } else {
+      this.model = model || process.env.VISION_MODEL_PREF || "moondream";
+    }
     this.basePath = VisionCaption.resolveOllamaBasePath(basePath);
+  }
+
+  /**
+   * AMAdocs (cloud profile): image analysis follows the engine-wide provider
+   * switch — when the engine runs on OpenRouter, captions come from a frontier
+   * vision model there (dramatically better on small/rotated/distant text than
+   * the local models). Local profiles are untouched.
+   * @returns {boolean}
+   */
+  static cloudInference() {
+    return (
+      (process.env.LLM_PROVIDER || "").toLowerCase() === "openrouter" &&
+      !!process.env.OPENROUTER_API_KEY
+    );
+  }
+
+  /** First candidate that looks like an OpenRouter id (contains a "/"), else null. */
+  static pickCloudModel(...candidates) {
+    for (const c of candidates) if (c && c.includes("/")) return c;
+    return null;
   }
 
   /**
@@ -94,17 +136,48 @@ class VisionCaption {
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       let res;
       try {
-        res = await fetch(`${this.basePath}/api/generate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: this.model,
-            prompt,
-            images: [imageB64],
-            stream: false,
-          }),
-          signal: controller.signal,
-        });
+        if (this.cloud) {
+          const mime =
+            VisionCaption.MIME[path.extname(filePath).toLowerCase()] ||
+            "image/png";
+          res = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+            },
+            body: JSON.stringify({
+              model: this.model,
+              messages: [
+                {
+                  role: "user",
+                  content: [
+                    { type: "text", text: prompt },
+                    {
+                      type: "image_url",
+                      image_url: { url: `data:${mime};base64,${imageB64}` },
+                    },
+                  ],
+                },
+              ],
+              max_tokens: 1024,
+            }),
+            signal: controller.signal,
+          });
+        } else {
+          res = await fetch(`${this.basePath}/api/generate`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              model: this.model,
+              prompt,
+              images: [imageB64],
+              stream: false,
+              think: false,
+            }),
+            signal: controller.signal,
+          });
+        }
       } finally {
         clearTimeout(timer);
       }
@@ -114,14 +187,19 @@ class VisionCaption {
         const detail = await res.text().catch(() => "");
         this.log(
           `Runtime returned ${res.status} for "${this.model}". ` +
-            `Is the model downloaded? Continuing without a caption.`,
+            (this.cloud
+              ? `Check the OpenRouter key/model. Continuing without a caption.`
+              : `Is the model downloaded? Continuing without a caption.`),
           detail.slice(0, 200)
         );
         return null;
       }
 
       const json = await res.json();
-      const caption = (json?.response || "").trim();
+      const caption = (
+        (this.cloud ? json?.choices?.[0]?.message?.content : json?.response) ||
+        ""
+      ).trim();
       this.log(
         `Captioned ${documentTitle}`,
         {

@@ -147,10 +147,47 @@ const API_TOKEN = crypto.randomBytes(32).toString("hex");
 const MODEL_PROFILES = {
   lite: { chat: "granite4.1:3b", vision: "moondream" },
   gemma: { chat: "gemma4:e2b-it-qat", vision: "gemma4:e2b-it-qat" },
+  // "cloud" = frontier inference over ONE OpenRouter key (OPENROUTER_API_KEY).
+  // Extraction stays local (GNOME/LocalSearch + OCR); embeddings, summaries, chat
+  // and image captions go to OpenRouter. Model ids are OpenRouter catalog ids,
+  // overridable via the usual env prefs. Ollama is NOT required in this profile.
+  cloud: {
+    chat: "anthropic/claude-sonnet-4.6",
+    summary: "google/gemini-2.5-flash",
+    vision: "google/gemini-2.5-flash",
+    embed: "baai/bge-m3",
+  },
 };
 function resolveProfileName() {
   const name = (process.env.CORACLE_PROFILE || "lite").toLowerCase();
   return MODEL_PROFILES[name] ? name : "lite";
+}
+
+// Per-profile engine env, shared by the packaged and dev launch paths. The cloud
+// profile swaps the engine-wide provider + embedder to OpenRouter — the custom
+// summariser/captioner modules key off the same LLM_PROVIDER switch — while the
+// local profiles keep Ollama. Spread this AFTER any local defaults so cloud can
+// override LLM_PROVIDER / EMBEDDING_ENGINE. OPENROUTER_API_KEY itself rides in
+// from the parent environment (startProc spreads process.env).
+function profileEngineEnv() {
+  const profileName = resolveProfileName();
+  const models = MODEL_PROFILES[profileName];
+  if (profileName === "cloud") {
+    return {
+      CORACLE_PROFILE: profileName,
+      LLM_PROVIDER: "openrouter",
+      OPENROUTER_MODEL_PREF: models.chat,
+      SUMMARY_MODEL_PREF: models.summary,
+      VISION_MODEL_PREF: models.vision,
+      EMBEDDING_ENGINE: "openrouter",
+      EMBEDDING_MODEL_PREF: models.embed,
+    };
+  }
+  return {
+    CORACLE_PROFILE: profileName,
+    OLLAMA_MODEL_PREF: models.chat,
+    VISION_MODEL_PREF: models.vision,
+  };
 }
 
 // Full engine config for the packaged app. In dev we rely on the engine's
@@ -159,8 +196,6 @@ function resolveProfileName() {
 // "is this dev?" path branches resolve to STORAGE_DIR (not repo paths).
 function packagedEngineEnv() {
   const secrets = installSecrets();
-  const profileName = resolveProfileName();
-  const models = MODEL_PROFILES[profileName];
   return {
     AMADOCS_API_TOKEN: API_TOKEN,
     NODE_ENV: "production",
@@ -171,8 +206,6 @@ function packagedEngineEnv() {
     VECTOR_DB: "lancedb",
     LLM_PROVIDER: "ollama",
     OLLAMA_BASE_PATH: "http://127.0.0.1:11434",
-    CORACLE_PROFILE: profileName, // normalised; the server catalog reads this
-    OLLAMA_MODEL_PREF: models.chat,
     OLLAMA_MODEL_TOKEN_LIMIT: "4096",
     OLLAMA_RESPONSE_TIMEOUT: "7200000",
     EMBEDDING_ENGINE: "native",
@@ -182,11 +215,13 @@ function packagedEngineEnv() {
     STT_PROVIDER: "native",
     DISABLE_TELEMETRY: "true",
     // AMAdocs additions
-    VISION_MODEL_PREF: models.vision,
     DOC_SUMMARY_ENABLED: "true", // catalog every file with a bounded summary at ingest (librarian default); full-text Deep search is opt-in per file
     TARGET_OCR_LANG: "eng",
     OCR_PDF_DPI: "150",
     OCR_MIN_CONFIDENCE: "50",
+    // Profile-driven model/provider selection (lite | gemma | cloud) — last so the
+    // cloud profile overrides the LLM_PROVIDER / EMBEDDING_ENGINE defaults above.
+    ...profileEngineEnv(),
   };
 }
 
@@ -197,11 +232,9 @@ function startProc(name, cmd, args, opts = {}) {
     OLLAMA_MODELS,
     OLLAMA_HOST: "127.0.0.1:11434",
     OLLAMA_KEEP_ALIVE: "30m", // keep model warm -> avoid repeated cold starts
-    ...(isPackaged ? packagedEngineEnv() : (() => {
-      const pn = resolveProfileName();
-      const pm = MODEL_PROFILES[pn];
-      return { NODE_ENV: "development", CORACLE_PROFILE: pn, OLLAMA_MODEL_PREF: pm.chat, VISION_MODEL_PREF: pm.vision };
-    })()),
+    ...(isPackaged
+      ? packagedEngineEnv()
+      : { NODE_ENV: "development", ...profileEngineEnv() }),
     ...(opts.env || {}),
   };
   const p = spawn(cmd, args, { env, cwd: opts.cwd, stdio: "pipe" });
@@ -233,10 +266,23 @@ async function waitFor(url, label, tries = 120) {
 
 async function bootEngine() {
   if (isPackaged) ensurePackagedStorage();
+  // Cloud profile: all inference (chat, embeddings, summaries, vision) runs on
+  // OpenRouter — Ollama isn't needed, but the key is. Fail loud before boot
+  // rather than letting the engine 500 on the first model call.
+  const isCloud = resolveProfileName() === "cloud";
+  if (isCloud && !process.env.OPENROUTER_API_KEY) {
+    throw new Error(
+      "Cloud profile needs an OpenRouter API key.\n\n" +
+        "Coracle was launched with CORACLE_PROFILE=cloud, which sends AI work\n" +
+        "(embeddings, summaries, chat, image analysis) to OpenRouter, but no\n" +
+        "OPENROUTER_API_KEY is set. Get a key at https://openrouter.ai/keys,\n" +
+        "then relaunch with OPENROUTER_API_KEY=<your key>."
+    );
+  }
   // If a dev stack is already running, reuse it.
   const serverUp = await ping("http://127.0.0.1:3001/api/ping");
   if (!serverUp) {
-    if (!(await ping("http://127.0.0.1:11434/api/version"))) {
+    if (!isCloud && !(await ping("http://127.0.0.1:11434/api/version"))) {
       if (!OLLAMA_BIN) {
         throw new Error(
           "Ollama isn't installed.\n\n" +

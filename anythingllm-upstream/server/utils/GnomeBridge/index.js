@@ -56,6 +56,17 @@ const clampPace = (n) =>
 // Effective per-doc rest in ms. Precedence: the user's saved slider value > an explicit
 // GNOME_SYNC_COOLDOWN_MS launch override (back-compat) > the conservative default.
 function getPaceMs() {
+  // Cloud profile: the pace slider is a THERMAL knob — it rests the GPU/chassis
+  // between local model calls. With inference on OpenRouter there is nothing to
+  // cool, so the saved thermal pace would just stall indexing (e.g. 55s/doc →
+  // hours). Use a token inter-file rest instead (CLOUD_PACE_MS to override).
+  if (
+    (process.env.LLM_PROVIDER || "").toLowerCase() === "openrouter" &&
+    !!process.env.OPENROUTER_API_KEY
+  ) {
+    const cloudPace = clampPace(Number(process.env.CLOUD_PACE_MS));
+    return cloudPace !== null ? cloudPace : 1000;
+  }
   try {
     const saved = JSON.parse(fs.readFileSync(settingsFile, "utf8"))?.summaryCooldownMs;
     const c = clampPace(Number(saved));
@@ -807,8 +818,19 @@ async function runSync(opts = {}) {
           },
         });
       } else {
-        await Document.addDocuments(currWorkspace, docpaths, userId);
+        // Confirm ONLY the docpaths that actually embedded. addDocuments reports
+        // per-doc failures (failedToEmbed = titles); a failed doc must stay
+        // pendingEmbed so the next sync's resume path retries it — otherwise a
+        // remote-embedder outage (cloud profile) silently "completes" the drain
+        // with an empty vector table.
+        const { embedded = [] } = await Document.addDocuments(
+          currWorkspace,
+          docpaths,
+          userId
+        );
+        const ok = new Set(embedded);
         for (const dp of docpaths) {
+          if (!ok.has(dp)) continue;
           const e = pmap.get(dp);
           if (e) nextFiles[e.url] = { docpath: dp, mtime: e.mtime, size: e.size, contentHash: e.contentHash };
         }

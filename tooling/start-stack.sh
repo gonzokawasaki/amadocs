@@ -20,8 +20,19 @@ export OLLAMA_BASE_PATH=http://127.0.0.1:11434
 # AMAdocs: model build profile. "lite" (default) = granite chat + moondream
 # vision (~4 GB GPU). "gemma" = both consolidated onto one Apache-2.0 Gemma 4
 # multimodal model (~8 GB VRAM): CORACLE_PROFILE=gemma bash tooling/start-stack.sh
+# "cloud" = frontier inference over one OpenRouter key (extraction stays local):
+#   CORACLE_PROFILE=cloud OPENROUTER_API_KEY=sk-or-… bash tooling/start-stack.sh
+# ⚠️ cloud embeddings are 1024-dim (bge-m3) — use a FRESH workspace slug; they
+# cannot mix into existing 384-dim MiniLM LanceDB tables.
 export CORACLE_PROFILE="${CORACLE_PROFILE:-lite}"
-if [ "$CORACLE_PROFILE" = "gemma" ]; then
+if [ "$CORACLE_PROFILE" = "cloud" ]; then
+  export LLM_PROVIDER=openrouter
+  export OPENROUTER_MODEL_PREF="${OPENROUTER_MODEL_PREF:-anthropic/claude-sonnet-4.6}"
+  export SUMMARY_MODEL_PREF="${SUMMARY_MODEL_PREF:-google/gemini-2.5-flash}"
+  export VISION_MODEL_PREF="${VISION_MODEL_PREF:-google/gemini-2.5-flash}"
+  export EMBEDDING_ENGINE=openrouter
+  export EMBEDDING_MODEL_PREF="${EMBEDDING_MODEL_PREF:-baai/bge-m3}"
+elif [ "$CORACLE_PROFILE" = "gemma" ]; then
   export OLLAMA_MODEL_PREF=gemma4:e2b-it-qat
   export VISION_MODEL_PREF=gemma4:e2b-it-qat
 else

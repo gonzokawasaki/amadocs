@@ -146,7 +146,12 @@ async function buildAmadocsStatus() {
   }
 
   // ---- model / engine ----
-  const chatModel = process.env.OLLAMA_MODEL_PREF || "(system default)";
+  // Cloud profile: chat runs on OpenRouter, so the chat row must read the
+  // OpenRouter pref — OLLAMA_MODEL_PREF is the local profiles' knob.
+  const chatModel =
+    (process.env.LLM_PROVIDER || "").toLowerCase() === "openrouter"
+      ? process.env.OPENROUTER_MODEL_PREF || "openrouter/auto"
+      : process.env.OLLAMA_MODEL_PREF || "(system default)";
   const summaryModel = process.env.SUMMARY_MODEL_PREF || chatModel;
   const visionModel = process.env.VISION_MODEL_PREF || "moondream";
   const embedder = process.env.EMBEDDING_MODEL_PREF || "Xenova/all-MiniLM-L6-v2";
@@ -166,14 +171,17 @@ async function buildAmadocsStatus() {
     { role: "Reads your files", tool: "GNOME LocalSearch" },
     { role: "Search", tool: embedder },
   ];
-  if (summaryModel === chatModel) {
+  if (summaryModel === chatModel && visionModel === chatModel) {
+    stack.push({ role: "Chat, summaries & vision", tool: chatModel, via: llmProvider });
+  } else if (summaryModel === chatModel) {
     stack.push({ role: "Chat & summaries", tool: chatModel, via: llmProvider });
+    stack.push({ role: "Images", tool: visionModel, via: llmProvider });
   } else {
     stack.push({ role: "Chat", tool: chatModel, via: llmProvider });
     stack.push({ role: "Summaries", tool: summaryModel, via: llmProvider });
+    stack.push({ role: "Images", tool: visionModel, via: llmProvider });
   }
   stack.push(
-    { role: "Images", tool: visionModel, via: llmProvider },
     { role: "Scanned text (OCR)", tool: "Tesseract" },
     { role: "Storage", tool: vectorDb },
     {

@@ -11,19 +11,52 @@ class DocSummary {
   static MAX_CHARS = 8000; // ~2000 tokens of input
   static MAX_PAGES = 5;
   static NUM_PREDICT = 300; // ~120-word paragraph + a trailing "Keywords:" line
+  static CLOUD_DEFAULT_MODEL = "google/gemini-2.5-flash";
 
   /**
    * @param {Object} options
-   * @param {string} options.model - Ollama chat model tag (e.g. the workspace chatModel).
+   * @param {string} options.model - Chat model tag (Ollama tag, or an OpenRouter id in cloud mode).
    * @param {string} options.basePath - Override for the Ollama base URL.
    */
   constructor({ model = null, basePath = null } = {}) {
-    this.model =
-      model ||
-      process.env.SUMMARY_MODEL_PREF ||
-      process.env.OLLAMA_MODEL_PREF ||
-      "phi3.5";
+    this.cloud = DocSummary.cloudInference();
+    if (this.cloud) {
+      // Callers pass local tags (workspace.chatModel / OLLAMA_MODEL_PREF fallbacks)
+      // that don't exist on OpenRouter. OpenRouter ids always contain a "/", so
+      // ignore anything else and fall through to the cloud prefs.
+      this.model =
+        DocSummary.pickCloudModel(
+          model,
+          process.env.SUMMARY_MODEL_PREF,
+          process.env.OPENROUTER_MODEL_PREF
+        ) || DocSummary.CLOUD_DEFAULT_MODEL;
+    } else {
+      this.model =
+        model ||
+        process.env.SUMMARY_MODEL_PREF ||
+        process.env.OLLAMA_MODEL_PREF ||
+        "phi3.5";
+    }
     this.basePath = DocSummary.resolveOllamaBasePath(basePath);
+  }
+
+  /**
+   * AMAdocs (cloud profile): summaries follow the engine-wide provider switch —
+   * when the engine runs on OpenRouter, catalog cards are generated there too
+   * (one key, frontier quality). Local profiles are untouched.
+   * @returns {boolean}
+   */
+  static cloudInference() {
+    return (
+      (process.env.LLM_PROVIDER || "").toLowerCase() === "openrouter" &&
+      !!process.env.OPENROUTER_API_KEY
+    );
+  }
+
+  /** First candidate that looks like an OpenRouter id (contains a "/"), else null. */
+  static pickCloudModel(...candidates) {
+    for (const c of candidates) if (c && c.includes("/")) return c;
+    return null;
   }
 
   static resolveOllamaBasePath(override = null) {
@@ -140,17 +173,33 @@ class DocSummary {
       const timer = setTimeout(() => controller.abort(), timeoutMs);
       let res;
       try {
-        res = await fetch(`${this.basePath}/api/generate`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            model: this.model,
-            prompt,
-            stream: false,
-            options: { num_predict: DocSummary.NUM_PREDICT, temperature: 0.2 },
-          }),
-          signal: controller.signal,
-        });
+        res = this.cloud
+          ? await fetch("https://openrouter.ai/api/v1/chat/completions", {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${process.env.OPENROUTER_API_KEY}`,
+              },
+              body: JSON.stringify({
+                model: this.model,
+                messages: [{ role: "user", content: prompt }],
+                max_tokens: DocSummary.NUM_PREDICT,
+                temperature: 0.2,
+              }),
+              signal: controller.signal,
+            })
+          : await fetch(`${this.basePath}/api/generate`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                model: this.model,
+                prompt,
+                stream: false,
+                think: false,
+                options: { num_predict: DocSummary.NUM_PREDICT, temperature: 0.2 },
+              }),
+              signal: controller.signal,
+            });
       } finally {
         clearTimeout(timer);
       }
@@ -159,14 +208,19 @@ class DocSummary {
         const detail = await res.text().catch(() => "");
         this.log(
           `Runtime returned ${res.status} for "${this.model}". ` +
-            `Is the model downloaded? Continuing without a summary.`,
+            (this.cloud
+              ? `Check the OpenRouter key/model. Continuing without a summary.`
+              : `Is the model downloaded? Continuing without a summary.`),
           detail.slice(0, 200)
         );
         return null;
       }
 
       const json = await res.json();
-      const summary = DocSummary.finalize(json?.response || "");
+      const raw = this.cloud
+        ? json?.choices?.[0]?.message?.content
+        : json?.response;
+      const summary = DocSummary.finalize(raw || "");
       this.log(`Summarised "${title || "untitled"}"`, {
         chars: summary.length,
         executionTime: `${((Date.now() - startTime) / 1000).toFixed(2)}s`,
