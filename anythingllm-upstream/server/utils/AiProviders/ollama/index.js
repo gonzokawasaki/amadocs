@@ -273,6 +273,7 @@ class OllamaAILLM {
         .chat({
           model: this.model,
           stream: false,
+          think: false,
           messages,
           keep_alive: this.keepAlive,
           options: {
@@ -329,6 +330,7 @@ class OllamaAILLM {
       func: this.client.chat({
         model: this.model,
         stream: true,
+        think: false,
         messages,
         keep_alive: this.keepAlive,
         options: {

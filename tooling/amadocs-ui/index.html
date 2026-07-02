@@ -321,6 +321,12 @@
       color:var(--text-faint); font-weight:500; text-align:left; white-space:nowrap;
     }
     .fl-th.r { text-align:right; }
+    /* sortable column headers (list view) */
+    .fl-th[data-sort] { cursor:pointer; user-select:none; }
+    .fl-th[data-sort]:hover { color:var(--text-muted); }
+    .fl-th.sorted { color:var(--text); }
+    .fl-sort-arrow { display:inline-block; width:0.7em; margin-left:0.15em; font-size:0.9em; opacity:0; }
+    .fl-th.sorted .fl-sort-arrow { opacity:1; }
 
     .fl-col-st { width:2rem; }
     .fl-col-ty { width:3.71rem; }
@@ -863,12 +869,12 @@
           <table class="file-list">
             <thead>
               <tr>
-                <th class="fl-th fl-col-st"></th>
-                <th class="fl-th fl-col-ty">type</th>
-                <th class="fl-th fl-col-nm">name</th>
-                <th class="fl-th fl-col-sz r">size</th>
-                <th class="fl-th fl-col-dt r">modified</th>
-                <th class="fl-th fl-col-ai r">ai</th>
+                <th class="fl-th fl-col-st" data-sort="status" title="Sort by index state"><span class="fl-sort-arrow"></span></th>
+                <th class="fl-th fl-col-ty" data-sort="type">type<span class="fl-sort-arrow"></span></th>
+                <th class="fl-th fl-col-nm" data-sort="name">name<span class="fl-sort-arrow"></span></th>
+                <th class="fl-th fl-col-sz r" data-sort="size">size<span class="fl-sort-arrow"></span></th>
+                <th class="fl-th fl-col-dt r" data-sort="modified">modified<span class="fl-sort-arrow"></span></th>
+                <th class="fl-th fl-col-ai r" data-sort="ai">ai<span class="fl-sort-arrow"></span></th>
               </tr>
             </thead>
             <tbody>
@@ -2241,7 +2247,8 @@ document.querySelectorAll('#treeFiles .tree-row').forEach(row => {
    stack on :8080) this no-ops and the static prototype markup is left in place. */
 
 // Selection state. `view` is also read by showFile()/showFolder() above.
-const view = { folderPath:null, folderName:null, filePath:null, fileName:null };
+const view = { folderPath:null, folderName:null, filePath:null, fileName:null,
+               sortKey:"name", sortDir:1, curEntries:[], curDir:null };
 const entryIndex = new Map();           // path → {name,isDir,size,mtime} for the open folder
 
 /* ─── Top-bar navigation history (Home / Back / Forward) ───────────────────
@@ -2405,8 +2412,11 @@ async function selectFolder(full, name){
   if(cnt) cnt.textContent = `${fileCount} file${fileCount===1?"":"s"}${dirCount?` · ${dirCount} folder${dirCount===1?"":"s"}`:""} · ${indexedCount} indexed`;
   const sc = $(".sort-strip__counts");
   if(sc) sc.innerHTML = `<span style="color:var(--accent)">●</span> ${indexedCount} indexed &nbsp;·&nbsp; <span style="color:var(--text-faint)">○</span> ${pendingCount} pending`;
-  renderFolderList(entries, full);
-  renderFolderGrid(entries, full);
+  view.curEntries = entries; view.curDir = full;     // cache for header-click re-sort (no disk re-read)
+  const sorted = sortEntries(entries, full);
+  renderFolderList(sorted, full);
+  renderFolderGrid(sorted, full);
+  updateSortHeaders();
   $("#replFolder").innerHTML =
     `<div class="repl-folder-intro">Scoped to <strong style="color:var(--text)">${esc(name)}/</strong> · ${fileCount} files · ${indexedCount} indexed.</div>
      <div id="replFolderConv"></div>`;
@@ -2418,6 +2428,65 @@ function rowClickWire(el){
     el.addEventListener("click", () => showFilePreview(full, nm, entryIndex.get(full) || {}));
     el.addEventListener("contextmenu", e => openCtx(e, el.dataset.path || nm));
   }
+}
+/* ---- list-view column sorting (clickable headers) ----
+   Folders always group first; files sort by the chosen column. A stable name
+   tiebreak keeps repeated sorts from shuffling equal rows. Sorting works off the
+   cached entries (view.curEntries) so a header click never re-reads the disk. */
+function aiRank(full, name){
+  const ai = aiStateFor(full, name);
+  if(ai.chipCls === "ai-deep")    return 3;
+  if(ai.chipCls === "ai-catalog") return 2;
+  if(ai.chipCls === "ai-analyse") return 1;
+  return 0; // pending
+}
+function sortEntries(entries, dir){
+  const key = view.sortKey, mul = view.sortDir;
+  const val = (e) => {
+    const full = joinPath(dir, e.name);
+    switch(key){
+      case "type":     return extOf(e.name);
+      case "size":     return e.isDir ? -1 : (e.size || 0);
+      case "modified": return e.mtime || 0;
+      case "status":   return aiStateFor(full, e.name).dotOn ? 1 : 0;
+      case "ai":       return aiRank(full, e.name);
+      default:         return String(e.name).toLowerCase(); // name
+    }
+  };
+  return entries.slice().sort((a, b) => {
+    if(a.isDir !== b.isDir) return a.isDir ? -1 : 1; // folders first, both directions
+    const va = val(a), vb = val(b);
+    let c = (typeof va === "string") ? va.localeCompare(vb) : (va - vb);
+    c *= mul;
+    if(c === 0) c = String(a.name).toLowerCase().localeCompare(String(b.name).toLowerCase());
+    return c;
+  });
+}
+function applySort(){
+  if(!view.curDir) return;
+  const sorted = sortEntries(view.curEntries, view.curDir);
+  renderFolderList(sorted, view.curDir);
+  renderFolderGrid(sorted, view.curDir);
+}
+function updateSortHeaders(){
+  document.querySelectorAll("#listView .fl-th[data-sort]").forEach(th => {
+    const on = th.dataset.sort === view.sortKey;
+    th.classList.toggle("sorted", on);
+    const ar = th.querySelector(".fl-sort-arrow");
+    if(ar) ar.textContent = on ? (view.sortDir > 0 ? "▲" : "▼") : "";
+  });
+}
+function wireSortHeaders(){
+  document.querySelectorAll("#listView .fl-th[data-sort]").forEach(th => {
+    th.addEventListener("click", () => {
+      const k = th.dataset.sort;
+      if(view.sortKey === k) view.sortDir = -view.sortDir;   // toggle direction
+      else { view.sortKey = k; view.sortDir = 1; }            // new column, ascending
+      updateSortHeaders();
+      applySort();
+    });
+  });
+  updateSortHeaders();
 }
 function renderFolderList(entries, dir){
   const tb = $("#listView tbody"); if(!tb) return;
@@ -2523,6 +2592,7 @@ async function initFileTree(){
   if(!desktop || !desktop.readDir || !desktop.homePath) return;   // browser dev stack: keep the static prototype
   const treeEl = $("#tree");
   if(!treeEl) return;
+  wireSortHeaders();   // list-view column headers are static → wire their click-to-sort once
   let home;
   try { home = await desktop.homePath(); } catch(_){ return; }
   if(!home){ return; }
