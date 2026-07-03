@@ -273,7 +273,7 @@ async function bootEngine() {
   if (isCloud && !process.env.OPENROUTER_API_KEY) {
     throw new Error(
       "Cloud profile needs an OpenRouter API key.\n\n" +
-        "Coracle was launched with CORACLE_PROFILE=cloud, which sends AI work\n" +
+        "AMAdocs was launched with CORACLE_PROFILE=cloud, which sends AI work\n" +
         "(embeddings, summaries, chat, image analysis) to OpenRouter, but no\n" +
         "OPENROUTER_API_KEY is set. Get a key at https://openrouter.ai/keys,\n" +
         "then relaunch with OPENROUTER_API_KEY=<your key>."
@@ -286,8 +286,8 @@ async function bootEngine() {
       if (!OLLAMA_BIN) {
         throw new Error(
           "Ollama isn't installed.\n\n" +
-            "Coracle runs its AI models locally with Ollama, but couldn't find it.\n" +
-            "Install Ollama, then relaunch Coracle:\n\n" +
+            "AMAdocs runs its AI models locally with Ollama, but couldn't find it.\n" +
+            "Install Ollama, then relaunch AMAdocs:\n\n" +
             "  Arch / Manjaro:  sudo pacman -S ollama\n" +
             "  Other Linux:     curl -fsSL https://ollama.com/install.sh | sh\n" +
             "  Or download from https://ollama.com/download"
@@ -446,8 +446,7 @@ function createWindow() {
     height: 760,
     minWidth: 720,
     minHeight: 520,
-    title: "Coracle",
-    icon: path.join(__dirname, "build", "icon.png"),
+    title: "AMAdocs",
     backgroundColor: "#f6f7fb",
     webPreferences: {
       contextIsolation: true,
@@ -473,7 +472,7 @@ app.whenReady().then(async () => {
       "data:text/html," +
         encodeURIComponent(
           `<body style="font-family:sans-serif;padding:40px;color:#1f2937;background:#f6f7fb">
-           <h2 style="color:#b91c1c">Coracle couldn't start its engine</h2>
+           <h2 style="color:#b91c1c">AMAdocs couldn't start its engine</h2>
            <pre style="white-space:pre-wrap;font-size:14px;line-height:1.5">${e.message}</pre></body>`
         )
     );

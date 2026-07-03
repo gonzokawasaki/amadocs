@@ -1,10 +1,10 @@
 {
   "name": "amadocs-desktop",
-  "productName": "Coracle",
+  "productName": "AMAdocs",
   "version": "0.1.0",
   "description": "Ask your documents anything — private, local AI for your files.",
   "main": "main.js",
-  "author": "Coracle",
+  "author": "AMAdocs",
   "homepage": "https://github.com/gonzokawasaki/coracle",
   "license": "MIT",
   "scripts": {
@@ -18,8 +18,7 @@
   },
   "build": {
     "appId": "com.amadocs.app",
-    "productName": "Coracle",
-    "icon": "build/icon.png",
+    "productName": "AMAdocs",
     "directories": {
       "output": "dist"
     },
@@ -28,7 +27,6 @@
       "main.js",
       "preload.js",
       "loading.html",
-      "coracle-logo.png",
       "ui/**/*"
     ],
     "extraResources": [
@@ -80,8 +78,8 @@
         "pacman"
       ],
       "category": "Office",
-      "maintainer": "Coracle",
-      "artifactName": "Coracle-${version}-${arch}.${ext}"
+      "maintainer": "AMAdocs",
+      "artifactName": "AMAdocs-${version}-${arch}.${ext}"
     }
   }
 }

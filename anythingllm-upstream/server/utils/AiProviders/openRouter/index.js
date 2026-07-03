@@ -250,7 +250,7 @@ class OpenRouterLLM {
           model: this.model,
           messages,
           temperature,
-          // Coracle: hard answer-length cap — search-tool answers, not essays.
+          // AMAdocs: hard answer-length cap — search-tool answers, not essays.
           // Mirrors the Ollama provider's num_predict; the UI's capAnswer trims
           // to ~120 words on top of this.
           max_tokens: 300,
@@ -302,7 +302,7 @@ class OpenRouterLLM {
         stream: true,
         messages,
         temperature,
-        // Coracle: hard answer-length cap — search-tool answers, not essays.
+        // AMAdocs: hard answer-length cap — search-tool answers, not essays.
         // Mirrors the Ollama provider's num_predict; the UI's capAnswer trims
         // to ~120 words on top of this.
         max_tokens: 300,
