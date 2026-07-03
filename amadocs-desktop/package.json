@@ -5,7 +5,7 @@
   "description": "Ask your documents anything — private, local AI for your files.",
   "main": "main.js",
   "author": "AMAdocs",
-  "homepage": "https://github.com/gonzokawasaki/coracle",
+  "homepage": "https://github.com/gonzokawasaki/amadocs",
   "license": "MIT",
   "scripts": {
     "start": "electron .",
