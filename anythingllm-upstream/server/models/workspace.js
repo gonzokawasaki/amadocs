@@ -193,7 +193,16 @@ const Workspace = {
    */
   new: async function (name = null, creatorId = null, additionalFields = {}) {
     if (!name) return { workspace: null, message: "name cannot be null" };
-    var slug = this.slugify(name, { lower: true });
+    // AMAdocs: allow callers to request an EXACT slug (additionalFields.slug).
+    // The library workspace's slug is resolved server-side from the active mode
+    // (see /workspace/ensure-library); deriving it from the display name here
+    // would silently create a second, differently-slugged workspace. slug is not
+    // in `writable`, so it is consumed here, never spread into the row below.
+    const requestedSlug = additionalFields.slug
+      ? this.slugify(String(additionalFields.slug), { lower: true })
+      : null;
+    delete additionalFields.slug;
+    var slug = requestedSlug || this.slugify(name, { lower: true });
     slug = slug || uuidv4();
 
     const existingBySlug = await this.get({ slug });
@@ -214,7 +223,12 @@ const Workspace = {
       const workspace = await prisma.workspaces.create({
         data: {
           name: this.validations.name(name),
-          chatMode: "automatic",
+          // AMAdocs: "chat", not upstream's "automatic". With a native-tool-calling
+          // provider (OpenRouter in cloud mode), "automatic" makes grepAgents route
+          // EVERY message into the agent loop — AMAdocs is a search tool, agents are
+          // strictly @agent opt-in. The app's own library workspace is further pinned
+          // to "query" (docs-only) by the UI on every boot.
+          chatMode: "chat",
           ...this.validateFields(additionalFields),
           slug,
         },

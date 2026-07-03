@@ -68,6 +68,23 @@ function amadocsStorageRoot() {
     : path.resolve(process.env.STORAGE_DIR);
 }
 
+// AMAdocs: single source of truth for the active mode + the library slug it drives.
+// Cloud (bge-m3, 1024-dim) and local (MiniLM, 384-dim) vectors cannot share a LanceDB
+// table, so each mode gets its OWN library workspace; the cloud fallback slug is
+// deliberately NOT "amadocs-library" — pointing cloud queries at the local table
+// dimension-errors every search.
+function resolveModeAndSlug() {
+  const mode =
+    (process.env.LLM_PROVIDER || "").toLowerCase() === "openrouter"
+      ? "cloud"
+      : "local";
+  const librarySlug =
+    mode === "cloud"
+      ? process.env.CLOUD_LIBRARY_SLUG || "amadocs-cloud-library"
+      : "amadocs-library";
+  return { mode, librarySlug };
+}
+
 // AMAdocs: best-effort OpenRouter usage for Cloud mode. The desktop-thermal "pace"
 // knob is meaningless when inference is remote; instead the Homepage shows what cloud
 // mode actually costs. OpenRouter's /key endpoint reports this API key's spend + its
@@ -148,14 +165,8 @@ async function buildAmadocsStatus() {
   }
   // Resolve the active mode + its library slug up front. Cloud (bge-m3) and local (MiniLM)
   // are separate, dimension-incompatible corpora, so the dashboard must count ONLY the
-  // library the current mode drives — never sum both. This is the single source of truth for
-  // mode/librarySlug (reused below where cloud usage is attached).
-  const mode =
-    (process.env.LLM_PROVIDER || "").toLowerCase() === "openrouter" ? "cloud" : "local";
-  const librarySlug =
-    mode === "cloud"
-      ? process.env.CLOUD_LIBRARY_SLUG || "amadocs-library"
-      : "amadocs-library";
+  // library the current mode drives — never sum both.
+  const { mode, librarySlug } = resolveModeAndSlug();
 
   const synced = [];
   const summaries = { total: 0, summarised: 0, queued: 0 }; // active-library AI-summary progress
@@ -2345,6 +2356,41 @@ function workspaceEndpoints(app) {
       } catch (e) {
         console.error("[amadocs-status] error:", e);
         response.status(500).json({ error: e.message });
+      }
+    }
+  );
+
+  // AMAdocs: idempotent "the library workspace exists and is sane" — called by the UI
+  // at boot instead of a find + create-by-name + update dance. Guarantees the EXACT
+  // slug the active mode drives (creating by display name would derive a different
+  // slug — e.g. "amadocs-cloud-library" vs slugify("AMAdocs Cloud Library") — and the
+  // status endpoint/GnomeBridge would then count a workspace the chat never uses) and
+  // pins the library to docs-only answering (chatMode "query") every boot.
+  app.post(
+    "/workspace/ensure-library",
+    [validatedRequest, flexUserRoleValid([ROLES.all])],
+    async (_request, response) => {
+      try {
+        const { mode, librarySlug } = resolveModeAndSlug();
+        let workspace = await Workspace.get({ slug: librarySlug });
+        if (!workspace) {
+          const name =
+            mode === "cloud" ? "AMAdocs Cloud Library" : "AMAdocs Library";
+          const created = await Workspace.new(name, null, { slug: librarySlug });
+          if (!created.workspace)
+            throw new Error(created.message || "library workspace create failed");
+          workspace = created.workspace;
+        }
+        if (workspace.chatMode !== "query") {
+          const { workspace: updated } = await Workspace.update(workspace.id, {
+            chatMode: "query",
+          });
+          if (updated) workspace = updated;
+        }
+        response.status(200).json({ ok: true, mode, librarySlug, workspace });
+      } catch (e) {
+        console.error("[ensure-library] error:", e);
+        response.status(500).json({ ok: false, error: e.message });
       }
     }
   );
