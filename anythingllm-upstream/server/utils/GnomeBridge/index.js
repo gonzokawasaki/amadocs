@@ -378,16 +378,29 @@ function writeDoc(slug, doc) {
 const summariesDisabled = () =>
   String(process.env.GNOME_SUMMARY_DISABLED || "") === "1";
 
+// A doc short enough that its own text can BE its breadth-search card (no separate summary
+// needed). ~1200 chars ≈ the length of a generated summary, so using the text verbatim for
+// anything up to this is honest; longer docs that fail to summarise stay uncarded.
+const SHORT_DOC_CARD_MAX = 1200;
+
 async function summariseDoc(text, { title = "", pages = null } = {}) {
   if (summariesDisabled()) return "";
+  const ownText = String(text || "").replace(/\s+/g, " ").trim();
   try {
     const DocSummary = require("../DocSummary");
     const summary = await new DocSummary().summarize(text, { title, pages });
-    return summary || "";
+    if (summary && summary.trim()) return summary;
   } catch (e) {
     console.error("[gnome-sync] summary:", e.message);
-    return "";
   }
+  // Consolidation (one ingest pass = one searchable state): DocSummary returns null for input
+  // under ~200 chars, so tiny stub files would be chunk-embedded (deep-searchable) yet absent
+  // from the breadth/summary table — the "indexed but not summarised" divergence that makes it
+  // ambiguous whether a doc is searchable. Such a doc's own text already IS its gist, so use it
+  // verbatim as the card. Bounded so a LONG doc whose summary genuinely failed is not dumped in
+  // full as a "summary" (it stays uncarded and is retried on a later pass).
+  if (ownText && ownText.length <= SHORT_DOC_CARD_MAX) return ownText;
+  return "";
 }
 
 // Build + write a doc for one url, returning its docpath (or null if no text). Async
@@ -1133,8 +1146,17 @@ function resummarize(slug, { onlyMissing = true } = {}) {
     if (!e || !e.docpath) continue; // only files actually embedded can be re-summarised
     total++;
     if (onlyMissing && docHasSummary(e.docpath)) continue;
-    if (!e.mtime) continue; // already stamped (a prior resummarize still pending) — leave it
-    state.files[url] = { ...e, mtime: "" }; // force computeDelta → "changed"
+    // Force computeDelta → "changed". Stamping mtime="" alone is NOT enough since the
+    // content-hash gate (added after resummarize) routes an mtime-moved-but-same-size file to
+    // "maybeChanged", hash-confirms it identical, and SKIPS it — silently defeating a
+    // re-summarise. Dropping the stored contentHash + size disarms that gate (maybeChanged only
+    // fires when both exist), so the file re-materializes and re-summarises as intended.
+    // "Already forced" = mtime blanked AND hash/size already dropped → a prior resummarize is
+    // still pending for this file; leave it. (A file stamped by the OLD code kept its hash, so
+    // it is NOT yet forced and must be re-stamped here.)
+    if (e.mtime === "" && e.contentHash === undefined && e.size === undefined) continue;
+    const { contentHash, size, ...rest } = e;
+    state.files[url] = { ...rest, mtime: "" };
     flipped++;
   }
   if (flipped > 0) saveState(slug, state);
