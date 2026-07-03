@@ -24,10 +24,11 @@ const SERVER = path.resolve(__dirname, "../anythingllm-upstream/server");
 if (!process.env.STORAGE_DIR)
   process.env.STORAGE_DIR = path.join(SERVER, "storage");
 
-const { NativeEmbedder } = require(path.join(
-  SERVER,
-  "utils/EmbeddingEngines/native"
-));
+// cloud profile: EMBEDDING_ENGINE=openrouter routes query vectors through bge-m3
+// (1024-dim) so the harness can score cloud-embedded tables (see CORACLE_PROFILE=cloud).
+const EMBED_CLOUD = process.env.EMBEDDING_ENGINE === "openrouter";
+const { NativeEmbedder } = require(path.join(SERVER, "utils/EmbeddingEngines/native"));
+const { OpenRouterEmbedder } = require(path.join(SERVER, "utils/EmbeddingEngines/openRouter"));
 const { LanceDb } = require(path.join(
   SERVER,
   "utils/vectorDbProviders/lance"
@@ -35,7 +36,7 @@ const { LanceDb } = require(path.join(
 
 const SLUG = process.env.SLUG || "amadocs-library";
 const FOLDER = "/STEM/";
-const DOCDIR = path.join(SERVER, "storage/documents/gnome-amadocs-library");
+const DOCDIR = process.env.DOCDIR || path.join(SERVER, "storage/documents/gnome-" + SLUG);
 const THRESH = Number(process.env.THRESH) || 0.25;
 const TOPN = Number(process.env.TOPN) || 25;
 const K_RRF = Number(process.env.K_RRF) || 60;
@@ -144,7 +145,7 @@ const distinct = (arr) => {
 };
 
 (async () => {
-  const embedder = new NativeEmbedder();
+  const embedder = EMBED_CLOUD ? new OpenRouterEmbedder() : new NativeEmbedder();
   const db = new LanceDb();
 
   // --- lexical corpus: title+summary per STEM doc (from on-disk doc JSON) ---

@@ -68,6 +68,44 @@ function amadocsStorageRoot() {
     : path.resolve(process.env.STORAGE_DIR);
 }
 
+// AMAdocs: best-effort OpenRouter usage for Cloud mode. The desktop-thermal "pace"
+// knob is meaningless when inference is remote; instead the Homepage shows what cloud
+// mode actually costs. OpenRouter's /key endpoint reports this API key's spend + its
+// (optional) spend limit — exactly the budget the user cares about. Cached briefly so
+// a status refresh never blocks on the network, and null on any failure (the UI then
+// falls back to a plain "billed to your OpenRouter key" statement).
+let _orUsageCache = { at: 0, data: null };
+async function fetchOpenRouterUsage() {
+  const key = process.env.OPENROUTER_API_KEY;
+  if (!key) return null;
+  if (Date.now() - _orUsageCache.at < 30000) return _orUsageCache.data;
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 4000);
+    const r = await fetch("https://openrouter.ai/api/v1/key", {
+      headers: { Authorization: `Bearer ${key}` },
+      signal: ctrl.signal,
+    });
+    clearTimeout(t);
+    if (!r.ok) throw new Error(`openrouter /key ${r.status}`);
+    const j = await r.json();
+    const d = (j && j.data) || {};
+    const out = {
+      usage: typeof d.usage === "number" ? d.usage : null,
+      limit: typeof d.limit === "number" ? d.limit : null,
+      limitRemaining:
+        typeof d.limit_remaining === "number" ? d.limit_remaining : null,
+      limitReset: d.limit_reset || null,
+    };
+    _orUsageCache = { at: Date.now(), data: out };
+    return out;
+  } catch (_) {
+    // cache the failure briefly too, so a down/blocked network doesn't retry every load
+    _orUsageCache = { at: Date.now(), data: null };
+    return null;
+  }
+}
+
 // AMAdocs: the status document. A single source-of-truth Markdown the app opens
 // to on launch — index, database, model and version at a glance, generated live
 // from the engine. Kept renderer-friendly (headings + short paragraph blocks)
@@ -108,11 +146,23 @@ async function buildAmadocsStatus() {
   } catch (_) {
     gnomeUp = false;
   }
+  // Resolve the active mode + its library slug up front. Cloud (bge-m3) and local (MiniLM)
+  // are separate, dimension-incompatible corpora, so the dashboard must count ONLY the
+  // library the current mode drives — never sum both. This is the single source of truth for
+  // mode/librarySlug (reused below where cloud usage is attached).
+  const mode =
+    (process.env.LLM_PROVIDER || "").toLowerCase() === "openrouter" ? "cloud" : "local";
+  const librarySlug =
+    mode === "cloud"
+      ? process.env.CLOUD_LIBRARY_SLUG || "amadocs-library"
+      : "amadocs-library";
+
   const synced = [];
-  const summaries = { total: 0, summarised: 0, queued: 0 }; // library-wide AI-summary progress
+  const summaries = { total: 0, summarised: 0, queued: 0 }; // active-library AI-summary progress
   let indexedDocs = 0; // distinct files actually searchable in LanceDB (GNOME path)
   try {
     for (const slug of Gnome.listSyncedSlugs()) {
+      if (slug !== librarySlug) continue; // current mode's library only (item 1)
       const st = Gnome.loadState(slug);
       if (!st) continue;
       try {
@@ -203,9 +253,16 @@ async function buildAmadocsStatus() {
   // fresh upload-only user still sees their docs.
   const totalDocs = synced.length > 0 ? indexedDocs : wsDocs;
 
+  // ---- mode (Private local vs Cloud) ----
+  // mode + librarySlug were resolved up front (they scope the doc counts above). Cloud is
+  // signalled by the OpenRouter provider; in that mode we attach live usage/budget.
+  const cloud = mode === "cloud" ? await fetchOpenRouterUsage() : null;
+
   // ---- structured data (consumed by the homepage; mirrors the markdown below) ----
   const data = {
     generatedAt: Date.now(),
+    mode,
+    librarySlug,
     engine: { version: engineVersion, node: process.version, llmProvider, vectorDb },
     model: { chat: chatModel, summary: summaryModel, vision: visionModel, embedder },
     stack,
@@ -214,6 +271,7 @@ async function buildAmadocsStatus() {
     summaries,
     synced,
     pace: { summaryCooldownMs: paceMs },
+    cloud, // null in local mode or if the usage lookup failed
   };
 
   // ---- assemble ----

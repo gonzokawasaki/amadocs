@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Coracle — semantic file manager</title>
+  <title>AMAdocs — semantic file manager</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -573,6 +573,16 @@
     .home-hero__brand { display:flex; align-items:center; gap:0.64rem; }
     .home-hero__logo { height:2.6rem; width:auto; display:block; }
     .home-hero__title { font-size:1.5rem; font-weight:600; color:var(--page-h); letter-spacing:.01em; }
+    /* CSS-based AMAdocs brandmark: gradient "A" chip + wordmark (docs in indigo). No image asset. */
+    .home-brand { display:flex; align-items:center; gap:0.5rem; }
+    .home-brand__mark { width:2rem; height:2rem; border-radius:0.5rem; flex:none;
+      background:linear-gradient(135deg,#6366f1,#22d3ee); display:grid; place-items:center;
+      color:#fff; font-weight:800; font-size:1.07rem; box-shadow:0 4px 14px rgba(80,70,229,.28); }
+    .home-brand__word { font-size:1.5rem; font-weight:600; letter-spacing:-.01em; color:var(--page-h); }
+    .home-brand__word .docs { color:#4f46e5; }
+    .home-brand--sm { gap:0.36rem; }
+    .home-brand--sm .home-brand__mark { width:1.14rem; height:1.14rem; border-radius:0.32rem; font-size:0.62rem; box-shadow:none; }
+    .home-brand--sm .home-brand__word { font-size:0.82rem; font-weight:700; letter-spacing:.01em; }
     .home-ver { font-size:0.71rem; color:var(--text-faint); font-weight:400; margin-left:0.43rem; vertical-align:middle; }
     .home-hero__tag { margin-top:0.21rem; font-size:0.86rem; color:var(--page-p); }
     .home-hero__gen { margin-top:0.5rem; font-size:0.71rem; color:var(--text-faint); }
@@ -613,6 +623,37 @@
     .home-pace__val { font-family:var(--font-mono,monospace); font-size:0.79rem; font-weight:600; color:var(--text); min-width:6.5rem; text-align:right; }
     .home-pace__ends { display:flex; justify-content:space-between; font-size:0.6rem; letter-spacing:.06em; text-transform:uppercase; color:var(--text-faint); margin-top:0.21rem; }
     .home-pace__hint { font-size:0.71rem; color:var(--text-muted); margin-top:0.43rem; }
+    /* mode badge (Private local vs Cloud) + cloud-usage panel (replaces the pace slider in cloud mode) */
+    .home-mode { display:inline-flex; align-items:center; gap:0.36rem; margin-top:0.5rem; padding:0.18rem 0.57rem; border-radius:999px; font-size:0.66rem; font-weight:600; letter-spacing:.04em; border:1px solid var(--border); }
+    .home-mode--local { color:var(--accent); border-color:var(--accent); }
+    .home-mode--cloud { color:var(--amber); border-color:var(--amber); }
+    .home-sec--pace .home-cloud { border-color:var(--amber); border-left-width:3px; }
+    .home-cloud { background:var(--bg-hover); border:1px solid var(--border); border-radius:var(--radius); padding:0.71rem 0.86rem; }
+    .home-cloud__row { display:flex; align-items:baseline; justify-content:space-between; gap:0.71rem; }
+    .home-cloud__label { font-size:0.79rem; color:var(--text-faint); }
+    .home-cloud__val { font-family:var(--font-mono,monospace); font-size:0.86rem; font-weight:600; color:var(--text); text-align:right; }
+    .home-cloud__bar { height:0.36rem; border-radius:999px; background:var(--border); margin-top:0.57rem; overflow:hidden; }
+    .home-cloud__fill { height:100%; background:var(--amber); }
+    .home-cloud__hint { font-size:0.71rem; color:var(--text-muted); margin-top:0.43rem; line-height:1.4; }
+
+    /* ── CLOUD DASHBOARD (a distinct surface from the local one) ───────── */
+    /* The two modes are incompatible corpora (1024-dim bge-m3 vs 384-dim MiniLM),
+       so each mode gets its own hero, colour, and header rather than a shared one. */
+    .home-hero--cloud { border-left:3px solid var(--amber); padding-left:0.86rem; }
+    .home-chero__eyebrow { display:inline-flex; align-items:center; gap:0.36rem; font-size:0.62rem; font-weight:700; letter-spacing:.16em; text-transform:uppercase; color:var(--amber); }
+    .home-chero__title { margin-top:0.29rem; font-size:1.85rem; font-weight:700; color:var(--page-h); line-height:1.1; letter-spacing:-.01em; }
+    .home-chero__title .prov { color:var(--amber); }
+    .home-chero__sub { margin-top:0.36rem; font-size:0.79rem; color:var(--page-p); }
+    .home-chero__ver { display:block; margin-top:0.29rem; font-size:0.66rem; color:var(--text-faint); }
+    /* mode-incompatibility callout — the one message both dashboards must land */
+    .home-incompat { display:flex; gap:0.57rem; border-radius:var(--radius); padding:0.64rem 0.79rem; margin-bottom:1.43rem; background:var(--bg-hover); border:1px solid var(--border); border-left-width:3px; }
+    .home-incompat--cloud { border-left-color:var(--amber); }
+    .home-incompat--local { border-left-color:var(--accent); }
+    .home-incompat__icon { flex:none; font-size:0.92rem; line-height:1.3; }
+    .home-incompat--cloud .home-incompat__icon { color:var(--amber); }
+    .home-incompat--local .home-incompat__icon { color:var(--accent); }
+    .home-incompat__body { font-size:0.72rem; color:var(--text-muted); line-height:1.5; }
+    .home-incompat__body strong { color:var(--text); font-weight:600; }
 
     /* ── RIGHT: AI REPL ───────────────────────────────────────────────── */
     .right {
@@ -745,7 +786,7 @@
   <!-- ── TOP BAR ── -->
   <div class="topbar">
     <div class="topbar__nav">
-      <button class="nav-btn" id="navHome" onclick="navHome()" title="Dashboard — Coracle overview & status" aria-label="Dashboard">⌂</button>
+      <button class="nav-btn" id="navHome" onclick="navHome()" title="Dashboard — AMAdocs overview & status" aria-label="Dashboard">⌂</button>
       <button class="nav-btn" id="navBack" onclick="navBack()" title="Back" aria-label="Back" disabled>‹</button>
       <button class="nav-btn" id="navFwd"  onclick="navForward()" title="Forward" aria-label="Forward" disabled>›</button>
     </div>
@@ -1222,8 +1263,30 @@ function apiUrl(u) {
 // AMAdocs Phase 2: ONE global workspace. Folder-level scoping is a path filter
 // on `sourcePath` in LanceDB queries — NOT separate workspaces/tables.
 // (See AMAdocs settled-decisions + PHASE2.md open question #1.)
-const WS_SLUG = "amadocs-library";
-const WS_NAME = "AMAdocs Library";
+// `let`, not `const`: in Cloud mode the library lives in a separate bge-m3 slug
+// (local 384-dim and cloud 1024-dim vectors can't share a table), so the boot
+// resolver below repoints these from /amadocs-status before any chat/sync runs.
+let WS_SLUG = "amadocs-library";
+let WS_NAME = "AMAdocs Library";
+let APP_MODE = "local";
+
+// Resolve which workspace the UI drives ("the library") from the engine's mode.
+// Local → amadocs-library (unchanged). Cloud → the server's CLOUD_LIBRARY_SLUG so
+// the chat box, folder sync and doc index all target the cloud corpus. Runs first
+// in BOOT, before ensureLibraryWorkspace / any stream-chat, so nothing races on
+// the stale local slug. Best-effort: on any failure we keep the local default.
+async function resolveLibrarySlug(){
+  try{
+    const r = await fetch(`${API}/amadocs-status`);
+    if(!r.ok) return;
+    const d = (await r.json()).data || {};
+    APP_MODE = d.mode || "local";
+    if(d.librarySlug && d.librarySlug !== WS_SLUG){
+      WS_SLUG = d.librarySlug;
+      WS_NAME = APP_MODE === "cloud" ? "AMAdocs Cloud Library" : WS_NAME;
+    }
+  }catch(_){ /* keep local defaults if the engine can't report mode */ }
+}
 
 // A fresh chat session per app launch (held in memory, not localStorage) so a
 // relaunch always starts clean — the engine scopes chat history to this id.
@@ -1736,36 +1799,134 @@ function fmtPace(ms){
   const m=Math.floor(s/60), r=s%60;
   return r ? `${m}m ${r}s rest / file` : `${m}m rest / file`;
 }
-function renderHomeHtml(d){
-  d = d || {};
-  const eng=d.engine||{}, gn=d.gnome||{}, lib=d.library||{}, synced=d.synced||[];
-  const docs = lib.totalDocs ?? 0;
-  // Tracked = every file the indexer is handling across synced folders; docs = those
-  // already embedded/searchable. While a drain runs, docs < tracked → shows progress.
+function fmtMoney(n){ return (n==null || isNaN(n)) ? "—" : "$"+Number(n).toFixed(2); }
+// Cloud mode replaces the (meaningless, thermal) pace slider with what cloud inference
+// actually costs: this OpenRouter key's spend, its budget cap if one is set, and a
+// bar. `c` is null when the usage lookup failed or no key — then show a plain statement.
+function renderCloudPanel(c){
+  if(!c){
+    return `<div class="home-cloud">
+      <div class="home-cloud__row"><span class="home-cloud__label">Inference billed to your OpenRouter key</span></div>
+      <div class="home-cloud__hint">Cloud mode sends text to OpenRouter's models — every summary, chat answer and image caption uses paid tokens. Live usage is unavailable right now; check your OpenRouter dashboard.</div>
+    </div>`;
+  }
+  const used=c.usage, lim=c.limit, rem=c.limitRemaining;
+  const hasLimit = (lim!=null && lim>0);
+  const pct = hasLimit ? Math.min(100, Math.max(0,(used/lim)*100)) : 0;
+  const headVal = hasLimit ? `${fmtMoney(used)} / ${fmtMoney(lim)}` : `${fmtMoney(used)} used`;
+  const bar = hasLimit ? `<div class="home-cloud__bar"><div class="home-cloud__fill" style="width:${pct.toFixed(0)}%"></div></div>` : "";
+  const resetTxt = c.limitReset ? ` (${esc(String(c.limitReset))})` : "";
+  const remLine = hasLimit
+    ? `${fmtMoney(rem)} remaining on this key's cap${resetTxt}.`
+    : `Pay-as-you-go — no spend cap set on this key.`;
+  return `<div class="home-cloud">
+    <div class="home-cloud__row"><span class="home-cloud__label">Spent on this key</span><span class="home-cloud__val">${headVal}</span></div>
+    ${bar}
+    <div class="home-cloud__hint">${remLine} Every summary, chat answer and image caption uses paid OpenRouter tokens — there's no local GPU throttle to set in cloud mode.</div>
+  </div>`;
+}
+// Pretty label for an LLM/embedding provider id.
+function providerLabel(p){
+  const map = { openrouter:"OpenRouter", ollama:"Ollama", openai:"OpenAI",
+    anthropic:"Anthropic", google:"Google", gemini:"Google" };
+  const k = (p||"").toLowerCase();
+  return map[k] || (p ? p.charAt(0).toUpperCase()+p.slice(1) : "cloud provider");
+}
+// One ingest job → one document state. "Reads your files" (GNOME health) + a single
+// "Documents" card: N fully ingested (read, embedded for search, AND catalogued for
+// folder-wide search — all in one pass) out of M found. No separate "indexed" vs
+// "summarised" split; a doc is either ready to search or still ingesting.
+function homeCardsHtml(d){
+  const gn=d.gnome||{}, lib=d.library||{}, synced=d.synced||[];
+  const ready = lib.totalDocs ?? 0;
   const tracked = synced.reduce((a,s)=>a+(s.files||0),0);
-  const libBig = tracked
-    ? `${docs} <span style="color:var(--text-faint);font-weight:400">/ ${tracked}</span>`
-    : `${docs}`;
-  // The total ("tracked") is what GNOME's LocalSearch catalogued in the synced folders, not
-  // our own scan — credit it so the user knows where the file count comes from.
-  const libSub = tracked ? `indexed · ${tracked} found by GNOME` : "indexed";
-  const sm = d.summaries||{}, smDone = sm.summarised??0, smTot = sm.total??0, smQ = sm.queued??0;
-  // "Summaries" card: how many indexed docs carry an AI catalog card. While a backfill drains,
-  // smQ counts the files still waiting for granite — surfaced as a live "N queued" sub-line.
-  const smBig = smTot
-    ? `${smDone} <span style="color:var(--text-faint);font-weight:400">/ ${smTot}</span>`
-    : "—";
-  const smSub = smTot
-    ? (smQ>0 ? `described · ${smQ} queued` : "described")
-    : "no indexed files yet";
-  const cards =
-    homeCard("Index",
+  const big = tracked
+    ? `${ready} <span style="color:var(--text-faint);font-weight:400">/ ${tracked}</span>`
+    : `${ready}`;
+  const sub = tracked
+    ? (ready < tracked ? `ready · ${tracked-ready} ingesting` : `ready · ${tracked} found by GNOME`)
+    : "ready";
+  return homeCard("Reads your files",
       `<span class="${gn.connected?"home-ok":"home-warn"}">●</span> ${gn.connected?"Connected":"Unavailable"}`,
       "GNOME LocalSearch") +
-    homeCard("Library", libBig, libSub,
-      "Indexed — the AI can search inside these files. The total is the count GNOME's LocalSearch catalogued in your folders; the first number is how many are searchable so far.") +
-    homeCard("Summaries", smBig, smSub,
-      "Summarised — the AI has read each file and written a short card. Powers folder-wide search.");
+    homeCard("Documents", big, sub,
+      "Fully ingested and searchable: each file is read, embedded for deep search, and catalogued for folder-wide search in a single pass. The total is what GNOME's LocalSearch found in your folders; the first number is how many are ready to search.");
+}
+function homeSyncedHtml(synced){
+  synced = synced || [];
+  return synced.length
+    ? `<ul class="home-synced">` + synced.map(s =>
+        `<li><span class="home-synced__path">${esc(s.folder||"?")}</span>
+          <span class="home-synced__meta">${s.files||0} file${s.files===1?"":"s"} · last sync ${fmtUtc(s.lastSync)}</span></li>`
+      ).join("") + `</ul>`
+    : `<div class="home-empty">No folders indexed yet. Use <strong>＋ Index a folder</strong> below, or open a folder and hit <strong>⟳ index</strong>.</div>`;
+}
+const HOME_ACTIONS = `<div class="home-sec"><h3 class="home-h">Quick actions</h3>
+    <div class="home-actions">
+      <button class="home-act" onclick="homeBrowseFiles()">🗂 Browse my files</button>
+      <button class="home-act" onclick="homeIndexFolder()">＋ Index a folder…</button>
+      <button class="home-act" onclick="showStatusDoc()">⟳ Refresh status</button>
+    </div>
+  </div>`;
+
+// Two explicit, incompatible product modes → two distinct dashboards. The engine's
+// reported mode picks which one renders; they never share a hero or header.
+function renderHomeHtml(d){
+  d = d || {};
+  return d.mode === "cloud" ? renderCloudHomeHtml(d) : renderLocalHomeHtml(d);
+}
+
+// ── CLOUD DASHBOARD ──────────────────────────────────────────────────────
+// Frontier inference over a provider (OpenRouter). No thermal pace knob — cloud
+// has no local GPU to cool; the only "budget" is spend, shown by renderCloudPanel.
+function renderCloudHomeHtml(d){
+  const eng=d.engine||{}, m=d.model||{};
+  const prov = providerLabel(eng.llmProvider || "openrouter");
+  const genLine = `Status generated ${fmtUtc(d.generatedAt||Date.now())} · <a class="home-link" onclick="showStatusDoc()">⟳ refresh</a>`;
+  // Cloud model roster — the real OpenRouter model ids, so "the information reflects
+  // cloud inference" rather than the local Ollama stack.
+  const modelRows = [
+    ["Chat", m.chat, prov],
+    ["Summaries", m.summary, prov],
+    ["Image analysis", m.vision, prov],
+    ["Search embeddings", m.embedder, prov],
+    ["Reads your files", "GNOME LocalSearch", "on this computer"],
+    ["Storage", eng.vectorDb || "lancedb", "on this computer"],
+  ];
+  const modelHtml = `<div class="home-stack">` + modelRows.map(([role,tool,via]) =>
+    `<div class="home-stack__row"><span class="home-stack__role">${esc(role)}</span>` +
+    `<span class="home-stack__tool">${esc(tool||"—")}${via?` <span class="home-stack__via">· ${esc(via)}</span>`:""}</span></div>`
+  ).join("") + `</div>`;
+  return `<div class="home">
+    <div class="home-hero home-hero--cloud">
+      <div class="home-brand home-brand--sm">
+        <div class="home-brand__mark">A</div>
+        <div class="home-brand__word">AMA<span class="docs">docs</span></div>
+      </div>
+      <div class="home-chero__eyebrow">☁ Cloud inference</div>
+      <div class="home-chero__title">Cloud inference — <span class="prov">${esc(prov)}</span></div>
+      <div class="home-chero__sub">Frontier AI runs on ${esc(prov)}. Your files stay on this computer — only the text to summarise or answer, and your search queries, are sent.</div>
+      <span class="home-chero__ver">Engine v${esc(eng.version||"?")} · library <code>${esc(d.librarySlug||"?")}</code></span>
+      <div class="home-hero__gen">${genLine}</div>
+    </div>
+    <div class="home-incompat home-incompat--cloud">
+      <span class="home-incompat__icon">⚠</span>
+      <div class="home-incompat__body"><strong>This is the Cloud index — separate from Private/local.</strong>
+        Cloud embeddings are 1024-dim (bge-m3); local are 384-dim. The two corpora can't be shared, so
+        <strong>switching to Private/local mode means rebuilding the index from scratch</strong> in that mode.</div>
+    </div>
+    <div class="home-sec home-sec--pace"><h3 class="home-h">Cloud usage</h3>${renderCloudPanel(d.cloud)}</div>
+    <div class="home-cards">${homeCardsHtml(d)}</div>
+    <div class="home-cards-note">One pass per document — read, embedded for search, and catalogued for folder-wide search — sent to ${esc(prov)}.</div>
+    <div class="home-sec"><h3 class="home-h">Cloud models &amp; pipeline</h3>${modelHtml}</div>
+    <div class="home-sec"><h3 class="home-h">Indexed folders</h3>${homeSyncedHtml(d.synced)}</div>
+    ${HOME_ACTIONS}
+  </div>`;
+}
+
+// ── LOCAL (PRIVATE) DASHBOARD ────────────────────────────────────────────
+function renderLocalHomeHtml(d){
+  const eng=d.engine||{};
   const stackHtml = renderStackHtml(d.stack);
   const paceMs = (d.pace && Number(d.pace.summaryCooldownMs)) || 0;
   const paceS = Math.round(paceMs/1000);
@@ -1781,37 +1942,28 @@ function renderHomeHtml(d){
         older / hot-running laptop cool and quiet during a big background index; it just takes longer to finish
         (fine to leave running overnight). Applies to the next file; no restart needed.</div>
     </div>`;
-  const syncedHtml = synced.length
-    ? `<ul class="home-synced">` + synced.map(s => {
-        const sumTxt = (s.summarised!=null)
-          ? ` · ${s.summarised} summarised${s.queued>0?` (${s.queued} queued)`:""}`
-          : "";
-        return `<li><span class="home-synced__path">${esc(s.folder||"?")}</span>
-          <span class="home-synced__meta">${s.files||0} file${s.files===1?"":"s"}${sumTxt} · last sync ${fmtUtc(s.lastSync)}</span></li>`;
-      }).join("") + `</ul>`
-    : `<div class="home-empty">No folders indexed yet. Use <strong>＋ Index a folder</strong> below, or open a folder and hit <strong>⟳ index</strong>.</div>`;
   return `<div class="home">
     <div class="home-hero">
-      <div class="home-hero__brand">
-        <img class="home-hero__logo" src="coracle-logo.png" alt="Coracle">
-        <div class="home-hero__title">Coracle<span class="home-ver">v${esc(eng.version||"?")}</span></div>
+      <div class="home-brand">
+        <div class="home-brand__mark">A</div>
+        <div class="home-brand__word">AMA<span class="docs">docs</span><span class="home-ver">v${esc(eng.version||"?")}</span></div>
       </div>
       <div class="home-hero__tag">Your private, local AI file browser. Everything stays on this computer.</div>
+      <div><span class="home-mode home-mode--local" title="Everything runs on this computer. No data leaves the machine.">🔒 Private · local</span></div>
       <div class="home-hero__gen">Status generated ${fmtUtc(d.generatedAt||Date.now())} · <a class="home-link" onclick="showStatusDoc()">⟳ refresh</a></div>
     </div>
-    <div class="home-sec home-sec--pace"><h3 class="home-h">Indexing pace</h3>${paceHtml}</div>
-    <div class="home-cards">${cards}</div>
-    <div class="home-cards-note">Indexing makes files searchable. Summarising lets the AI describe them — slower, runs in the background.</div>
-    ${stackHtml ? `<div class="home-sec"><h3 class="home-h">Stack</h3>${stackHtml}</div>` : ""}
-    <div class="home-sec"><h3 class="home-h">Indexed folders</h3>${syncedHtml}</div>
-    <div class="home-sec"><h3 class="home-h">Quick actions</h3>
-      <div class="home-actions">
-        <button class="home-act" onclick="homeBrowseFiles()">🗂 Browse my files</button>
-        <button class="home-act" onclick="homeIndexFolder()">＋ Index a folder…</button>
-        <button class="home-act" onclick="homeResummarize()" title="Generate AI summaries for indexed files that are missing one (runs granite in the background, bounded + stoppable)">🧠 Re-summarise files</button>
-        <button class="home-act" onclick="showStatusDoc()">⟳ Refresh status</button>
-      </div>
+    <div class="home-incompat home-incompat--local">
+      <span class="home-incompat__icon">🔒</span>
+      <div class="home-incompat__body"><strong>This is the Private/local index.</strong>
+        It uses local 384-dim embeddings. Cloud inference uses a different 1024-dim index, so
+        <strong>switching to Cloud mode means rebuilding the index from scratch</strong> in that mode.</div>
     </div>
+    <div class="home-sec home-sec--pace"><h3 class="home-h">Indexing pace</h3>${paceHtml}</div>
+    <div class="home-cards">${homeCardsHtml(d)}</div>
+    <div class="home-cards-note">One pass per document — each file is read, embedded for search, and catalogued for folder-wide search. Runs in the background at your chosen pace.</div>
+    ${stackHtml ? `<div class="home-sec"><h3 class="home-h">Stack</h3>${stackHtml}</div>` : ""}
+    <div class="home-sec"><h3 class="home-h">Indexed folders</h3>${homeSyncedHtml(d.synced)}</div>
+    ${HOME_ACTIONS}
   </div>`;
 }
 async function showStatusDoc(){
@@ -2151,11 +2303,15 @@ function openCtx(e, entryPath) {
   $("#ctxFilemeta").textContent = data.meta;
   const analyseItem  = $("#ctxAnalyse");
   const analyseLabel = $("#ctxAnalyseLabel");
-  // ONE harmonised action: indexes (if needed) then summarises. Label just reflects
-  // whether the file is already indexed (so a re-run reads as a refresh, not a first pass).
+  // ONE harmonised action: indexes (if needed) then summarises. The LABEL names WHY it
+  // exists for this file — images get AI vision ("Analyse image"); everything else is an
+  // on-demand "do it now" ahead of the background cadence ("Analyse now"). A re-run on an
+  // already-indexed file reads as a refresh.
   const isIndexed = !!(ai && ai.indexed);
   analyseItem.classList.add('primary');
-  analyseLabel.textContent = isIndexed ? 'Re-index & summarise' : 'Index & summarise';
+  analyseLabel.textContent = data.isImage
+    ? (isIndexed ? 'Re-analyse image' : 'Analyse image')
+    : (isIndexed ? 'Re-analyse now'   : 'Analyse now');
   $("#ctxAnalyseSection").style.borderBottomWidth = '1px';
   const vw = window.innerWidth, vh = window.innerHeight;
   ctxMenu.classList.remove('hidden');
@@ -2577,13 +2733,13 @@ function showFilePreview(full, name, ent){
       da.innerHTML = `<div class="vnote" style="margin:2rem;max-width:34rem;line-height:1.5">
         <strong>${esc(name)}</strong><br><br>
         ${ai.chipCls==="ai-analyse"
-          ? 'Right-click → <em>Index &amp; summarise</em> to process this image on demand.'
-          : 'Right-click → <em>Index &amp; summarise</em> to make this file searchable, or use <strong>⟳ index</strong> on the folder header for the whole folder.'}
+          ? 'Right-click → <em>Analyse image</em> to caption it with AI on demand.'
+          : 'Right-click → <em>Analyse now</em> to make this file searchable, or use <strong>⟳ index</strong> on the folder header for the whole folder.'}
       </div>`;
     }
   }
   $("#replFile").innerHTML =
-    `<div class="sum-block"><div class="sum-label">summary</div><div class="sum-text${ai.summary?"":" tree-ghost"}">${ai.summary ? esc(ai.summary) : (ai.indexed ? "Indexed — no summary yet. Right-click → Index & summarise to generate one." : "Not yet indexed — previewing from disk. Right-click → Index & summarise to make it searchable.")}</div></div>
+    `<div class="sum-block"><div class="sum-label">summary</div><div class="sum-text${ai.summary?"":" tree-ghost"}">${ai.summary ? esc(ai.summary) : (ai.indexed ? `Indexed — no summary yet. Right-click → ${isImageName(name)?"Re-analyse image":"Analyse now"} to generate one.` : `Not yet indexed — previewing from disk. Right-click → ${isImageName(name)?"Analyse image":"Analyse now"} to make it searchable.`)}</div></div>
      <div id="replFileConv"></div>`;
 }
 
@@ -2947,6 +3103,7 @@ $("#ctxSaveCopy").addEventListener("click",   ()=>{ closeCtx(); toast("Coming so
 
 /* ─────────────────────────────── BOOT ──────────────────────────────────── */
 (async()=>{
+  await resolveLibrarySlug();  // Cloud mode: repoint WS_SLUG at the bge-m3 library first
   await ensureLibraryWorkspace();
   await loadDocIndex();   // Stage C — index map before the tree paints its dots/chips
   await initFileTree();   // Stage B — live file tree (readDir/homePath)
