@@ -635,6 +635,19 @@
     .home-cloud__bar { height:0.36rem; border-radius:999px; background:var(--border); margin-top:0.57rem; overflow:hidden; }
     .home-cloud__fill { height:100%; background:var(--amber); }
     .home-cloud__hint { font-size:0.71rem; color:var(--text-muted); margin-top:0.43rem; line-height:1.4; }
+    .home-cloud__cost { margin-top:0.57rem; padding-top:0.57rem; border-top:1px solid var(--border); display:flex; flex-direction:column; gap:0.14rem; }
+    .home-cloud__cost-h { font-size:0.71rem; font-weight:600; color:var(--text-faint); text-transform:uppercase; letter-spacing:0.03em; margin-bottom:0.14rem; }
+    .home-cloud__cost-row { font-size:0.79rem; color:var(--text-muted); }
+    .home-cloud__cost-row strong { font-family:var(--font-mono,monospace); color:var(--text); }
+    .home-cloud__cost-note { font-size:0.68rem; color:var(--text-faint); margin-top:0.14rem; line-height:1.4; }
+    .home-cloud__key { margin-top:0.57rem; font-size:0.75rem; }
+    .home-cloud__key a { color:var(--accent,#6ea8fe); text-decoration:none; }
+    .home-cloud__key a:hover { text-decoration:underline; }
+    .home-suspend { display:flex; align-items:center; gap:0.71rem; flex-wrap:wrap; margin-top:0.71rem; }
+    .home-suspend__btn { font-size:0.79rem; font-weight:600; padding:0.4rem 0.8rem; border-radius:var(--radius); border:1px solid var(--border); background:var(--bg-hover); color:var(--text); cursor:pointer; white-space:nowrap; }
+    .home-suspend__btn:hover { border-color:var(--text-faint); }
+    .home-suspend.is-suspended .home-suspend__btn { border-color:var(--amber); color:var(--amber); }
+    .home-suspend__hint { font-size:0.71rem; color:var(--text-muted); line-height:1.4; flex:1; min-width:12rem; }
 
     /* ── CLOUD DASHBOARD (a distinct surface from the local one) ───────── */
     /* The two modes are incompatible corpora (1024-dim bge-m3 vs 384-dim MiniLM),
@@ -777,6 +790,69 @@
       max-width: 26rem; text-align: center;
     }
     #toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+    /* ── Mode switch: button in the incompat box + confirm modal + relaunch curtain ── */
+    .home-incompat__act { margin-top:0.5rem; }
+    .home-switch {
+      font: inherit; font-size:0.72rem; font-weight:600; cursor:pointer;
+      padding:0.3rem 0.7rem; border-radius:var(--radius-sm);
+      color:var(--text); background:var(--bg); border:1px solid var(--border);
+    }
+    .home-switch:hover { border-color:var(--accent); color:var(--accent); }
+
+    .ms-back {
+      position:fixed; inset:0; z-index:10001; display:flex; align-items:center; justify-content:center;
+      background:rgba(8,11,16,0.55); backdrop-filter:blur(2px); padding:1.5rem;
+    }
+    .ms-card {
+      width:min(30rem,100%); background:var(--bg); color:var(--text);
+      border:1px solid var(--border); border-radius:var(--radius);
+      box-shadow:0 12px 40px rgba(0,0,0,0.35); overflow:hidden;
+    }
+    .ms-title { font-size:1rem; font-weight:600; padding:1rem 1.15rem 0.6rem; }
+    .ms-body { padding:0 1.15rem; font-size:0.8rem; line-height:1.55; color:var(--text-muted); }
+    .ms-body p { margin:0 0 0.7rem; }
+    .ms-body strong { color:var(--text); font-weight:600; }
+    .ms-zdr { color:var(--accent); font-size:0.75rem; }
+    .ms-reindex {
+      background:var(--bg-alt); border:1px solid var(--border); border-radius:var(--radius-sm);
+      padding:0.55rem 0.7rem; font-size:0.75rem;
+    }
+    .ms-lbl { display:block; font-size:0.72rem; font-weight:600; color:var(--text); margin:0.2rem 0 0.9rem; }
+    .ms-key {
+      display:block; width:100%; margin-top:0.3rem; box-sizing:border-box;
+      font:inherit; font-size:0.82rem; padding:0.45rem 0.6rem;
+      color:var(--text); background:var(--bg-alt);
+      border:1px solid var(--border); border-radius:var(--radius-sm);
+    }
+    .ms-key:focus { outline:none; border-color:var(--accent); }
+    .ms-key--bad { border-color:var(--amber); }
+    .ms-hint { font-size:0.68rem; color:var(--text-faint); margin:-0.5rem 0 0.9rem; line-height:1.5; }
+    .ms-mono, .ms-hint code { font-family:ui-monospace,Menlo,Consolas,monospace; }
+    .ms-acts { display:flex; justify-content:flex-end; gap:0.5rem; padding:0.4rem 1.15rem 1.1rem; }
+    .ms-btn {
+      font:inherit; font-size:0.78rem; font-weight:600; cursor:pointer;
+      padding:0.42rem 0.9rem; border-radius:var(--radius-sm); border:1px solid var(--border);
+    }
+    .ms-cancel { background:var(--bg); color:var(--text-muted); }
+    .ms-cancel:hover { color:var(--text); }
+    .ms-go { background:var(--accent); color:var(--accent-sel-text); border-color:var(--accent); }
+    .ms-go:disabled { opacity:0.6; cursor:default; }
+
+    .ms-curtain {
+      position:fixed; inset:0; z-index:10002; display:flex; flex-direction:column;
+      align-items:center; justify-content:center; gap:1rem;
+      background:var(--bg); opacity:0; transition:opacity .2s;
+    }
+    .ms-curtain.show { opacity:1; }
+    .ms-curtain__mark {
+      width:3rem; height:3rem; border-radius:0.8rem; display:flex; align-items:center; justify-content:center;
+      font-size:1.5rem; font-weight:700; color:var(--accent-sel-text); background:var(--accent);
+      animation:ms-pulse 1.1s ease-in-out infinite;
+    }
+    .ms-curtain__msg { font-size:0.9rem; color:var(--text-muted); }
+    .ms-curtain__msg strong { color:var(--text); }
+    @keyframes ms-pulse { 0%,100%{opacity:1;transform:scale(1);} 50%{opacity:0.5;transform:scale(0.92);} }
   </style>
 </head>
 <body>
@@ -1803,6 +1879,16 @@ function fmtMoney(n){ return (n==null || isNaN(n)) ? "—" : "$"+Number(n).toFix
 // Cloud mode replaces the (meaningless, thermal) pace slider with what cloud inference
 // actually costs: this OpenRouter key's spend, its budget cap if one is set, and a
 // bar. `c` is null when the usage lookup failed or no key — then show a plain statement.
+// Open an external link in the OS browser via the desktop bridge (Electron blocks a
+// bare target=_blank). Falls back to normal anchor behaviour in the browser dev stack.
+function openExternalLink(ev, url){
+  if(window.amadocs && typeof window.amadocs.openExternal === "function"){
+    ev.preventDefault();
+    window.amadocs.openExternal(url);
+    return false;
+  }
+  return true;
+}
 function renderCloudPanel(c){
   if(!c){
     return `<div class="home-cloud">
@@ -1823,6 +1909,27 @@ function renderCloudPanel(c){
     <div class="home-cloud__row"><span class="home-cloud__label">Spent on this key</span><span class="home-cloud__val">${headVal}</span></div>
     ${bar}
     <div class="home-cloud__hint">${remLine} Every summary, chat answer and image caption uses paid OpenRouter tokens — there's no local GPU throttle to set in cloud mode.</div>
+    <div class="home-cloud__cost">
+      <span class="home-cloud__cost-h">Typical AMAdocs cost</span>
+      <span class="home-cloud__cost-row"><strong>~$0.0006</strong> per document indexed</span>
+      <span class="home-cloud__cost-row"><strong>~$0.001–0.01</strong> per chat answer</span>
+      <span class="home-cloud__cost-note">Measured on a 253-document corpus; varies with model &amp; document size.</span>
+    </div>
+    <div class="home-cloud__key"><a href="https://openrouter.ai/keys" target="_blank" rel="noopener" onclick="return openExternalLink(event,'https://openrouter.ai/keys')">Manage or rotate this key at OpenRouter →</a></div>
+  </div>`;
+}
+// AMAdocs: Suspend/resume BACKGROUND indexing (Cloud dashboard). Pausing halts the
+// automatic, paid re-indexing that file churn triggers while a user reorganises files;
+// on-demand chat & search still work. The state persists across relaunch (server-side).
+function renderSuspendToggle(d){
+  const on = !!d.ingestSuspended;
+  const label = on ? "▶ Resume cloud indexing" : "⏸ Suspend cloud indexing";
+  const hint = on
+    ? `Background indexing is <strong>paused</strong> — file changes aren't indexed and cost nothing until you resume. Chat &amp; search still work.`
+    : `Reorganising files? Pause automatic indexing so churn doesn't run up paid cloud tokens. Chat &amp; search stay available.`;
+  return `<div class="home-suspend${on?" is-suspended":""}">
+    <button class="home-suspend__btn" onclick="toggleSuspendIngest(${on?"false":"true"})">${label}</button>
+    <span class="home-suspend__hint">${hint}</span>
   </div>`;
 }
 // Pretty label for an LLM/embedding provider id.
@@ -1913,9 +2020,10 @@ function renderCloudHomeHtml(d){
       <span class="home-incompat__icon">⚠</span>
       <div class="home-incompat__body"><strong>This is the Cloud index — separate from Private/local.</strong>
         Cloud embeddings are 1024-dim (bge-m3); local are 384-dim. The two corpora can't be shared, so
-        <strong>switching to Private/local mode means rebuilding the index from scratch</strong> in that mode.</div>
+        <strong>switching to Private/local mode means rebuilding the index from scratch</strong> in that mode.
+        <div class="home-incompat__act"><button class="home-switch" onclick="openModeSwitch('local')">🔒 Switch to Private / local…</button></div></div>
     </div>
-    <div class="home-sec home-sec--pace"><h3 class="home-h">Cloud usage</h3>${renderCloudPanel(d.cloud)}</div>
+    <div class="home-sec home-sec--pace"><h3 class="home-h">Cloud usage</h3>${renderCloudPanel(d.cloud)}${renderSuspendToggle(d)}</div>
     <div class="home-cards">${homeCardsHtml(d)}</div>
     <div class="home-cards-note">One pass per document — read, embedded for search, and catalogued for folder-wide search — sent to ${esc(prov)}.</div>
     <div class="home-sec"><h3 class="home-h">Cloud models &amp; pipeline</h3>${modelHtml}</div>
@@ -1956,7 +2064,8 @@ function renderLocalHomeHtml(d){
       <span class="home-incompat__icon">🔒</span>
       <div class="home-incompat__body"><strong>This is the Private/local index.</strong>
         It uses local 384-dim embeddings. Cloud inference uses a different 1024-dim index, so
-        <strong>switching to Cloud mode means rebuilding the index from scratch</strong> in that mode.</div>
+        <strong>switching to Cloud mode means rebuilding the index from scratch</strong> in that mode.
+        <div class="home-incompat__act"><button class="home-switch" onclick="openModeSwitch('cloud')">☁ Switch to Cloud mode…</button></div></div>
     </div>
     <div class="home-sec home-sec--pace"><h3 class="home-h">Indexing pace</h3>${paceHtml}</div>
     <div class="home-cards">${homeCardsHtml(d)}</div>
@@ -1966,6 +2075,82 @@ function renderLocalHomeHtml(d){
     ${HOME_ACTIONS}
   </div>`;
 }
+// ── Mode switch (Local ⇄ Cloud): a deliberate, full-relaunch flow ───────────
+// The two modes are incompatible engines with separate indexes, so this is framed
+// as "change engine + relaunch", never a live toggle. The confirm names the exact
+// consequence (separate index → reindex, where data goes) and, for cloud with no key
+// on file, collects one. On confirm the engine persists the choice and relaunches;
+// we show a full-screen "Restarting…" curtain so the restart reads as intentional.
+async function openModeSwitch(target){
+  if(!desktop || !desktop.switchMode){ toast("Run the desktop app to switch modes."); return; }
+  const toCloud = target === "cloud";
+  let hasKey = false;
+  try{ const m = await desktop.getMode(); hasKey = !!(m && m.hasKey); }catch(_){}
+  const needKey = toCloud && !hasKey;
+
+  const body = toCloud
+    ? `<p>Cloud mode sends the text of your documents to <strong>OpenRouter</strong> for AI
+         processing — embeddings, summaries, chat and image analysis — and builds a
+         <strong>separate</strong> search index. Your local index is kept, untouched.</p>
+       <p class="ms-zdr">🔒 Zero data retention is requested — OpenRouter is told not to store
+         your documents.</p>`
+    : `<p>Private / local mode runs entirely on this computer — <strong>no data leaves the
+         machine</strong>. It uses its own local index. Your cloud index is kept, untouched.</p>`;
+  const reindex = `<p class="ms-reindex">Local and Cloud keep <strong>separate</strong> search
+      indexes and can't share one. The ${toCloud?"Cloud":"local"} index may be empty the first
+      time — AMAdocs will re-index your folders
+      ${toCloud?"in the cloud (a few minutes; a small OpenRouter cost)":"locally (uses your GPU)"}.
+      Switching back later is instant — the other index is kept.</p>`;
+  const keyField = needKey
+    ? `<label class="ms-lbl">OpenRouter API key
+         <input type="password" id="msKey" class="ms-key" placeholder="sk-or-…" autocomplete="off" spellcheck="false">
+       </label>
+       <div class="ms-hint">Stored on this computer only (<code>~/.config/amadocs/openrouter.key</code>, mode 600).
+         Get one at <span class="ms-mono">openrouter.ai/keys</span>.</div>`
+    : "";
+
+  const back = document.createElement("div");
+  back.className = "ms-back";
+  back.innerHTML = `<div class="ms-card" role="dialog" aria-modal="true" aria-label="${esc(toCloud?"Switch to Cloud mode":"Switch to local mode")}">
+      <div class="ms-title">${toCloud?"☁ Switch to Cloud mode":"🔒 Switch to Private / local mode"}</div>
+      <div class="ms-body">${body}${reindex}${keyField}</div>
+      <div class="ms-acts">
+        <button class="ms-btn ms-cancel">Cancel</button>
+        <button class="ms-btn ms-go">${toCloud?"Switch to Cloud":"Switch to local"}${needKey?" & set up":""}</button>
+      </div>
+    </div>`;
+  document.body.appendChild(back);
+  const close = ()=>back.remove();
+  back.addEventListener("mousedown",(e)=>{ if(e.target===back) close(); });
+  back.querySelector(".ms-cancel").onclick = close;
+  const keyEl = back.querySelector("#msKey");
+  if(keyEl) keyEl.focus();
+
+  back.querySelector(".ms-go").onclick = async (e)=>{
+    const btn = e.currentTarget;
+    const key = keyEl ? (keyEl.value||"").trim() : "";
+    if(needKey && !key){ keyEl.classList.add("ms-key--bad"); keyEl.focus(); return; }
+    btn.disabled = true; btn.textContent = "Switching…";
+    const res = await desktop.switchMode(target, key);
+    if(!res || !res.ok){
+      btn.disabled = false; btn.textContent = toCloud?"Switch to Cloud":"Switch to local";
+      toast((res && res.error) || "Switch failed."); return;
+    }
+    // Engine persisted the choice and will relaunch in ~150ms. Show the curtain.
+    showRestartCurtain(toCloud);
+  };
+}
+// Full-screen curtain shown between confirm and the actual process relaunch, so the
+// restart reads as a deliberate mode change rather than a crash/flash.
+function showRestartCurtain(toCloud){
+  const c = document.createElement("div");
+  c.className = "ms-curtain";
+  c.innerHTML = `<div class="ms-curtain__mark">A</div>
+    <div class="ms-curtain__msg">Restarting AMAdocs in <strong>${toCloud?"☁ Cloud":"🔒 Private / local"}</strong> mode…</div>`;
+  document.body.appendChild(c);
+  requestAnimationFrame(()=>c.classList.add("show"));
+}
+
 async function showStatusDoc(){
   const da=$("#docarea"); if(!da) return;
   pushHist({type:"home", path:null});
@@ -2028,6 +2213,20 @@ async function homeSetPace(secs){
   const res=await apiSetPace(ms);
   if(!res.ok){ toast(res.error || "Couldn't save indexing pace."); return; }
   toast(`Indexing pace saved — ${fmtPace(ms)}. Takes effect on the next file (no restart).`);
+}
+// AMAdocs: Cloud dashboard suspend/resume toggle → persist the flag server-side, then
+// refresh the dashboard so the button flips. Suspending also drops any in-flight ingest.
+async function toggleSuspendIngest(on){
+  try{
+    const r=await fetch(`${API}/amadocs-suspend-ingest`,{
+      method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({suspended:!!on})});
+    const d=await r.json().catch(()=>({}));
+    if(!r.ok || d.ok===false){ toast(d.error || "Couldn't change suspend state."); return; }
+    toast(on
+      ? "Cloud indexing suspended — file changes won't be indexed (no spend) until you resume."
+      : "Cloud indexing resumed — catching up in the background.");
+    showStatusDoc(); // re-render the dashboard so the toggle reflects the new state
+  }catch(e){ toast("Couldn't change suspend state."); }
 }
 async function renderDocxInto(container, blob, docpath){
   try{

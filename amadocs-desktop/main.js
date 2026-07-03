@@ -78,6 +78,62 @@ function resolveNode() {
 const NODE = resolveNode();
 
 // ---------------------------------------------------------------------------
+// AMAdocs mode + key config (drives the in-app Local ⇄ Cloud toggle).
+//
+// The two product modes are incompatible engines — local (Ollama + MiniLM, 384-dim)
+// vs cloud (OpenRouter + bge-m3, 1024-dim) — with SEPARATE LanceDB indexes that can
+// never be shared. So switching is a real app relaunch, not a live toggle. The chosen
+// mode and the OpenRouter key are persisted to disk so the relaunched process boots
+// straight into the new mode: app.relaunch() does NOT carry our in-process env, and a
+// secret must never ride in relaunch argv (it shows up in process listings).
+//
+// Precedence: an explicit CORACLE_PROFILE / OPENROUTER_API_KEY in the environment
+// always wins (dev + power users); the files are only consulted as a fallback. Key
+// access goes through the readKey()/writeKey() seam so a later move to encrypted
+// storage (Electron safeStorage) is a one-spot change.
+// ---------------------------------------------------------------------------
+const CONFIG_HOME =
+  process.env.XDG_CONFIG_HOME || path.join(app.getPath("home"), ".config");
+const CONFIG_DIR = path.join(CONFIG_HOME, "amadocs");
+const MODE_FILE = path.join(CONFIG_DIR, "mode"); // "cloud" | "local"
+const KEY_FILE = path.join(CONFIG_DIR, "openrouter.key");
+// Pre-rebrand key location — read as a fallback so existing installs keep working.
+const LEGACY_KEY_FILE = path.join(CONFIG_HOME, "coracle", "openrouter.key");
+
+function readFileTrim(p) {
+  try {
+    return fs.readFileSync(p, "utf8").trim();
+  } catch (_) {
+    return "";
+  }
+}
+
+// The OpenRouter key: env wins; else the amadocs key file; else the legacy coracle
+// file. Returns "" when unset.
+function readKey() {
+  if (process.env.OPENROUTER_API_KEY)
+    return process.env.OPENROUTER_API_KEY.trim();
+  return readFileTrim(KEY_FILE) || readFileTrim(LEGACY_KEY_FILE);
+}
+
+// Persist a new key (0600) to the amadocs location. Single writer behind the seam.
+function writeKey(key) {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(KEY_FILE, String(key || "").trim() + "\n", { mode: 0o600 });
+}
+
+// The persisted in-app mode ("cloud" | "local"); "" when never set. Env
+// CORACLE_PROFILE overrides this (handled in resolveProfileName).
+function readPersistedMode() {
+  const m = readFileTrim(MODE_FILE).toLowerCase();
+  return m === "cloud" ? "cloud" : m === "local" ? "local" : "";
+}
+function writePersistedMode(mode) {
+  fs.mkdirSync(CONFIG_DIR, { recursive: true });
+  fs.writeFileSync(MODE_FILE, (mode === "cloud" ? "cloud" : "local") + "\n");
+}
+
+// ---------------------------------------------------------------------------
 // First-run setup (packaged only): create the writable storage tree and seed
 // the read-only assets that ship in the bundle but the engine must be able to
 // read from a writable path (the embedder/OCR/reranker models, and a clean
@@ -159,8 +215,12 @@ const MODEL_PROFILES = {
   },
 };
 function resolveProfileName() {
-  const name = (process.env.CORACLE_PROFILE || "lite").toLowerCase();
-  return MODEL_PROFILES[name] ? name : "lite";
+  const envName = (process.env.CORACLE_PROFILE || "").toLowerCase();
+  if (envName && MODEL_PROFILES[envName]) return envName; // env override wins
+  // No env override → the in-app persisted mode. "cloud" → the cloud profile;
+  // "local" (or unset) → the default local profile (lite).
+  if (readPersistedMode() === "cloud") return "cloud";
+  return "lite";
 }
 
 // Per-profile engine env, shared by the packaged and dev launch paths. The cloud
@@ -270,13 +330,19 @@ async function bootEngine() {
   // OpenRouter — Ollama isn't needed, but the key is. Fail loud before boot
   // rather than letting the engine 500 on the first model call.
   const isCloud = resolveProfileName() === "cloud";
+  // Populate the key from disk (env wins) so the engine child + the check below both
+  // see it after an in-app switch to Cloud, where no env var is present.
+  if (isCloud && !process.env.OPENROUTER_API_KEY) {
+    const k = readKey();
+    if (k) process.env.OPENROUTER_API_KEY = k;
+  }
   if (isCloud && !process.env.OPENROUTER_API_KEY) {
     throw new Error(
-      "Cloud profile needs an OpenRouter API key.\n\n" +
-        "AMAdocs was launched with CORACLE_PROFILE=cloud, which sends AI work\n" +
-        "(embeddings, summaries, chat, image analysis) to OpenRouter, but no\n" +
-        "OPENROUTER_API_KEY is set. Get a key at https://openrouter.ai/keys,\n" +
-        "then relaunch with OPENROUTER_API_KEY=<your key>."
+      "Cloud mode needs an OpenRouter API key.\n\n" +
+        "AMAdocs is in Cloud mode, which sends AI work (embeddings, summaries,\n" +
+        "chat, image analysis) to OpenRouter, but no key is set. Get a key at\n" +
+        "https://openrouter.ai/keys, then switch to Cloud from the dashboard and\n" +
+        "paste it — or relaunch with OPENROUTER_API_KEY=<your key>."
     );
   }
   // If a dev stack is already running, reuse it.
@@ -318,6 +384,16 @@ ipcMain.handle("open-folder", async (_e, dirPath) => {
   if (!fs.existsSync(dirPath)) return { ok: false, error: "not-found" };
   const err = await shell.openPath(dirPath); // returns "" on success
   return err ? { ok: false, error: err } : { ok: true };
+});
+
+// Open an external URL in the user's default browser (used by the Cloud dashboard's
+// "Manage this key at OpenRouter" link). Restricted to http(s) so the renderer can't
+// coax the main process into opening arbitrary schemes.
+ipcMain.handle("open-external", async (_e, url) => {
+  if (!url || typeof url !== "string") return { ok: false, error: "no-url" };
+  if (!/^https?:\/\//i.test(url)) return { ok: false, error: "bad-scheme" };
+  await shell.openExternal(url);
+  return { ok: true };
 });
 
 // AMAdocs: native folder picker for the "Sync a folder" flow. Returns the chosen
@@ -406,6 +482,70 @@ ipcMain.handle("read-file", async (_e, filePath) => {
 
 // Phase 2 file tree: return the user's home directory path.
 ipcMain.handle("home-path", () => app.getPath("home"));
+
+// ── AMAdocs mode toggle (Local ⇄ Cloud) ────────────────────────────────────
+// Two incompatible engines with separate indexes → switching is a full relaunch.
+// The UI reads the current mode + whether a key is on file to label the switch
+// button and decide whether to prompt for a key.
+ipcMain.handle("get-mode", () => {
+  const mode = resolveProfileName() === "cloud" ? "cloud" : "local";
+  return { mode, hasKey: !!readKey() };
+});
+
+// Persist a key without switching (first-time entry / rotate). {ok} | {ok:false,error}.
+ipcMain.handle("save-key", (_e, key) => {
+  const k = String(key || "").trim();
+  if (!k) return { ok: false, error: "Empty key." };
+  try {
+    writeKey(k);
+    process.env.OPENROUTER_API_KEY = k;
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+});
+
+// Switch mode → persist choice (+ key for cloud) then relaunch. Cloud requires a
+// key, passed in here or already on disk. Returns {ok} synchronously; the relaunch
+// fires just after so this IPC reply reaches the renderer first.
+ipcMain.handle("switch-mode", async (_e, arg = {}) => {
+  const target = arg && arg.mode === "cloud" ? "cloud" : "local";
+  if (target === "cloud") {
+    const k = String((arg && arg.key) || "").trim() || readKey();
+    if (!k) return { ok: false, error: "Cloud mode needs an OpenRouter key." };
+    try {
+      writeKey(k);
+    } catch (e) {
+      return { ok: false, error: e.message };
+    }
+  }
+  try {
+    writePersistedMode(target);
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+  setTimeout(() => relaunchIntoMode(), 150);
+  return { ok: true };
+});
+
+// The documented trap: if we relaunch before the old engine is down, the fresh
+// instance pings :3001, finds the dying old-mode server still up, and reuses it —
+// booting the WRONG mode. So SIGTERM our children, wait for :3001 to actually stop
+// answering, SIGKILL any survivor, then relaunch.
+async function relaunchIntoMode() {
+  shutdown(); // SIGTERM the engine (+ any ollama we spawned)
+  for (let i = 0; i < 40; i++) {
+    if (!(await ping("http://127.0.0.1:3001/api/ping"))) break;
+    await wait(250);
+  }
+  for (const c of children) {
+    try {
+      c.kill("SIGKILL");
+    } catch (_) {}
+  }
+  app.relaunch();
+  app.exit(0);
+}
 
 // AMAdocs: browser-style zoom for the whole UI. The native menu bar is hidden,
 // so the default View-menu zoom accelerators don't run — wire zoom directly on

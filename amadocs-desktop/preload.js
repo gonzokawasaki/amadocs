@@ -19,6 +19,9 @@ contextBridge.exposeInMainWorld("amadocs", {
   // stores your files," so a user can always find their docs on their own disk.
   openFolder: (dirPath) => ipcRenderer.invoke("open-folder", dirPath),
 
+  // Open an http(s) URL in the user's default browser (Cloud dashboard "manage key" link).
+  openExternal: (url) => ipcRenderer.invoke("open-external", url),
+
   // Native folder picker for the "Sync a folder" flow → resolves to the chosen
   // absolute directory path, or null if the user cancelled.
   pickFolder: () => ipcRenderer.invoke("pick-folder"),
@@ -33,6 +36,13 @@ contextBridge.exposeInMainWorld("amadocs", {
   // Phase 2 preview: read a local file's raw bytes so the UI can preview ANY file,
   // indexed or not. Resolves to {ok, data:<base64>, mime} or {ok:false, error}.
   readFile: (filePath) => ipcRenderer.invoke("read-file", filePath),
+
+  // Mode toggle (Local ⇄ Cloud). getMode → {mode, hasKey} for labelling the switch
+  // button; switchMode persists the choice (+ key for cloud) and triggers a full app
+  // relaunch into the new mode; saveKey stores/rotates the key without switching.
+  getMode: () => ipcRenderer.invoke("get-mode"),
+  switchMode: (mode, key) => ipcRenderer.invoke("switch-mode", { mode, key }),
+  saveKey: (key) => ipcRenderer.invoke("save-key", key),
 
   // Resolve the real filesystem path of a dropped/chosen File.
   // webUtils.getPathForFile is the sandbox-safe replacement for the old File.path.
