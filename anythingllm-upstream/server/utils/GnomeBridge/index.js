@@ -53,6 +53,22 @@ const MAX_PACE_MS = 600000; // 10 min ceiling — past this a backfill is effect
 const clampPace = (n) =>
   Number.isFinite(n) ? Math.min(MAX_PACE_MS, Math.max(0, Math.round(n))) : null;
 
+// The tiny persisted settings blob (pace + suspend). Read-merge-write so adding one
+// key never clobbers another. Missing/corrupt file → {}.
+function readSettings() {
+  try {
+    return JSON.parse(fs.readFileSync(settingsFile, "utf8")) || {};
+  } catch (_) {
+    return {};
+  }
+}
+function writeSettings(patch) {
+  fs.mkdirSync(syncStateDir, { recursive: true });
+  const merged = { ...readSettings(), ...patch };
+  fs.writeFileSync(settingsFile, JSON.stringify(merged, null, 2));
+  return merged;
+}
+
 // Effective per-doc rest in ms. Precedence: the user's saved slider value > an explicit
 // GNOME_SYNC_COOLDOWN_MS launch override (back-compat) > the conservative default.
 function getPaceMs() {
@@ -67,13 +83,8 @@ function getPaceMs() {
     const cloudPace = clampPace(Number(process.env.CLOUD_PACE_MS));
     return cloudPace !== null ? cloudPace : 1000;
   }
-  try {
-    const saved = JSON.parse(fs.readFileSync(settingsFile, "utf8"))?.summaryCooldownMs;
-    const c = clampPace(Number(saved));
-    if (c !== null) return c;
-  } catch (_) {
-    /* no saved setting yet — fall through */
-  }
+  const saved = clampPace(Number(readSettings().summaryCooldownMs));
+  if (saved !== null) return saved;
   const env = clampPace(Number(process.env.GNOME_SYNC_COOLDOWN_MS));
   return env !== null ? env : DEFAULT_PACE_MS;
 }
@@ -82,9 +93,20 @@ function getPaceMs() {
 function setPaceMs(ms) {
   const c = clampPace(Number(ms));
   if (c === null) throw new Error("pace must be a number of milliseconds");
-  fs.mkdirSync(syncStateDir, { recursive: true });
-  fs.writeFileSync(settingsFile, JSON.stringify({ summaryCooldownMs: c }, null, 2));
+  writeSettings({ summaryCooldownMs: c });
   return c;
+}
+
+// AMAdocs: "suspend background indexing" — persisted so a relaunch during a file reorg
+// doesn't quietly resume paid cloud ingest. This is the DURABLE intent; the in-memory
+// ingestPaused latch (EmbeddingWorkerManager) is what actually gates the cadence loop
+// and drain, and is seeded FROM this at boot (utils/boot).
+function isIngestSuspended() {
+  return !!readSettings().ingestSuspended;
+}
+function setIngestSuspended(on) {
+  writeSettings({ ingestSuspended: !!on });
+  return !!on;
 }
 
 function sparql(query) {
@@ -1203,5 +1225,5 @@ module.exports = {
   buildDoc, writeDoc, materialize, materializeViaCollector, pathToFileUrl,
   loadState, saveState, computeDelta, docSubfolder,
   listSyncedSlugs, runSync, backstopFile, resummarize, summaryStats, indexedDocCount,
-  getPaceMs, setPaceMs, upsertSummaryVectors,
+  getPaceMs, setPaceMs, isIngestSuspended, setIngestSuspended, upsertSummaryVectors,
 };

@@ -12,6 +12,18 @@ const { TelegramBotService } = require("../telegramBot");
 // the OS indexer is unreachable). See utils/GnomeBridge/cadence.
 const GnomeCadence = require("../GnomeBridge/cadence");
 
+// AMAdocs: honor a persisted "suspend background indexing" choice across relaunch so the
+// cadence boot-resume doesn't silently resume paid cloud (or hot local) ingest that the
+// user paused while reorganising files. Seeds the in-memory latch BEFORE cadence starts.
+function seedIngestSuspend() {
+  try {
+    if (require("../GnomeBridge").isIngestSuspended())
+      require("../EmbeddingWorkerManager").setIngestPaused(true);
+  } catch (_) {
+    /* non-GNOME box or bridge unavailable — nothing to seed */
+  }
+}
+
 // Testing SSL? You can make a self signed certificate and point the ENVs to that location
 // make a directory in server called 'sslcert' - cd into it
 // - openssl genrsa -aes256 -passout pass:gsahdg -out server.pass.key 4096
@@ -43,6 +55,7 @@ function bootSSL(app, port = 3001) {
         await eagerLoadContextWindows();
         await PushNotifications.setupPushNotificationService();
         await TelegramBotService.bootIfActive();
+        seedIngestSuspend();
         GnomeCadence.start();
         console.log(`Primary server in HTTPS mode listening on port ${port}`);
       })
@@ -77,6 +90,7 @@ function bootHTTP(app, port = 3001) {
       await eagerLoadContextWindows();
       await PushNotifications.setupPushNotificationService();
       await TelegramBotService.bootIfActive();
+      seedIngestSuspend();
       GnomeCadence.start();
       console.log(`Primary server in HTTP mode listening on port ${port}`);
     })

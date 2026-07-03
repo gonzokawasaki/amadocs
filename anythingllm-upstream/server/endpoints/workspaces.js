@@ -258,6 +258,13 @@ async function buildAmadocsStatus() {
   } catch (_) {
     /* keep the default if the bridge can't report it */
   }
+  // AMAdocs: whether the user has suspended background indexing (Cloud dashboard toggle).
+  let ingestSuspended = false;
+  try {
+    ingestSuspended = Gnome.isIngestSuspended();
+  } catch (_) {
+    /* default to "running" if the bridge can't report it */
+  }
 
   // Library headline = the real searchable corpus (GNOME-indexed files). Fall back to the
   // workspace_documents count only when nothing is synced (drag-drop-upload-only setup), so a
@@ -282,6 +289,7 @@ async function buildAmadocsStatus() {
     summaries,
     synced,
     pace: { summaryCooldownMs: paceMs },
+    ingestSuspended, // user paused background indexing (survives relaunch)
     cloud, // null in local mode or if the usage lookup failed
   };
 
@@ -2410,6 +2418,32 @@ function workspaceEndpoints(app) {
         response.status(200).json({ ok: true, pace: { summaryCooldownMs: stored } });
       } catch (e) {
         console.error("[amadocs-settings] error:", e);
+        response.status(400).json({ ok: false, error: e.message });
+      }
+    }
+  );
+
+  // AMAdocs: SUSPEND / RESUME background indexing (Cloud dashboard toggle). When a user is
+  // reorganising files, the resulting churn would otherwise trigger paid re-indexing/
+  // re-summarising; this latches ingest off AND drops any in-flight work, persisted so a
+  // relaunch mid-reorg stays paused. On-demand chat & search are untouched — only the
+  // automatic background pipeline is halted. Resume clears the latch; the cadence tick
+  // catches up on the next pass. Body: { suspended: boolean }.
+  app.post(
+    "/amadocs-suspend-ingest",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { suspended } = reqBody(request);
+        const on = !!suspended;
+        const Gnome = require("../utils/GnomeBridge");
+        const Embed = require("../utils/EmbeddingWorkerManager");
+        Gnome.setIngestSuspended(on); // persist the durable intent
+        if (on) Embed.stopAll(); // latch ingestPaused + drop in-flight workers
+        else Embed.setIngestPaused(false); // clear the latch; cadence catches up next tick
+        response.status(200).json({ ok: true, ingestSuspended: on });
+      } catch (e) {
+        console.error("[amadocs-suspend-ingest] error:", e);
         response.status(400).json({ ok: false, error: e.message });
       }
     }
