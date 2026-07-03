@@ -45,6 +45,13 @@ class OpenRouterLLM {
     });
     this.model =
       modelPreference || process.env.OPENROUTER_MODEL_PREF || "openrouter/auto";
+    // AMAdocs: zero-data-retention routing. Cloud mode sends the user's documents
+    // off-box, so by default we restrict OpenRouter to providers that don't store
+    // the payload (`data_collection: "deny"`). Overridable to "allow" because ZDR
+    // shrinks the routable provider set and a few models only have data-collecting
+    // endpoints — relaxing it lets those still work.
+    this.zdrProvider =
+      process.env.AMADOCS_ZDR === "allow" ? null : { data_collection: "deny" };
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -258,6 +265,8 @@ class OpenRouterLLM {
           // before the token text.
           include_reasoning: true,
           user: user?.id ? `user_${user.id}` : "",
+          // AMAdocs: zero-data-retention routing (see constructor).
+          ...(this.zdrProvider ? { provider: this.zdrProvider } : {}),
         })
         .catch((e) => {
           throw new Error(e.message);
@@ -310,6 +319,8 @@ class OpenRouterLLM {
         // before the token text.
         include_reasoning: true,
         user: user?.id ? `user_${user.id}` : "",
+        // AMAdocs: zero-data-retention routing (see constructor).
+        ...(this.zdrProvider ? { provider: this.zdrProvider } : {}),
       }),
       messages,
       // OpenRouter returns the usage in the stream as the very last chunk **after** the finish reason.

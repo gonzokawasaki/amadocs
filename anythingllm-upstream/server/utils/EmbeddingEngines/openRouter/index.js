@@ -15,6 +15,10 @@ class OpenRouterEmbedder {
       },
     });
     this.model = process.env.EMBEDDING_MODEL_PREF || "baai/bge-m3";
+    // AMAdocs: zero-data-retention routing for the embedding payload too — same
+    // default-deny policy as the chat provider (override with AMADOCS_ZDR=allow).
+    this.zdrProvider =
+      process.env.AMADOCS_ZDR === "allow" ? null : { data_collection: "deny" };
 
     // Limit of how many strings we can process in a single pass to stay with resource or network limits
     this.maxConcurrentChunks = 500;
@@ -45,6 +49,8 @@ class OpenRouterEmbedder {
             .create({
               model: this.model,
               input: chunk,
+              // AMAdocs: zero-data-retention routing (see constructor).
+              ...(this.zdrProvider ? { provider: this.zdrProvider } : {}),
             })
             .then((result) => {
               chunksProcessed += chunk.length;
