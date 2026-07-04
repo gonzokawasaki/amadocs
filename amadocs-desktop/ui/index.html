@@ -2078,7 +2078,11 @@ function renderCloudHomeHtml(d){
       <div class="home-incompat__body"><strong>This is the Cloud index — separate from Private/local.</strong>
         Cloud embeddings are 1024-dim (bge-m3); local are 384-dim. The two corpora can't be shared, so
         <strong>switching to Private/local mode means rebuilding the index from scratch</strong> in that mode.
-        <div class="home-incompat__act"><button class="home-switch" onclick="openModeSwitch('local')">🔒 Switch to Private / local…</button></div></div>
+        <!-- TOGGLE DROPPED (2026-07-04): cloud-first build — the Local⇄Cloud switch is hidden,
+             not deleted, so local is no longer a user-facing option. openModeSwitch()/the switch-mode
+             IPC/relaunchIntoMode all remain intact; re-enable the toggle by un-commenting this button. -->
+        <!-- <div class="home-incompat__act"><button class="home-switch" onclick="openModeSwitch('local')">🔒 Switch to Private / local…</button></div> -->
+        </div>
     </div>
     <div class="home-sec home-sec--pace"><h3 class="home-h">Cloud usage</h3>${renderCloudPanel(d.cloud)}${renderSuspendToggle(d)}</div>
     <div class="home-cards">${homeCardsHtml(d)}</div>

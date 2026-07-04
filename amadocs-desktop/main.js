@@ -216,11 +216,13 @@ const MODEL_PROFILES = {
 };
 function resolveProfileName() {
   const envName = (process.env.CORACLE_PROFILE || "").toLowerCase();
-  if (envName && MODEL_PROFILES[envName]) return envName; // env override wins
-  // No env override → the in-app persisted mode. "cloud" → the cloud profile;
-  // "local" (or unset) → the default local profile (lite).
-  if (readPersistedMode() === "cloud") return "cloud";
-  return "lite";
+  if (envName && MODEL_PROFILES[envName]) return envName; // env override wins (dev/local escape hatch)
+  // CLOUD IS DEFAULT (2026-07-04, cloud-first build): with the Local⇄Cloud toggle dropped,
+  // there is no user-facing local option, so we default to cloud regardless of any previously
+  // persisted mode. Local remains reachable ONLY via CORACLE_PROFILE=lite|gemma (dev / future
+  // toggle re-enable). ⚠️ Cloud hard-fails at boot without an OpenRouter key (see below) — fine
+  // on a keyed machine; a first-run key-onboarding path is still owed before wider distribution.
+  return "cloud";
 }
 
 // Per-profile engine env, shared by the packaged and dev launch paths. The cloud
