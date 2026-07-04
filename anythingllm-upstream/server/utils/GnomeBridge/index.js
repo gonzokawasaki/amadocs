@@ -249,10 +249,20 @@ ORDER BY ?u`;
 //    legacy binary office — GNOME mis-routes the extractor and stores no text.
 //  • PDFs with no text layer (scanned / image-only) — GNOME does poppler text only;
 //    the collector's asPDF falls back to OCR (ocrPDF).
-// Images are deliberately NOT here: they're the on-demand right-click path (vision
-// captioning is heavy), handled by backstopFile, not bulk folder sync.
+// Images are NOT in BACKSTOP_EXTS because they need OCR-vs-vision routing distinct
+// from office/PDF, but they are NO LONGER manual-only: queryImages (below) adds them
+// to the same bulk folder sync via the collector's asImage (OCR + vision caption) —
+// one unified ingestion. They still ride the same `exclude` (cloud opt-out) clause, so
+// an opt-out folder never auto-uploads image bytes. The right-click backstopFile path
+// stays for on-demand / re-analyse. Kill switch: GNOME_IMAGE_INGEST_DISABLED=1.
 const BACKSTOP_EXTS = [
   ".docx", ".xlsx", ".pptx", ".doc", ".xls", ".ppt", ".pdf",
+];
+
+// Image extensions the collector's asImage extractor handles (OCR + vision caption).
+// Auto-ingested through queryImages → the collector materializer, unless disabled.
+const IMAGE_EXTS = [
+  ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".tif", ".tiff",
 ];
 
 // Sibling of queryFileList for the GNOME blind spots: every file under `folder` with a
@@ -278,6 +288,40 @@ WHERE {
   OPTIONAL { ?do nfo:fileSize ?sz }
   FILTER(STRSTARTS(STR(?u), "file://${folder}/"))
   FILTER NOT EXISTS { ?ie nie:plainTextContent ?anytext . FILTER(STR(?anytext) != "") }
+  FILTER(${extFilter})
+  ${excludeClause(exclude)}
+}
+GROUP BY ?u ?mime
+ORDER BY ?u`;
+  return parseRows(sparql(q))
+    .map((r) => {
+      const [url, mtime, mime, size] = r.split(US);
+      return { url, mtime: mtime || "", mime: mime || "", size: size ? Number(size) : null };
+    })
+    .filter((x) => x.url);
+}
+
+// Sibling of queryBlindSpots for images. GNOME catalogues image files (nie:url +
+// nfo:fileSize + fileLastModified) but stores no usable text for them, so they never
+// appear in queryFileList and — being outside BACKSTOP_EXTS — never in queryBlindSpots
+// either. This lists every image under `folder` by extension so runSync can route them
+// through the collector (asImage = OCR + vision caption), making them searchable
+// automatically. No plainTextContent gate (images legitimately have none). Rides the
+// same excludeClause as the others, so a cloud-opt-out folder is skipped here too.
+// Returns [{ url, mtime, mime, size }], matching queryBlindSpots.
+function queryImages({ folder, exclude }) {
+  const extFilter = IMAGE_EXTS
+    .map((e) => `STRENDS(LCASE(STR(?u)), "${e}")`)
+    .join(" || ");
+  const q = `
+SELECT (CONCAT(STR(?u), "${US}", COALESCE(MAX(STR(?m)), ""), "${US}", COALESCE(STR(?mime), ""), "${US}", COALESCE(MAX(STR(?sz)), "")) AS ?row)
+WHERE {
+  ?ie nie:isStoredAs ?do .
+  ?do nie:url ?u .
+  OPTIONAL { ?do nfo:fileLastModified ?m }
+  OPTIONAL { ?ie nie:mimeType ?mime }
+  OPTIONAL { ?do nfo:fileSize ?sz }
+  FILTER(STRSTARTS(STR(?u), "file://${folder}/"))
   FILTER(${extFilter})
   ${excludeClause(exclude)}
 }
@@ -671,13 +715,23 @@ async function runSync(opts = {}) {
   const blindSpots = queryBlindSpots({ folder, exclude }).filter(
     (b) => !textUrls.has(b.url)
   );
+  // Images join the SAME bulk sync (one unified ingestion) via the collector's asImage
+  // OCR/vision path — the exact materializer the right-click backstop uses. Opt-out with
+  // GNOME_IMAGE_INGEST_DISABLED. De-dup against text + blind-spot urls (an image never
+  // has GNOME text or a backstop ext, so overlap is only theoretical, but keep it safe).
+  const seenUrls = new Set([...textUrls, ...blindSpots.map((b) => b.url)]);
+  const images = process.env.GNOME_IMAGE_INGEST_DISABLED
+    ? []
+    : queryImages({ folder, exclude }).filter((i) => !seenUrls.has(i.url));
   const sourceByUrl = new Map([
     ...textFiles.map((f) => [f.url, "gnome"]),
     ...blindSpots.map((f) => [f.url, "collector"]),
+    ...images.map((f) => [f.url, "collector"]),
   ]);
   const current = [
     ...textFiles.map((f) => ({ url: f.url, mtime: f.mtime, size: f.size })),
     ...blindSpots.map((f) => ({ url: f.url, mtime: f.mtime, size: f.size })),
+    ...images.map((f) => ({ url: f.url, mtime: f.mtime, size: f.size })),
   ];
   const prevState = loadState(slug);
 
@@ -1246,7 +1300,7 @@ function indexedDocCount(slug) {
 }
 
 module.exports = {
-  available, ensureIndexer, queryFileList, queryBlindSpots, fetchMeta, fetchText,
+  available, ensureIndexer, queryFileList, queryBlindSpots, queryImages, fetchMeta, fetchText,
   buildDoc, writeDoc, materialize, materializeViaCollector, pathToFileUrl,
   loadState, saveState, computeDelta, docSubfolder,
   listSyncedSlugs, activeLibrarySlug, cadenceSlugs,
