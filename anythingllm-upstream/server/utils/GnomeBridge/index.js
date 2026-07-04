@@ -579,6 +579,31 @@ function listSyncedSlugs() {
   }
 }
 
+// AMAdocs: the active mode's library slug. Mirrors the server's resolveModeAndSlug
+// (endpoints/workspaces.js) — duplicated here (provider-only, same as there) so the
+// background cadence can mode-scope itself without importing an endpoint module. Cloud
+// (bge-m3, 1024-dim) and local (MiniLM, 384-dim) vectors CANNOT share a LanceDB table:
+// embedding into the other mode's table dimension-errors ("does not have sufficient
+// data, len: 0") and silently corrupts it. Keep the two resolvers in lockstep.
+function activeLibrarySlug() {
+  return (process.env.LLM_PROVIDER || "").toLowerCase() === "openrouter"
+    ? process.env.CLOUD_LIBRARY_SLUG || "amadocs-cloud-library"
+    : "amadocs-library";
+}
+
+// Folder-sync slugs the BACKGROUND cadence may safely resume: ONLY the current mode's
+// library slug (and only if it has a saved state). Deliberately excludes every other
+// on-disk state — stale eval corpora (teaching-cloud / stem-cloud / cloud-eval) and,
+// critically, the OTHER mode's library, whose table was built at a different vector
+// dimension. Without this, cloud mode resumes the local `amadocs-library` state and the
+// OpenRouter embedder writes 1024-dim vectors into its 384-dim table → LanceError +
+// corruption, and the cloud library never fills. Manual, user-initiated syncs pass their
+// slug explicitly (URL param) and are unaffected by this scoping.
+function cadenceSlugs() {
+  const active = activeLibrarySlug();
+  return listSyncedSlugs().filter((s) => s === active);
+}
+
 // AMAdocs: one in-flight sync per folder. The EXECUTE loop can run for a long time at a
 // gentle indexing pace, and for most of it NO embed worker is active — so without this a
 // cadence tick (which only guards on Embed.hasRunningWorker) could start a SECOND pass over
@@ -1224,6 +1249,7 @@ module.exports = {
   available, ensureIndexer, queryFileList, queryBlindSpots, fetchMeta, fetchText,
   buildDoc, writeDoc, materialize, materializeViaCollector, pathToFileUrl,
   loadState, saveState, computeDelta, docSubfolder,
-  listSyncedSlugs, runSync, backstopFile, resummarize, summaryStats, indexedDocCount,
+  listSyncedSlugs, activeLibrarySlug, cadenceSlugs,
+  runSync, backstopFile, resummarize, summaryStats, indexedDocCount,
   getPaceMs, setPaceMs, isIngestSuspended, setIngestSuspended, upsertSummaryVectors,
 };

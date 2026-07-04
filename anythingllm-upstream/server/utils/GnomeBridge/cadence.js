@@ -64,7 +64,10 @@ async function tick() {
       return true;
     }
 
-    const slugs = Gnome.listSyncedSlugs();
+    // MODE-SCOPED: only the current mode's library slug (see Gnome.cadenceSlugs).
+    // Resuming another mode's / an eval slug here would embed at the wrong vector
+    // dimension and corrupt its LanceDB table (cloud bge-m3 1024 vs local MiniLM 384).
+    const slugs = Gnome.cadenceSlugs();
     if (slugs.length === 0) return false;
 
     for (const slug of slugs) {
