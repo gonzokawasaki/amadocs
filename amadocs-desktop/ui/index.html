@@ -725,6 +725,44 @@
     .rfr-snip em { color:var(--accent-text); font-style:normal; }
     .rfr-meta { color:var(--text-faint); font-size:0.71rem; margin-top:0.29rem; }
 
+    /* ── RESULTS VIEW (middle): master list + live preview detail ───────────
+       Semantic-search hits render here instead of the cramped right REPL, so the
+       existing preview renderer (renderOriginalInto / renderFromDisk) can show the
+       selected file full-size — "let me SEE it" is how you tell the right doc from
+       a snippet. Master list on the left; detail = a real .docarea preview. */
+    .results-split  { flex:1; display:flex; min-height:0; }
+    .results-master {
+      width:19.3rem; flex:none; overflow-y:auto;
+      border-right:1px solid var(--border); background:var(--bg-alt); padding:0.5rem;
+    }
+    .results-detail { flex:1; min-width:0; display:flex; flex-direction:column; }
+    .results-hdr {
+      height:2.43rem; flex:none; display:flex; align-items:center; gap:0.71rem;
+      padding:0 1rem; background:var(--bg-alt); border-bottom:1px solid var(--border);
+      font-size:0.82rem; user-select:none;
+    }
+    .results-hdr__name { color:var(--text); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:22rem; }
+    .results-hdr__fill { flex:1; }
+    .results-hdr__open {
+      height:1.57rem; padding:0 0.6rem; background:none; border:1px solid var(--border);
+      color:var(--text-faint); font-family:inherit; font-size:0.75rem;
+      border-radius:var(--radius-sm); cursor:pointer; white-space:nowrap; transition:all .1s;
+    }
+    .results-hdr__open:hover { color:var(--text); border-color:var(--text-muted); }
+    .res-card {
+      padding:0.5rem 0.6rem; border:1px solid transparent; border-radius:var(--radius-sm);
+      cursor:pointer; margin-bottom:0.29rem; transition: border-color .1s, background .1s;
+    }
+    .res-card:hover { background:var(--bg-hover); }
+    .res-card.sel  { border-color:var(--accent); background:var(--bg-hover); }
+    .res-name { color:var(--text); font-size:0.79rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .res-snip {
+      color:var(--text-muted); font-size:0.75rem; margin-top:0.14rem; line-height:1.35;
+      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
+    }
+    .res-snip em { color:var(--accent-text); font-style:normal; }
+    .res-meta { color:var(--text-faint); font-size:0.71rem; margin-top:0.29rem; }
+
     /* thinking note while an answer streams (carried from Phase 1) */
     .repl-thinking { color:var(--text-faint); font-size:0.79rem; padding-left:0.86rem; }
     .repl-thinking .warm-t { font-variant-numeric:tabular-nums; font-weight:600; color:var(--accent); margin-left:0.43rem; }
@@ -1193,6 +1231,25 @@
               attributable to the new runbook automation deployed in Q1. No incidents
               resulted in customer data loss.</p>
             <div class="p-folio">— 1 —</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- RESULTS VIEW — semantic-search hits: master list + live preview -->
+      <div class="view hidden" id="viewResults">
+        <div class="results-split">
+          <div class="results-master" id="resultsMaster"></div>
+          <div class="results-detail">
+            <div class="results-hdr">
+              <span class="back-btn" onclick="showFolder()">‹ <span id="resultsBackLabel">folder</span></span>
+              <span class="results-hdr__name" id="resultsName">—</span>
+              <span class="results-hdr__fill"></span>
+              <span class="folder-hdr__count" id="resultsCount"></span>
+              <button class="results-hdr__open" id="resultsOpen" onclick="openCurrentResult()">open ↗</button>
+            </div>
+            <div class="docarea" id="resultsDocarea">
+              <div class="vnote" style="margin:2rem">Ask about this folder to see matching files here.</div>
+            </div>
           </div>
         </div>
       </div>
@@ -2156,6 +2213,7 @@ async function showStatusDoc(){
   pushHist({type:"home", path:null});
   view.filePath=null; view.fileName=null;
   $("#viewFolder")?.classList.add("hidden");
+  $("#viewResults")?.classList.add("hidden");
   $("#viewPreview")?.classList.remove("hidden");
   const backBtn=$(".back-btn"); if(backBtn) backBtn.textContent="‹ Dashboard";
   const activeTab=$(".tab.tab-active"); if(activeTab) activeTab.innerHTML='<span class="icon-md">⌂</span> Dashboard';
@@ -2452,6 +2510,7 @@ function setView(v) {
 // results call these to return to the active folder.
 function showFile() {
   $("#viewFolder").classList.add('hidden');
+  $("#viewResults")?.classList.add('hidden');
   $("#viewPreview").classList.remove('hidden');
   $("#replFolder").classList.add('hidden');
   $("#replFile").classList.remove('hidden');
@@ -2460,11 +2519,57 @@ function showFile() {
 }
 function showFolder() {
   $("#viewPreview").classList.add('hidden');
+  $("#viewResults")?.classList.add('hidden');
   $("#viewFolder").classList.remove('hidden');
   $("#replFile").classList.add('hidden');
   $("#replFolder").classList.remove('hidden');
   $("#replScope").textContent = view.folderName ? `— ${view.folderName}/ folder` : '— folder';
   $("#replInput").placeholder = 'ask about this folder…';
+}
+/* RESULTS VIEW — semantic hits render in the middle so the preview identifies the
+   file. Peer of folder/preview; the folder-scope REPL stays live on the right. */
+const resultsState = { cards: [], sel: -1 };
+function showResults() {
+  $("#viewFolder").classList.add('hidden');
+  $("#viewPreview").classList.add('hidden');
+  $("#viewResults").classList.remove('hidden');
+  // keep the folder-scope REPL panel active (search is a folder-scoped ask)
+  $("#replFile").classList.add('hidden');
+  $("#replFolder").classList.remove('hidden');
+}
+function renderResultsView(cards, query) {
+  resultsState.cards = cards; resultsState.sel = -1;
+  $("#resultsBackLabel").textContent = view.folderName ? `${view.folderName}/` : 'folder';
+  $("#resultsCount").textContent = `${cards.length} result${cards.length===1?'':'s'} · “${query}”`;
+  const master = $("#resultsMaster");
+  master.innerHTML = cards.map((c,i)=>
+    `<div class="res-card" data-i="${i}">
+       <div class="res-name">${esc(baseName(c.nm)||c.nm)}</div>
+       ${c.snip?`<div class="res-snip">…${esc(c.snip)}…</div>`:""}
+       <div class="res-meta">${esc(c.ai.chipLabel||"")}${c.scoreStr}</div>
+     </div>`).join("");
+  master.querySelectorAll(".res-card").forEach(el =>
+    el.addEventListener("click", () => selectResult(+el.dataset.i)));
+  showResults();
+  if (cards.length) selectResult(0);   // auto-preview the top hit
+}
+function selectResult(i) {
+  const c = resultsState.cards[i]; if (!c) return;
+  resultsState.sel = i;
+  $("#resultsMaster").querySelectorAll(".res-card")
+    .forEach((el,j)=> el.classList.toggle("sel", j===i));
+  const name = baseName(c.nm) || c.nm;
+  $("#resultsName").textContent = name;
+  const da = $("#resultsDocarea"); if (!da) return;
+  const docEntry = c.sp ? docIndex.get(c.sp) : null;
+  if (docEntry && docEntry.docpath)         renderOriginalInto(da, docEntry.docpath, { targetText: c.snip || "" });
+  else if (c.sp && desktop && desktop.readFile) renderFromDisk(da, c.sp, name);
+  else da.innerHTML = `<div class="vnote" style="margin:2rem">No preview available for this result.</div>`;
+}
+function openCurrentResult() {
+  const c = resultsState.cards[resultsState.sel]; if (!c || !c.sp) return;
+  const ent = entryIndex.get(c.sp) || { name: baseName(c.sp), isDir:false };
+  showFilePreview(c.sp, baseName(c.sp), ent);   // full preview + file-scoped chat
 }
 
 /* ---- REPL input auto-grow ---- */
@@ -3198,24 +3303,13 @@ async function runRepl(){
           const pageStr=s.chunkSource?"":""  // page info not reliable without doc-view
           cards.push({nm,sp,ai,snip,scoreStr,s});
         }
-        const listEl=document.createElement("div");
-        listEl.innerHTML=cards.map((c,i)=>
-          `<div class="repl-folder-result" data-ci="${i}" style="cursor:pointer">
-             <div class="rfr-name">${esc(baseName(c.nm)||c.nm)}</div>
-             ${c.snip?`<div class="rfr-snip">…${esc(c.snip)}…</div>`:""}
-             <div class="rfr-meta">${esc(c.ai.chipLabel||"")}${c.scoreStr}</div>
-           </div>`
-        ).join("");
-        listEl.querySelectorAll(".repl-folder-result").forEach((el,i)=>{
-          el.addEventListener("click",()=>{
-            const c=cards[i]; if(!c || !c.sp) return;
-            const ent=entryIndex.get(c.sp)||{name:baseName(c.sp),isDir:false};
-            showFilePreview(c.sp, baseName(c.sp), ent);
-          });
-        });
-        exchange.appendChild(listEl);
+        // Results render in the MIDDLE (viewResults) so the live preview identifies
+        // the right file; the REPL keeps a compact provenance line + a way back to them.
+        renderResultsView(cards, msg);
         const provEl=document.createElement("div"); provEl.className="provenance";
-        provEl.textContent=`↳ ${cards.length} file${cards.length===1?"":"s"} found`;
+        provEl.innerHTML=`↳ ${cards.length} file${cards.length===1?"":"s"} found · `+
+          `<span class="prov-link" data-showres="1" style="cursor:pointer">shown in results</span>`;
+        provEl.querySelector("[data-showres]")?.addEventListener("click", showResults);
         exchange.appendChild(provEl);
       }
     }
