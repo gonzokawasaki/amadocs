@@ -366,9 +366,9 @@
       padding:0.07rem 0.43rem; border-radius:var(--radius-xs);
       letter-spacing:.03em; white-space:nowrap;
     }
-    .ai-deep    { background:var(--accent-bg);           color:var(--accent);     border:1px solid rgba(94,194,106,0.2); }
-    .ai-catalog { background:rgba(94,194,106,0.07);      color:var(--accent-text);border:1px solid rgba(94,194,106,0.12); }
-    .ai-analyse { background:rgba(217,177,74,0.1);       color:var(--amber);      border:1px solid rgba(217,177,74,0.2); }
+    /* Two states only — the single ingestion means a file is either in the library
+       (indexed) or not yet (pending). The old deep/catalog/analyse split is retired. */
+    .ai-indexed { background:var(--accent-bg);           color:var(--accent);     border:1px solid rgba(94,194,106,0.2); }
     .ai-pending { background:transparent;                color:var(--text-faint); border:1px solid var(--border); }
 
     /* ── FILE GRID ────────────────────────────────────────────────────── */
@@ -407,7 +407,6 @@
       display:-webkit-box; -webkit-line-clamp:4; -webkit-box-orient:vertical; overflow:hidden;
     }
     .fc-summary.empty   { color:var(--text-faint); font-style:italic; }
-    .fc-summary.analyse { color:var(--amber); }
 
     .fc-foot {
       padding: 0.43rem 0.71rem; border-top:1px solid var(--border);
@@ -725,44 +724,6 @@
     .rfr-snip em { color:var(--accent-text); font-style:normal; }
     .rfr-meta { color:var(--text-faint); font-size:0.71rem; margin-top:0.29rem; }
 
-    /* ── RESULTS VIEW (middle): master list + live preview detail ───────────
-       Semantic-search hits render here instead of the cramped right REPL, so the
-       existing preview renderer (renderOriginalInto / renderFromDisk) can show the
-       selected file full-size — "let me SEE it" is how you tell the right doc from
-       a snippet. Master list on the left; detail = a real .docarea preview. */
-    .results-split  { flex:1; display:flex; min-height:0; }
-    .results-master {
-      width:19.3rem; flex:none; overflow-y:auto;
-      border-right:1px solid var(--border); background:var(--bg-alt); padding:0.5rem;
-    }
-    .results-detail { flex:1; min-width:0; display:flex; flex-direction:column; }
-    .results-hdr {
-      height:2.43rem; flex:none; display:flex; align-items:center; gap:0.71rem;
-      padding:0 1rem; background:var(--bg-alt); border-bottom:1px solid var(--border);
-      font-size:0.82rem; user-select:none;
-    }
-    .results-hdr__name { color:var(--text); font-weight:500; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; max-width:22rem; }
-    .results-hdr__fill { flex:1; }
-    .results-hdr__open {
-      height:1.57rem; padding:0 0.6rem; background:none; border:1px solid var(--border);
-      color:var(--text-faint); font-family:inherit; font-size:0.75rem;
-      border-radius:var(--radius-sm); cursor:pointer; white-space:nowrap; transition:all .1s;
-    }
-    .results-hdr__open:hover { color:var(--text); border-color:var(--text-muted); }
-    .res-card {
-      padding:0.5rem 0.6rem; border:1px solid transparent; border-radius:var(--radius-sm);
-      cursor:pointer; margin-bottom:0.29rem; transition: border-color .1s, background .1s;
-    }
-    .res-card:hover { background:var(--bg-hover); }
-    .res-card.sel  { border-color:var(--accent); background:var(--bg-hover); }
-    .res-name { color:var(--text); font-size:0.79rem; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .res-snip {
-      color:var(--text-muted); font-size:0.75rem; margin-top:0.14rem; line-height:1.35;
-      display:-webkit-box; -webkit-line-clamp:2; -webkit-box-orient:vertical; overflow:hidden;
-    }
-    .res-snip em { color:var(--accent-text); font-style:normal; }
-    .res-meta { color:var(--text-faint); font-size:0.71rem; margin-top:0.29rem; }
-
     /* thinking note while an answer streams (carried from Phase 1) */
     .repl-thinking { color:var(--text-faint); font-size:0.79rem; padding-left:0.86rem; }
     .repl-thinking .warm-t { font-variant-numeric:tabular-nums; font-weight:600; color:var(--accent); margin-left:0.43rem; }
@@ -1039,7 +1000,7 @@
                 <td class="nm fl-name">Annual-Infrastructure-Review-2025.pdf</td>
                 <td class="fl-size">1.4 MB</td>
                 <td class="fl-date">2025-12-18</td>
-                <td style="text-align:right"><span class="ai-chip ai-deep">✓ deep</span></td>
+                <td style="text-align:right"><span class="ai-chip ai-indexed">✓ indexed</span></td>
               </tr>
               <tr class="fl-row" onclick="showFile()">
                 <td><span class="fl-on">●</span></td>
@@ -1047,7 +1008,7 @@
                 <td class="nm fl-name">Q2-Budget.xlsx</td>
                 <td class="fl-size">64 KB</td>
                 <td class="fl-date">2025-11-02</td>
-                <td style="text-align:right"><span class="ai-chip ai-catalog">✓ catalog</span></td>
+                <td style="text-align:right"><span class="ai-chip ai-indexed">✓ indexed</span></td>
               </tr>
               <tr class="fl-row" onclick="showFile()">
                 <td><span class="fl-on">●</span></td>
@@ -1055,7 +1016,7 @@
                 <td class="nm fl-name">Roadmap.md</td>
                 <td class="fl-size">12 KB</td>
                 <td class="fl-date">2025-12-01</td>
-                <td style="text-align:right"><span class="ai-chip ai-catalog">✓ catalog</span></td>
+                <td style="text-align:right"><span class="ai-chip ai-indexed">✓ indexed</span></td>
               </tr>
               <tr class="fl-row" onclick="showFile()">
                 <td><span class="fl-on">●</span></td>
@@ -1063,7 +1024,7 @@
                 <td class="nm fl-name">Meeting-Notes-Dec-2025.docx</td>
                 <td class="fl-size">28 KB</td>
                 <td class="fl-date">2025-12-12</td>
-                <td style="text-align:right"><span class="ai-chip ai-catalog">✓ catalog</span></td>
+                <td style="text-align:right"><span class="ai-chip ai-indexed">✓ indexed</span></td>
               </tr>
               <tr class="fl-row" onclick="showFile()">
                 <td><span class="fl-on">●</span></td>
@@ -1071,7 +1032,7 @@
                 <td class="nm fl-name">architecture-diagram.png</td>
                 <td class="fl-size">340 KB</td>
                 <td class="fl-date">2025-10-15</td>
-                <td style="text-align:right"><span class="ai-chip ai-analyse">⚡ analyse</span></td>
+                <td style="text-align:right"><span class="ai-chip ai-pending">○ pending</span></td>
               </tr>
               <tr class="fl-row" onclick="showFile()">
                 <td><span class="fl-off">○</span></td>
@@ -1087,7 +1048,7 @@
                 <td class="nm fl-name">Q3-Infrastructure-Update.pdf</td>
                 <td class="fl-size">880 KB</td>
                 <td class="fl-date">2025-09-14</td>
-                <td style="text-align:right"><span class="ai-chip ai-catalog">✓ catalog</span></td>
+                <td style="text-align:right"><span class="ai-chip ai-indexed">✓ indexed</span></td>
               </tr>
             </tbody>
           </table>
@@ -1106,7 +1067,7 @@
               </div>
               <div class="fc-divider"></div>
               <div class="fc-summary">24-page engineering report on platform reliability &amp; capacity, FY2025. 99.98% uptime, +31% compute at −12% unit cost. Primary risk: eu-west-2 capacity.</div>
-              <div class="fc-foot"><span>1.4 MB · Dec 18</span><span class="ai-chip ai-deep">✓ deep</span></div>
+              <div class="fc-foot"><span>1.4 MB · Dec 18</span><span class="ai-chip ai-indexed">✓ indexed</span></div>
             </div>
             <div class="fc" onclick="showFile()">
               <div class="fc-head">
@@ -1118,7 +1079,7 @@
               </div>
               <div class="fc-divider"></div>
               <div class="fc-summary">Q2 2025 departmental budget breakdown. Infrastructure spend 12% under target. Headcount costs on track. Flagged overspend in cloud egress line.</div>
-              <div class="fc-foot"><span>64 KB · Nov 2</span><span class="ai-chip ai-catalog">✓ catalog</span></div>
+              <div class="fc-foot"><span>64 KB · Nov 2</span><span class="ai-chip ai-indexed">✓ indexed</span></div>
             </div>
             <div class="fc" onclick="showFile()">
               <div class="fc-head">
@@ -1130,7 +1091,7 @@
               </div>
               <div class="fc-divider"></div>
               <div class="fc-summary">Platform engineering roadmap for 2026. Key themes: autoscaling tier 2, EU-West-2 AZ expansion, runbook automation phase 2, and on-call tooling refresh.</div>
-              <div class="fc-foot"><span>12 KB · Dec 1</span><span class="ai-chip ai-catalog">✓ catalog</span></div>
+              <div class="fc-foot"><span>12 KB · Dec 1</span><span class="ai-chip ai-indexed">✓ indexed</span></div>
             </div>
             <div class="fc" onclick="showFile()">
               <div class="fc-head">
@@ -1142,7 +1103,7 @@
               </div>
               <div class="fc-divider"></div>
               <div class="fc-summary">Notes from the December infrastructure review meeting. Action items: provision eu-west-2 AZ by end of Q1, review egress pricing with cloud vendor.</div>
-              <div class="fc-foot"><span>28 KB · Dec 12</span><span class="ai-chip ai-catalog">✓ catalog</span></div>
+              <div class="fc-foot"><span>28 KB · Dec 12</span><span class="ai-chip ai-indexed">✓ indexed</span></div>
             </div>
             <div class="fc" onclick="showFile()">
               <div class="fc-head">
@@ -1153,8 +1114,8 @@
                 <span class="fc-dot fl-on">●</span>
               </div>
               <div class="fc-divider"></div>
-              <div class="fc-summary analyse">⚡ Right-click → Analyse with AI to make this image searchable.</div>
-              <div class="fc-foot"><span>340 KB · Oct 15</span><span class="ai-chip ai-analyse">⚡ analyse</span></div>
+              <div class="fc-summary empty">Not yet indexed.</div>
+              <div class="fc-foot"><span>340 KB · Oct 15</span><span class="ai-chip ai-pending">○ pending</span></div>
             </div>
             <div class="fc" onclick="showFile()">
               <div class="fc-head">
@@ -1178,7 +1139,7 @@
               </div>
               <div class="fc-divider"></div>
               <div class="fc-summary">Mid-year infrastructure update covering Q3 capacity trends, the July eu-west-2 spike incident, and revised year-end projections.</div>
-              <div class="fc-foot"><span>880 KB · Sep 14</span><span class="ai-chip ai-catalog">✓ catalog</span></div>
+              <div class="fc-foot"><span>880 KB · Sep 14</span><span class="ai-chip ai-indexed">✓ indexed</span></div>
             </div>
           </div>
         </div>
@@ -1235,25 +1196,6 @@
         </div>
       </div>
 
-      <!-- RESULTS VIEW — semantic-search hits: master list + live preview -->
-      <div class="view hidden" id="viewResults">
-        <div class="results-split">
-          <div class="results-master" id="resultsMaster"></div>
-          <div class="results-detail">
-            <div class="results-hdr">
-              <span class="back-btn" onclick="showFolder()">‹ <span id="resultsBackLabel">folder</span></span>
-              <span class="results-hdr__name" id="resultsName">—</span>
-              <span class="results-hdr__fill"></span>
-              <span class="folder-hdr__count" id="resultsCount"></span>
-              <button class="results-hdr__open" id="resultsOpen" onclick="openCurrentResult()">open ↗</button>
-            </div>
-            <div class="docarea" id="resultsDocarea">
-              <div class="vnote" style="margin:2rem">Ask about this folder to see matching files here.</div>
-            </div>
-          </div>
-        </div>
-      </div>
-
     </div><!-- /.middle -->
 
     <!-- ── RIGHT: AI REPL ── -->
@@ -1272,12 +1214,12 @@
         <div class="repl-folder-result" onclick="showFile()">
           <div class="rfr-name">Annual-Infrastructure-Review-2025.pdf</div>
           <div class="rfr-snip">…eu-west-2 crossed the <em>80% threshold</em> during three demand spikes in Q3…</div>
-          <div class="rfr-meta">PDF · p.2 · ✓ deep · score 0.98</div>
+          <div class="rfr-meta">PDF · p.2 · ✓ indexed · score 0.98</div>
         </div>
         <div class="repl-folder-result" onclick="showFile()">
           <div class="rfr-name">Q3-Infrastructure-Update.pdf</div>
           <div class="rfr-snip">…revised <em>capacity</em> projections for eu-west-2 ahead of seasonal peak…</div>
-          <div class="rfr-meta">PDF · p.4 · ✓ catalog · score 0.87</div>
+          <div class="rfr-meta">PDF · p.4 · ✓ indexed · score 0.87</div>
         </div>
         <div class="provenance" style="margin-top:0.29rem">↳ 2 results · 310ms</div>
       </div>
@@ -2217,9 +2159,8 @@ async function showStatusDoc(){
   pushHist({type:"home", path:null});
   view.filePath=null; view.fileName=null;
   $("#viewFolder")?.classList.add("hidden");
-  $("#viewResults")?.classList.add("hidden");
   $("#viewPreview")?.classList.remove("hidden");
-  const backBtn=$(".back-btn"); if(backBtn) backBtn.textContent="‹ Dashboard";
+  const backBtn=$(".back-btn"); if(backBtn){ backBtn.textContent="‹ Dashboard"; backBtn.onclick=showFolder; }
   const activeTab=$(".tab.tab-active"); if(activeTab) activeTab.innerHTML='<span class="icon-md">⌂</span> Dashboard';
   document.querySelectorAll(".tabs .tab:not(.tab-active)").forEach(t=>t.classList.add("hidden"));
   const meta=$(".tabs__meta"); if(meta) meta.innerHTML="";
@@ -2514,7 +2455,6 @@ function setView(v) {
 // results call these to return to the active folder.
 function showFile() {
   $("#viewFolder").classList.add('hidden');
-  $("#viewResults")?.classList.add('hidden');
   $("#viewPreview").classList.remove('hidden');
   $("#replFolder").classList.add('hidden');
   $("#replFile").classList.remove('hidden');
@@ -2523,57 +2463,46 @@ function showFile() {
 }
 function showFolder() {
   $("#viewPreview").classList.add('hidden');
-  $("#viewResults")?.classList.add('hidden');
   $("#viewFolder").classList.remove('hidden');
   $("#replFile").classList.add('hidden');
   $("#replFolder").classList.remove('hidden');
   $("#replScope").textContent = view.folderName ? `— ${view.folderName}/ folder` : '— folder';
   $("#replInput").placeholder = 'ask about this folder…';
 }
-/* RESULTS VIEW — semantic hits render in the middle so the preview identifies the
-   file. Peer of folder/preview; the folder-scope REPL stays live on the right. */
-const resultsState = { cards: [], sel: -1 };
-function showResults() {
-  $("#viewFolder").classList.add('hidden');
-  $("#viewPreview").classList.add('hidden');
-  $("#viewResults").classList.remove('hidden');
-  // keep the folder-scope REPL panel active (search is a folder-scoped ask)
-  $("#replFile").classList.add('hidden');
-  $("#replFolder").classList.remove('hidden');
-}
-function renderResultsView(cards, query) {
-  resultsState.cards = cards; resultsState.sel = -1;
-  $("#resultsBackLabel").textContent = view.folderName ? `${view.folderName}/` : 'folder';
-  $("#resultsCount").textContent = `${cards.length} result${cards.length===1?'':'s'} · “${query}”`;
-  const master = $("#resultsMaster");
-  master.innerHTML = cards.map((c,i)=>
-    `<div class="res-card" data-i="${i}">
-       <div class="res-name">${esc(baseName(c.nm)||c.nm)}</div>
-       ${c.snip?`<div class="res-snip">…${esc(c.snip)}…</div>`:""}
-       <div class="res-meta">${esc(c.ai.chipLabel||"")}${c.scoreStr}</div>
-     </div>`).join("");
-  master.querySelectorAll(".res-card").forEach(el =>
-    el.addEventListener("click", () => selectResult(+el.dataset.i)));
-  showResults();
-  if (cards.length) selectResult(0);   // auto-preview the top hit
-}
-function selectResult(i) {
-  const c = resultsState.cards[i]; if (!c) return;
-  resultsState.sel = i;
-  $("#resultsMaster").querySelectorAll(".res-card")
-    .forEach((el,j)=> el.classList.toggle("sel", j===i));
-  const name = baseName(c.nm) || c.nm;
-  $("#resultsName").textContent = name;
-  const da = $("#resultsDocarea"); if (!da) return;
-  const docEntry = c.sp ? docIndex.get(c.sp) : null;
-  if (docEntry && docEntry.docpath)         renderOriginalInto(da, docEntry.docpath, { targetText: c.snip || "" });
-  else if (c.sp && desktop && desktop.readFile) renderFromDisk(da, c.sp, name);
-  else da.innerHTML = `<div class="vnote" style="margin:2rem">No preview available for this result.</div>`;
-}
-function openCurrentResult() {
-  const c = resultsState.cards[resultsState.sel]; if (!c || !c.sp) return;
-  const ent = entryIndex.get(c.sp) || { name: baseName(c.sp), isDir:false };
-  showFilePreview(c.sp, baseName(c.sp), ent);   // full preview + file-scoped chat
+/* SEARCH RESULTS — the hits render in the MIDDLE using the very same folder-contents
+   surface (list/grid, badges, AI chips, thumbnails, summaries). A result reads like a
+   real file; clicking one opens the standard preview, and the preview's back button
+   returns here. No separate results widget, no result cards in the chat. */
+function showSearchResults(cards, query){
+  view.mode = "results"; view.results = { cards, query };
+  view.filePath = null; view.fileName = null;
+  pushHist({ type:"results", path:"search:"+query, name:query, cards });
+  // reuse the folder-view DOM (viewFolder) — hide the preview + file REPL
+  $("#viewPreview").classList.add("hidden");
+  $("#viewFolder").classList.remove("hidden");
+  $("#replFile").classList.add("hidden");
+  $("#replFolder").classList.remove("hidden");
+  // header speaks "search", not "folder"; no single folder to index → hide ⟳ index
+  const hdr = $(".folder-hdr__path"); if(hdr) hdr.innerHTML = `<span>search </span><strong>“${esc(query)}”</strong>`;
+  const idxBtn = $("#btnSync"); if(idxBtn) idxBtn.style.display = "none";
+  const cnt = $(".folder-hdr__count"); if(cnt) cnt.textContent = `${cards.length} result${cards.length===1?"":"s"}`;
+  const sc = $(".sort-strip__counts");
+  if(sc) sc.innerHTML = `<span style="color:var(--accent)">●</span> ${cards.length} match${cards.length===1?"":"es"} &nbsp;·&nbsp; ranked by relevance`;
+  // synthesise folder-style entries from the hits — each carries its absolute path
+  // (hits span folders) so renderFolder*/sortEntries resolve it via entryFull().
+  const entries = cards.map(c => {
+    const sp = c.sp;
+    const prev = entryIndex.get(sp) || {};
+    const e = { name: baseName(sp), isDir:false, fullPath: sp, size: prev.size||0, mtime: prev.mtime||0 };
+    entryIndex.set(sp, { name:e.name, isDir:false, size:e.size, mtime:e.mtime });
+    return e;
+  });
+  view.curEntries = entries; view.curDir = "";   // fullPath on each entry makes curDir a no-op
+  // first paint keeps relevance order; the sort headers still re-sort via applySort()
+  renderFolderList(entries, "");
+  renderFolderGrid(entries, "");
+  updateSortHeaders();
+  $("#replScope").textContent = `— “${query}”`;
 }
 
 /* ---- REPL input auto-grow ---- */
@@ -2611,15 +2540,12 @@ function openCtx(e, entryPath) {
   $("#ctxFilemeta").textContent = data.meta;
   const analyseItem  = $("#ctxAnalyse");
   const analyseLabel = $("#ctxAnalyseLabel");
-  // ONE harmonised action: indexes (if needed) then summarises. The LABEL names WHY it
-  // exists for this file — images get AI vision ("Analyse image"); everything else is an
-  // on-demand "do it now" ahead of the background cadence ("Analyse now"). A re-run on an
-  // already-indexed file reads as a refresh.
+  // ONE harmonised action: indexes (if needed) then summarises. Images are no longer a
+  // special case — they auto-ingest like everything else — so the label is uniform: an
+  // on-demand "do it now" ahead of the background cadence. A re-run reads as a refresh.
   const isIndexed = !!(ai && ai.indexed);
   analyseItem.classList.add('primary');
-  analyseLabel.textContent = data.isImage
-    ? (isIndexed ? 'Re-analyse image' : 'Analyse image')
-    : (isIndexed ? 'Re-analyse now'   : 'Analyse now');
+  analyseLabel.textContent = isIndexed ? 'Re-analyse now' : 'Analyse now';
   $("#ctxAnalyseSection").style.borderBottomWidth = '1px';
   const vw = window.innerWidth, vh = window.innerHeight;
   ctxMenu.classList.remove('hidden');
@@ -2712,7 +2638,8 @@ document.querySelectorAll('#treeFiles .tree-row').forEach(row => {
 
 // Selection state. `view` is also read by showFile()/showFolder() above.
 const view = { folderPath:null, folderName:null, filePath:null, fileName:null,
-               sortKey:"name", sortDir:1, curEntries:[], curDir:null };
+               sortKey:"name", sortDir:1, curEntries:[], curDir:null,
+               mode:"folder", results:null };   // mode: "folder" | "results" — drives back-nav + header
 const entryIndex = new Map();           // path → {name,isDir,size,mtime} for the open folder
 
 /* ─── Top-bar navigation history (Home / Back / Forward) ───────────────────
@@ -2743,6 +2670,7 @@ async function navDispatch(entry){
   try{
     if(entry.type === "home")        await showStatusDoc();
     else if(entry.type === "folder") await selectFolder(entry.path, entry.name);
+    else if(entry.type === "results") showSearchResults(entry.cards, entry.name);
     else                             showFilePreview(entry.path, entry.name, entryIndex.get(entry.path) || {});
   } finally { navHist.replaying = false; }
 }
@@ -2859,8 +2787,10 @@ function onTreeFileClick(row, full, ent){
 /* ---- folder view (middle): real contents, neutral AI state ---- */
 async function selectFolder(full, name){
   pushHist({type:"folder", path:full, name});
+  view.mode = "folder"; view.results = null;
   view.folderPath = full; view.folderName = name; view.filePath = null; view.fileName = null;
   showFolder();
+  const idxBtn = $("#btnSync"); if(idxBtn) idxBtn.style.display = "";   // restore (results mode hides it)
   const hdr = $(".folder-hdr__path"); if(hdr) hdr.innerHTML = `<strong>${esc(name)}/</strong>`;
   const res = await desktop.readDir(full);
   if(view.folderPath !== full) return;     // a newer selection won the race
@@ -2897,17 +2827,16 @@ function rowClickWire(el){
    Folders always group first; files sort by the chosen column. A stable name
    tiebreak keeps repeated sorts from shuffling equal rows. Sorting works off the
    cached entries (view.curEntries) so a header click never re-reads the disk. */
+// Resolve an entry's absolute path. Real folder entries are relative to `dir`;
+// synthetic search-result entries carry their own `fullPath` (they span folders).
+function entryFull(e, dir){ return e.fullPath || joinPath(dir, e.name); }
 function aiRank(full, name){
-  const ai = aiStateFor(full, name);
-  if(ai.chipCls === "ai-deep")    return 3;
-  if(ai.chipCls === "ai-catalog") return 2;
-  if(ai.chipCls === "ai-analyse") return 1;
-  return 0; // pending
+  return aiStateFor(full, name).indexed ? 1 : 0; // indexed sorts above pending
 }
 function sortEntries(entries, dir){
   const key = view.sortKey, mul = view.sortDir;
   const val = (e) => {
-    const full = joinPath(dir, e.name);
+    const full = entryFull(e, dir);
     switch(key){
       case "type":     return extOf(e.name);
       case "size":     return e.isDir ? -1 : (e.size || 0);
@@ -2956,7 +2885,7 @@ function renderFolderList(entries, dir){
   const tb = $("#listView tbody"); if(!tb) return;
   if(!entries.length){ tb.innerHTML = `<tr><td colspan="6" style="padding:1rem;color:var(--text-faint)">empty folder</td></tr>`; return; }
   tb.innerHTML = entries.map(e => {
-    const full = joinPath(dir, e.name);
+    const full = entryFull(e, dir);
     if(e.isDir){
       return `<tr class="fl-row" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
         <td></td><td><span class="tree-dir" style="font-size:0.71rem">DIR</span></td>
@@ -2979,7 +2908,7 @@ function renderFolderGrid(entries, dir){
   if(!entries.length){ g.innerHTML = `<div class="tree-ghost" style="padding:1rem">empty folder</div>`; return; }
   const canCover = !!(desktop && desktop.readFile);   // covers read bytes off disk via the bridge
   g.innerHTML = entries.map(e => {
-    const full = joinPath(dir, e.name);
+    const full = entryFull(e, dir);
     if(e.isDir){
       return `<div class="fc" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
         <div class="fc-head"><div class="fc-badge-wrap"><span class="badge b-md fc-badge">DIR</span>
@@ -2991,7 +2920,6 @@ function renderFolderGrid(entries, dir){
     const ai = aiStateFor(full, e.name);
     let sumCls, sumTxt;
     if(ai.indexed){ sumCls = ai.summary ? "" : "empty"; sumTxt = esc(ai.summary || "Indexed — summary pending."); }
-    else if(ai.chipCls === "ai-analyse"){ sumCls = "analyse"; sumTxt = "⚡ Right-click → Analyse with AI to make this image searchable."; }
     else { sumCls = "empty"; sumTxt = "Not yet indexed."; }
     const nmCls = ai.chipCls === "ai-pending" ? " pending" : "";
     return `<div class="fc" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
@@ -3012,7 +2940,15 @@ function showFilePreview(full, name, ent){
   view.filePath = full; view.fileName = name;
   showFile();
   const backBtn = $(".back-btn");
-  if(backBtn) backBtn.textContent = `‹ ${view.folderName || baseName(parentPath(full))}/`;
+  if(backBtn){
+    if(view.mode === "results" && view.results){
+      backBtn.textContent = `‹ results`;
+      backBtn.onclick = () => showSearchResults(view.results.cards, view.results.query);
+    } else {
+      backBtn.textContent = `‹ ${view.folderName || baseName(parentPath(full))}/`;
+      backBtn.onclick = showFolder;
+    }
+  }
   const activeTab = $(".tab.tab-active");
   if(activeTab) activeTab.innerHTML = `<span class="icon-md">▤</span> ${esc(name)} <span class="tab__x" title="Close" onclick="event.stopPropagation();showFolder()">✕</span>`;
   document.querySelectorAll(".tabs .tab:not(.tab-active)").forEach(t => t.classList.add("hidden"));
@@ -3020,8 +2956,8 @@ function showFilePreview(full, name, ent){
   if(meta) meta.innerHTML = `<span>${esc(fmtBytes(ent.size||0))}</span><span>⤢</span>`;
   const ai = aiStateFor(full, name);
   const indexedLabel = ai.indexed
-    ? `<span style="color:var(--accent)">● ${esc(ai.chipLabel.replace(/^✓\s*/,""))}</span>`
-    : (ai.chipCls === "ai-analyse" ? '<span style="color:var(--amber)">needs analysis</span>' : '<span class="tree-ghost">pending</span>');
+    ? '<span style="color:var(--accent)">● indexed</span>'
+    : '<span class="tree-ghost">pending</span>';
   const ms = $(".metastrip");
   if(ms) ms.innerHTML =
     `<span><span class="mk">type</span>&nbsp;${esc(badgeFor(name)[0])}</span>
@@ -3040,14 +2976,12 @@ function showFilePreview(full, name, ent){
     } else {
       da.innerHTML = `<div class="vnote" style="margin:2rem;max-width:34rem;line-height:1.5">
         <strong>${esc(name)}</strong><br><br>
-        ${ai.chipCls==="ai-analyse"
-          ? 'Right-click → <em>Analyse image</em> to caption it with AI on demand.'
-          : 'Right-click → <em>Analyse now</em> to make this file searchable, or use <strong>⟳ index</strong> on the folder header for the whole folder.'}
+        Right-click → <em>Analyse now</em> to make this file searchable, or use <strong>⟳ index</strong> on the folder header for the whole folder.
       </div>`;
     }
   }
   $("#replFile").innerHTML =
-    `<div class="sum-block"><div class="sum-label">summary</div><div class="sum-text${ai.summary?"":" tree-ghost"}">${ai.summary ? esc(ai.summary) : (ai.indexed ? `Indexed — no summary yet. Right-click → ${isImageName(name)?"Re-analyse image":"Analyse now"} to generate one.` : `Not yet indexed — previewing from disk. Right-click → ${isImageName(name)?"Analyse image":"Analyse now"} to make it searchable.`)}</div></div>
+    `<div class="sum-block"><div class="sum-label">summary</div><div class="sum-text${ai.summary?"":" tree-ghost"}">${ai.summary ? esc(ai.summary) : (ai.indexed ? "Indexed — no summary yet. Right-click → Analyse now to generate one." : "Not yet indexed — previewing from disk. Right-click → Analyse now to make it searchable.")}</div></div>
      <div id="replFileConv"></div>`;
 }
 
@@ -3077,16 +3011,15 @@ async function initFileTree(){
 /* ═══════════════════════ STAGE C — LIVE AI STATE ══════════════════════════
    Pulls the indexed-document list (GET /workspace/:slug → ws.documents) and keys
    it by each doc's on-disk `sourcePath`. Every filesystem entry the tree / folder
-   views render is matched against this map to show its real AI state:
-     ● ✓ deep     — full-text embedded (default ingest is deep here)
-     ● ✓ catalog  — only the ~120-word gist embedded (amadocsSearchMode==="summary")
-     ○ ⚡ analyse  — unindexed image: needs on-demand vision/OCR (auto-index skips it)
-     ○ ○ pending  — unindexed non-image: will index in the background
+   views render is matched against this map to show its real AI state (two states,
+   since the single ingestion makes a file either known to the library or not):
+     ● ✓ indexed  — in the library: chunk vectors + summary card, fully searchable
+     ○ ○ pending  — not yet indexed (images included): will index in the background
    "⟳ index" on the folder header runs the bounded, stoppable gnome-sync; chips
    refresh as docs confirm. Reuses the Phase-1 plumbing (fetchDocuments, gnomeSync,
    docpathByName for the citation loop). No-ops without the desktop bridge. */
 
-// on-disk sourcePath → {mode, aiSummary, docpath, sourceMime}. Refilled by loadDocIndex().
+// on-disk sourcePath → {aiSummary, docpath, sourceMime}. Refilled by loadDocIndex().
 const docIndex = new Map();
 let syncing = false;
 
@@ -3097,7 +3030,6 @@ async function loadDocIndex(){
     let m={}; try{ m=JSON.parse(d.metadata||"{}"); }catch(_){}
     const sp = m.sourcePath || "";
     if(sp) docIndex.set(sp, {
-      mode: m.amadocsSearchMode || "deep",
       aiSummary: m.aiSummary || "",
       docpath: d.docpath || "",
       sourceMime: m.sourceMime || "",
@@ -3112,14 +3044,12 @@ async function loadDocIndex(){
 // Resolve the AI state for a filesystem entry. Pure (reads docIndex) — drives the
 // tree dot, folder list/grid chips, and the preview metastrip.
 function aiStateFor(path, name){
+  // Single ingestion → two states. Any file the library knows about is "indexed"
+  // (it has chunk vectors + a summary card); everything else is "pending" until the
+  // folder sync / background cadence reaches it — images included (they auto-ingest now).
   const doc = docIndex.get(path);
-  if(doc){
-    return doc.mode === "summary"
-      ? {indexed:true,  chipCls:"ai-catalog", chipLabel:"✓ catalog", dotOn:true,  summary:doc.aiSummary}
-      : {indexed:true,  chipCls:"ai-deep",    chipLabel:"✓ deep",    dotOn:true,  summary:doc.aiSummary};
-  }
-  if(isImageName(name)) return {indexed:false, chipCls:"ai-analyse", chipLabel:"⚡ analyse", dotOn:false, summary:""};
-  return                       {indexed:false, chipCls:"ai-pending", chipLabel:"○ pending", dotOn:false, summary:""};
+  if(doc) return {indexed:true,  chipCls:"ai-indexed", chipLabel:"✓ indexed", dotOn:true,  summary:doc.aiSummary};
+  return               {indexed:false, chipCls:"ai-pending", chipLabel:"○ pending", dotOn:false, summary:""};
 }
 
 // Re-pull the index and repaint every rendered surface (folder view + tree dots +
@@ -3307,13 +3237,14 @@ async function runRepl(){
           const pageStr=s.chunkSource?"":""  // page info not reliable without doc-view
           cards.push({nm,sp,ai,snip,scoreStr,s});
         }
-        // Results render in the MIDDLE (viewResults) so the live preview identifies
-        // the right file; the REPL keeps a compact provenance line + a way back to them.
-        renderResultsView(cards, msg);
+        // Results render in the MIDDLE as a folder-style listing (same list/grid,
+        // thumbnails, summaries) so each hit reads like a real file. The REPL keeps
+        // only a one-line pointer back to them — no result cards in the chat.
+        showSearchResults(cards, msg);
         const provEl=document.createElement("div"); provEl.className="provenance";
-        provEl.innerHTML=`↳ ${cards.length} file${cards.length===1?"":"s"} found · `+
-          `<span class="prov-link" data-showres="1" style="cursor:pointer">shown in results</span>`;
-        provEl.querySelector("[data-showres]")?.addEventListener("click", showResults);
+        provEl.innerHTML=`↳ ${cards.length} result${cards.length===1?"":"s"} · `+
+          `<span class="prov-link" data-showres="1" style="cursor:pointer">shown in the middle</span>`;
+        provEl.querySelector("[data-showres]")?.addEventListener("click", ()=>showSearchResults(cards, msg));
         exchange.appendChild(provEl);
       }
     }
