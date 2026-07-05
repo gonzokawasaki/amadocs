@@ -34,6 +34,9 @@
       --accent-bg:        #122a18;
       --accent-text:      #bdf2c6;
       --accent-sel-text:  #e6ffec;
+      /* "Cloud-searched" folder highlighter — folders within a registered sync root. */
+      --search-hl:        rgba(232,194,80,0.24);
+      --search-hl-bar:    #e8c250;
       --blue:             #7cc0f5;
       --amber:            #ecc25c;
       --red:              #f0664f;
@@ -72,6 +75,8 @@
       --accent-bg:        #e1f3e5;
       --accent-text:      #12491d;
       --accent-sel-text:  #0d3c16;
+      --search-hl:        rgba(214,158,20,0.38);
+      --search-hl-bar:    #b9860f;
       --blue:             #115d8e;
       --amber:            #654c0a;
       --red:              #9e2812;
@@ -237,6 +242,15 @@
     .tree-row:hover:not(.sel) { background: var(--bg-hover); }
     .tree-row.sel { background: var(--bg-sel); color: var(--accent-sel-text); }
     .tree-row.sel .tree-dir { color: var(--accent-sel-text); }
+    /* Cloud-searched folders: highlighter fill + a left bar that survives hover/selection.
+       (`:not(.sel)` on the fill lets the selection colour win while the bar stays put.) */
+    .tree-row.searched { box-shadow: inset 2px 0 0 var(--search-hl-bar); }
+    .tree-row.searched:not(.sel) { background: var(--search-hl); }
+    .fl-row.searched { box-shadow: inset 2px 0 0 var(--search-hl-bar); }
+    .fl-row.searched:not(.sel) { background: var(--search-hl); }
+    .fc.searched { background: var(--search-hl); box-shadow: inset 0 0 0 1px var(--search-hl-bar); }
+    .foot-hl-swatch { display:inline-block; width:0.71rem; height:0.71rem; border-radius:var(--radius-xs);
+      background: var(--search-hl); box-shadow: inset 2px 0 0 var(--search-hl-bar); vertical-align:-1px; }
 
     .chev     { font-size:0.71rem; min-width:0.93rem; color:var(--accent); flex:none; }
     .chev.off { color: var(--text-xfaint); }
@@ -952,6 +966,7 @@
       <div class="left__foot">
         <span><span style="color:var(--accent)">●</span> indexed</span>
         <span><span style="color:var(--text-faint)">○</span> pending</span>
+        <span title="Folders inside a synced root — their files feed cloud search"><span class="foot-hl-swatch"></span> in cloud search</span>
       </div>
     </div>
 
@@ -1275,16 +1290,6 @@
     </div>
   </div>
   <div class="ctx-section">
-    <div class="ctx-item" id="ctxPrioritise">
-      <span class="ctx-icon">↑</span>
-      <span class="ctx-label">prioritise indexing</span>
-    </div>
-    <div class="ctx-item" id="ctxSaveCopy">
-      <span class="ctx-icon">↓</span>
-      <span class="ctx-label">save copy with AI notes</span>
-    </div>
-  </div>
-  <div class="ctx-section">
     <div class="ctx-item" id="ctxReveal">
       <span class="ctx-icon">⤢</span>
       <span class="ctx-label">show in file manager</span>
@@ -1345,6 +1350,26 @@ let WS_SLUG = "amadocs-library";
 let WS_NAME = "AMAdocs Library";
 let APP_MODE = "local";
 
+// The active library's registered sync roots (from /amadocs-status → data.synced,
+// already scoped to the current mode's library). A path (folder OR file) is
+// "cloud-searched" when it sits within one of these roots and isn't matched by that
+// root's exclude — that's the set the tree/list/grid highlight so it's obvious which
+// folders and files feed cloud search (a file can be in-scope yet still ○ pending).
+let SEARCH_ROOTS = []; // [{folder, exclude}]
+function isSearchedPath(fullPath){
+  if(!fullPath || !SEARCH_ROOTS.length) return false;
+  const p = String(fullPath).replace(/\/+$/,"");   // drop trailing slash(es)
+  return SEARCH_ROOTS.some(({folder, exclude}) => {
+    if(!folder) return false;
+    const root = String(folder).replace(/\/+$/,"");
+    const within = p === root || p.startsWith(root + "/");
+    if(!within) return false;
+    // exclude is a path substring (runSync semantics) — a matched subtree is opt-out.
+    if(exclude && (p + "/").includes(exclude)) return false;
+    return true;
+  });
+}
+
 // Resolve which workspace the UI drives ("the library") from the engine's mode.
 // Local → amadocs-library (unchanged). Cloud → the server's CLOUD_LIBRARY_SLUG so
 // the chat box, folder sync and doc index all target the cloud corpus. Runs first
@@ -1360,6 +1385,7 @@ async function resolveLibrarySlug(){
       WS_SLUG = d.librarySlug;
       WS_NAME = APP_MODE === "cloud" ? "AMAdocs Cloud Library" : WS_NAME;
     }
+    SEARCH_ROOTS = (d.synced || []).map(s => ({ folder: s.folder, exclude: s.exclude || "" }));
   }catch(_){ /* keep local defaults if the engine can't report mode */ }
 }
 
@@ -2011,7 +2037,7 @@ function renderCloudHomeHtml(d){
       </div>
       <div class="home-chero__eyebrow">☁ Cloud inference</div>
       <div class="home-chero__title">Cloud inference — <span class="prov">${esc(prov)}</span></div>
-      <div class="home-chero__sub">Frontier AI runs on ${esc(prov)}. Your files stay on this computer — only the text to summarise or answer, and your search queries, are sent.</div>
+      <div class="home-chero__sub">Frontier AI runs on ${esc(prov)}. Your files stay on this computer, but the text to summarise or answer, your search queries, and any images you index are sent to ${esc(prov)}.</div>
       <span class="home-chero__ver">Engine v${esc(eng.version||"?")} · library <code>${esc(d.librarySlug||"?")}</code></span>
       <div class="home-hero__gen">${genLine}</div>
     </div>
@@ -2724,6 +2750,7 @@ function makeTreeNode(ent, full, depth, labelOverride){
   const isDir = ent.isDir;
   const row = document.createElement("div");
   row.className = "tree-row";
+  if(isSearchedPath(full)) row.classList.add("searched");   // cloud-searched scope highlight (folders + files)
   row.style.paddingLeft = treeIndent(depth);
   row.dataset.path = full;
   row.dataset.depth = depth;
@@ -2887,7 +2914,7 @@ function renderFolderList(entries, dir){
   tb.innerHTML = entries.map(e => {
     const full = entryFull(e, dir);
     if(e.isDir){
-      return `<tr class="fl-row" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
+      return `<tr class="fl-row${isSearchedPath(full)?" searched":""}" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
         <td></td><td><span class="tree-dir" style="font-size:0.71rem">DIR</span></td>
         <td class="nm fl-name tree-dir">${esc(e.name)}/</td>
         <td class="fl-size"></td><td class="fl-date">${fmtDate(e.mtime)}</td><td></td></tr>`;
@@ -2895,7 +2922,7 @@ function renderFolderList(entries, dir){
     const [lab,cls] = badgeFor(e.name);
     const ai = aiStateFor(full, e.name);
     const nmCls = ai.chipCls === "ai-pending" ? " pending" : "";
-    return `<tr class="fl-row" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
+    return `<tr class="fl-row${isSearchedPath(full)?" searched":""}" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
       <td><span class="${ai.dotOn?"fl-on":"fl-off"}">${ai.dotOn?"●":"○"}</span></td><td><span class="badge ${cls}">${esc(lab)}</span></td>
       <td class="nm fl-name${nmCls}">${esc(e.name)}</td>
       <td class="fl-size">${esc(fmtBytes(e.size))}</td><td class="fl-date">${fmtDate(e.mtime)}</td>
@@ -2910,7 +2937,7 @@ function renderFolderGrid(entries, dir){
   g.innerHTML = entries.map(e => {
     const full = entryFull(e, dir);
     if(e.isDir){
-      return `<div class="fc" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
+      return `<div class="fc${isSearchedPath(full)?" searched":""}" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
         <div class="fc-head"><div class="fc-badge-wrap"><span class="badge b-md fc-badge">DIR</span>
           <span class="fc-name tree-dir">${esc(e.name)}/</span></div></div>
         <div class="fc-divider"></div><div class="fc-summary empty">Folder</div>
@@ -2922,7 +2949,7 @@ function renderFolderGrid(entries, dir){
     if(ai.indexed){ sumCls = ai.summary ? "" : "empty"; sumTxt = esc(ai.summary || "Indexed — summary pending."); }
     else { sumCls = "empty"; sumTxt = "Not yet indexed."; }
     const nmCls = ai.chipCls === "ai-pending" ? " pending" : "";
-    return `<div class="fc" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
+    return `<div class="fc${isSearchedPath(full)?" searched":""}" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
       <div class="fc-head"><div class="fc-badge-wrap"><span class="badge ${cls} fc-badge">${esc(lab)}</span>
         <span class="fc-name${nmCls}">${esc(e.name)}</span></div><span class="fc-dot ${ai.dotOn?"fl-on":"fl-off"}">${ai.dotOn?"●":"○"}</span></div>
       ${canCover ? `<div class="fc-thumb" data-cover="${escAttr(full)}" data-name="${escAttr(e.name)}" data-size="${e.size||0}"></div>` : ""}
@@ -3054,12 +3081,28 @@ function aiStateFor(path, name){
 
 // Re-pull the index and repaint every rendered surface (folder view + tree dots +
 // the counter). Called after a sync confirms work.
+// Re-pull the active library's sync roots (a fresh sync can register a NEW folder,
+// which must light up as searched without a relaunch). Best-effort; keeps old roots
+// on failure so the highlight never flickers off spuriously.
+async function refreshSearchRoots(){
+  try{
+    const r = await fetch(`${API}/amadocs-status`);
+    if(!r.ok) return;
+    const d = (await r.json()).data || {};
+    SEARCH_ROOTS = (d.synced || []).map(s => ({ folder: s.folder, exclude: s.exclude || "" }));
+  }catch(_){ /* keep current roots */ }
+}
 async function refreshAiState(){
-  await loadDocIndex();
+  await Promise.all([loadDocIndex(), refreshSearchRoots()]);
   if(view.folderPath && !view.filePath) await selectFolder(view.folderPath, view.folderName);
   document.querySelectorAll("#tree .tree-row[data-path]").forEach(row => {
     const ind = row.firstChild;
+    if(ind && ind.classList && ind.classList.contains("chev")){        // folder row → refresh searched highlight
+      row.classList.toggle("searched", isSearchedPath(row.dataset.path));
+      return;
+    }
     if(!ind || !ind.classList || !(ind.classList.contains("don") || ind.classList.contains("doff"))) return; // files only
+    row.classList.toggle("searched", isSearchedPath(row.dataset.path));   // keep file rows in-scope highlighted
     const ai = aiStateFor(row.dataset.path, baseName(row.dataset.path));
     ind.className = ai.dotOn ? "don" : "doff";
     ind.textContent = ai.dotOn ? "●" : "○";
@@ -3123,8 +3166,9 @@ async function onSyncFolder(){
    D1: Wire #replInput (Enter / ⏎ run) → streamChat with scopePath pre-filter.
        File scope  → stream answer + cite chips (click chip → jump to page in docarea).
        Folder scope → collect sources → render file result cards (no LLM answer shown).
-   D2: Wire context-menu actions (analyse / summarise / reveal; prioritise + save-copy
-       are honest "coming soon" stubs — no Phase 2 endpoint wired yet).
+   D2: Wire context-menu actions (index & summarise / reveal). The old "prioritise
+       indexing" + "save copy with AI notes" stubs were removed — prioritise was a
+       local-GPU-queue artifact (cloud indexes on demand + fast), save-copy never built.
    Verification: same pattern as A/B/C — see DEV-NOTES for the Stage D checkpoint. */
 
 let replAbort = null;   // AbortController for the in-flight REPL request
@@ -3326,8 +3370,6 @@ $("#ctxReveal").addEventListener("click", ()=>{
   else toast("File manager bridge not available in browser dev mode.");
 });
 
-$("#ctxPrioritise").addEventListener("click", ()=>{ closeCtx(); toast("Coming soon."); });
-$("#ctxSaveCopy").addEventListener("click",   ()=>{ closeCtx(); toast("Coming soon."); });
 
 /* ─────────────────────────────── BOOT ──────────────────────────────────── */
 (async()=>{

@@ -25,7 +25,12 @@ const Embed = require("../EmbeddingWorkerManager");
 
 // Off switch + cadence knobs (env, all optional).
 //   GNOME_CADENCE_DISABLED=1   → scheduler never starts (dev / opt-out).
-//   GNOME_CADENCE_MS           → periodic tick interval (default 15 min; min 60s).
+//   GNOME_CADENCE_MS           → periodic tick interval (default 5 min; min 60s).
+//                                A tick is a cheap TinySPARQL-vs-state diff (no model
+//                                inference); in the cloud-only build embed/summary/vision
+//                                run remotely, so there is no local-GPU reason to space
+//                                ticks out — 5 min keeps new/changed/deleted files (incl.
+//                                auto-ingested images) picked up promptly.
 //   GNOME_CADENCE_RESUME_MS    → delay before the first (resume) tick after boot
 //                                (default 8s — let the server settle first).
 //   GNOME_CADENCE_FOLLOWUP_MS  → short follow-up delay when a tick left work behind
@@ -37,7 +42,7 @@ const clampMs = (v, def, min) => {
   const n = Number(v);
   return Number.isFinite(n) && n >= min ? n : def;
 };
-const PERIOD_MS = clampMs(process.env.GNOME_CADENCE_MS, 15 * 60_000, 60_000);
+const PERIOD_MS = clampMs(process.env.GNOME_CADENCE_MS, 5 * 60_000, 60_000);
 const RESUME_MS = clampMs(process.env.GNOME_CADENCE_RESUME_MS, 8_000, 1_000);
 const FOLLOWUP_MS = clampMs(process.env.GNOME_CADENCE_FOLLOWUP_MS, 45_000, 5_000);
 

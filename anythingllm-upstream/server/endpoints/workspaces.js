@@ -196,6 +196,7 @@ async function buildAmadocsStatus() {
       synced.push({
         slug,
         folder: st.folder || "?",
+        exclude: st.exclude ?? "/novels/", // opt-out substring — UI dims excluded subtrees
         lastSync: st.lastSync,
         files: st.files ? Object.keys(st.files).length : 0,
         summarised: ss.summarised,
@@ -217,6 +218,11 @@ async function buildAmadocsStatus() {
   const visionModel = process.env.VISION_MODEL_PREF || "moondream";
   const embedder = process.env.EMBEDDING_MODEL_PREF || "Xenova/all-MiniLM-L6-v2";
   const llmProvider = process.env.LLM_PROVIDER || "ollama";
+  // Cloud mode = the engine's LLM runs on OpenRouter. The "on-device" privacy
+  // claim below is true in LOCAL mode only; in cloud mode chat/summaries/vision
+  // (and the raw image bytes fed to vision) go to OpenRouter — extraction/OCR is
+  // the only part that stays local.
+  const isCloud = llmProvider.toLowerCase() === "openrouter";
   const vectorDb = process.env.VECTOR_DB || "lancedb";
   let engineVersion = "?";
   try {
@@ -226,8 +232,9 @@ async function buildAmadocsStatus() {
   }
 
   // ---- the full stack, job-first (Homepage "Stack" section) ----
-  // One row per component, labelled by what it does for the user. Everything is
-  // on-device; the `via` field names the runtime only where it's an Ollama model.
+  // One row per component, labelled by what it does for the user. In local mode
+  // everything is on-device; in cloud mode chat/summaries/vision run on OpenRouter
+  // (only extraction/OCR stays local). The `via` field names the runtime.
   const stack = [
     { role: "Reads your files", tool: "GNOME LocalSearch" },
     { role: "Search", tool: embedder },
@@ -247,7 +254,9 @@ async function buildAmadocsStatus() {
     { role: "Storage", tool: vectorDb },
     {
       role: "Engine",
-      tool: `v${engineVersion} · Node ${process.version} · all on-device`,
+      tool: `v${engineVersion} · Node ${process.version} · ${
+        isCloud ? "cloud inference (OpenRouter)" : "all on-device"
+      }`,
     }
   );
 

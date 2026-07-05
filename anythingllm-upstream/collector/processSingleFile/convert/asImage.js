@@ -17,9 +17,11 @@ async function asImage({
 }) {
   // AMAdocs: read an image two ways and combine them, so a picture is searchable
   // by both its literal text AND its visual content:
-  //   • OCR  — pulls out any text glyphs in the image (exact anchors).
-  //   • Vision caption — a local model describes what's *in* the image, so
-  //     text-less photos/whiteboards/screenshots are no longer dead weight.
+  //   • OCR  — pulls out any text glyphs in the image (exact anchors). Always local.
+  //   • Vision caption — a vision model describes what's *in* the image, so
+  //     text-less photos/whiteboards/screenshots are no longer dead weight. This
+  //     runs on-device in local mode, but uploads the raw image bytes to OpenRouter
+  //     in cloud mode (see VisionCaption) — so it is NOT on-device in cloud mode.
   // Both are best-effort; we only fail the file if BOTH come back empty.
   const [ocr, caption] = await Promise.all([
     new OCRLoader({ targetLanguages: options?.ocr?.langList })

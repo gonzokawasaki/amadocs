@@ -1,11 +1,17 @@
 const fs = require("fs");
 const path = require("path");
 
-// AMAdocs: turn an image into a text description using a LOCAL vision model
-// (via Ollama), so photos/whiteboards/receipts/screenshots with no clean text
-// layer become searchable by their *content*, not just OCR'd glyphs. The output
-// is plain text, so it flows through the existing embed→retrieve→cite pipeline
-// with zero changes downstream. Everything stays on-device.
+// AMAdocs: turn an image into a text description using a vision model, so
+// photos/whiteboards/receipts/screenshots with no clean text layer become
+// searchable by their *content*, not just OCR'd glyphs. The output is plain
+// text, so it flows through the existing embed→retrieve→cite pipeline with zero
+// changes downstream.
+//
+// Provider follows the engine-wide switch (cloudInference() below):
+//   • LOCAL mode  — a local Ollama vision model; the image never leaves the box.
+//   • CLOUD mode  — the raw image bytes are uploaded (data-URI) to an OpenRouter
+//                   vision model. This is NOT on-device; only local mode is.
+// So the "stays on this computer" privacy claim applies to local mode ONLY.
 class VisionCaption {
   // Image types we will attempt to caption. Anything else is left to OCR alone.
   static SUPPORTED = new Set([
