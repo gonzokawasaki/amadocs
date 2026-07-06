@@ -1251,6 +1251,31 @@ function readDocMeta(docpath) {
   }
 }
 
+// Scrub the on-disk doc JSON for an excluded subtree — the local cache that still holds the
+// cloud-generated summary + extracted text after runSync's reconcile has already dropped the
+// vectors and summary cards. Must run AFTER that reconcile (which reads sourcePath from these
+// same JSONs to delete their summary vectors). Matches a doc when its sourcePath equals or
+// sits under any excluded prefix. Returns how many JSON files were removed.
+function purgeExcludedDocJson(slug, prefixes = []) {
+  const norm = (prefixes || [])
+    .map((p) => String(p).replace(/\/+$/, ""))
+    .filter(Boolean);
+  if (norm.length === 0) return 0;
+  const dir = path.join(documentsPath, docSubfolder(slug));
+  let names;
+  try { names = fs.readdirSync(dir); } catch (_) { return 0; }
+  let removed = 0;
+  for (const name of names) {
+    if (!name.endsWith(".json")) continue;
+    const src = readDocMeta(`${docSubfolder(slug)}/${name}`)?.sourcePath || "";
+    if (!src) continue;
+    if (norm.some((pre) => src === pre || src.startsWith(pre + "/"))) {
+      try { fs.unlinkSync(path.join(dir, name)); removed++; } catch (_) {}
+    }
+  }
+  return removed;
+}
+
 // AMAdocs (summary-search): keep the per-document summary-vector table ("<slug>__summaries")
 // in lockstep with the chunk embeds/deletes on the gnome-sync path so breadth (folder/drive)
 // chat searches a current set of cards. Embeds-only (NativeEmbedder) and best-effort — a
@@ -1382,7 +1407,8 @@ function indexedDocCount(slug) {
 module.exports = {
   available, ensureIndexer, queryFileList, queryBlindSpots, queryImages, fetchMeta, fetchText,
   buildDoc, writeDoc, materialize, materializeViaCollector, pathToFileUrl,
-  loadState, saveState, computeDelta, stateRoots, stateExcludes, setCloudExclusion, docSubfolder,
+  loadState, saveState, computeDelta, stateRoots, stateExcludes, setCloudExclusion,
+  purgeExcludedDocJson, docSubfolder,
   listSyncedSlugs, activeLibrarySlug, cadenceSlugs,
   runSync, backstopFile, resummarize, summaryStats, indexedDocCount,
   getPaceMs, setPaceMs, isIngestSuspended, setIngestSuspended, upsertSummaryVectors,

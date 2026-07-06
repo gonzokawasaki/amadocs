@@ -729,9 +729,16 @@ function workspaceEndpoints(app) {
           dryRun: false,
           userId: response.locals?.user?.id ?? null,
         });
+
+        // The reconcile above dropped the excluded subtree's vectors + summary cards; now
+        // scrub its on-disk doc JSON too (holds the cloud-generated summary text) so nothing
+        // about an opted-out folder lingers locally. Only on exclude — including re-indexes.
+        let purgedJson = 0;
+        if (exclude) purgedJson = Gnome.purgeExcludedDocJson(slug, [fsPath]);
+
         return response
           .status(status)
-          .json({ ...body, excludes: set.excludes });
+          .json({ ...body, excludes: set.excludes, purgedJson });
       } catch (e) {
         console.error("[cloud-exclude] error:", e);
         response.status(500).json({ ok: false, error: e.message });
