@@ -267,6 +267,13 @@
     .foot-hl-swatch { display:inline-block; width:0.71rem; height:0.71rem; border-radius:var(--radius-xs);
       background: var(--search-hl-bar); vertical-align:-1px; }
     .foot-hl-swatch--no { background: var(--sr-no-bar); }
+    /* Cloud opt-out lock: an .excluded entry already reads red (not searchable); the 🔒
+       badge after its name is the second signal — "you excluded this", not just "out of
+       scope". One rule covers every surface (tree label, list name cell, grid card name). */
+    .tree-row.excluded > .tree-dir::after,
+    .tree-row.excluded > .tree-dim::after,
+    .fl-row.excluded .fl-name::after,
+    .fc.excluded .fc-name::after { content:" 🔒"; font-size:0.85em; opacity:0.75; margin-left:0.15rem; }
 
     .chev     { font-size:0.71rem; min-width:0.93rem; color:var(--accent); flex:none; }
     .chev.off { color: var(--text-xfaint); }
@@ -999,6 +1006,7 @@
         <span><span style="color:var(--text-faint)">○</span> pending</span>
         <span title="Inside a synced root — feeds cloud search"><span class="foot-hl-swatch"></span> searchable</span>
         <span title="Excluded or outside a sync root — not in cloud search"><span class="foot-hl-swatch foot-hl-swatch--no"></span> not searchable</span>
+        <span title="You opted this folder out of cloud indexing (right-click to include)">🔒 excluded</span>
       </div>
     </div>
 
@@ -1321,6 +1329,14 @@
       <span class="ctx-label" id="ctxAnalyseLabel">Index &amp; summarise</span>
     </div>
   </div>
+  <!-- Cloud opt-out: keep this folder/file OUT of cloud indexing (or put it back). Toggles
+       the library's exclusion SET; excluding also drops its already-indexed docs locally. -->
+  <div class="ctx-section" id="ctxExcludeSection">
+    <div class="ctx-item" id="ctxExclude">
+      <span class="ctx-icon" id="ctxExcludeIcon">🔒</span>
+      <span class="ctx-label" id="ctxExcludeLabel">Exclude from cloud indexing</span>
+    </div>
+  </div>
   <div class="ctx-section">
     <div class="ctx-item" id="ctxReveal">
       <span class="ctx-icon">⤢</span>
@@ -1388,9 +1404,30 @@ let APP_MODE = "local";
 // root's exclude — that's the set the tree/list/grid highlight so it's obvious which
 // folders and files feed cloud search (a file can be in-scope yet still ○ pending).
 let SEARCH_ROOTS = []; // [{folder, exclude}]
+let EXCLUDE_PREFIXES = []; // absolute paths the user has opted OUT of cloud indexing (the SET)
+// Populate the two scope structures from an /amadocs-status payload (shared by the two
+// fetch sites so they can't drift). SEARCH_ROOTS = every watched root; EXCLUDE_PREFIXES =
+// the user's cloud opt-out SET (flattened across libraries, deduped).
+function applySearchScope(synced){
+  synced = synced || [];
+  SEARCH_ROOTS = synced.flatMap(s =>
+    (s.roots && s.roots.length ? s.roots : [s.folder])
+      .filter(Boolean)
+      .map(folder => ({ folder, exclude: s.exclude || "" })));
+  EXCLUDE_PREFIXES = Array.from(new Set(
+    synced.flatMap(s => s.excludes || []).filter(Boolean)
+      .map(p => String(p).replace(/\/+$/,""))));
+}
+// True when the user has opted this path (or an ancestor) out of cloud indexing.
+function isExcludedPath(fullPath){
+  if(!fullPath || !EXCLUDE_PREFIXES.length) return false;
+  const p = String(fullPath).replace(/\/+$/,"");
+  return EXCLUDE_PREFIXES.some(pre => p === pre || p.startsWith(pre + "/"));
+}
 function isSearchedPath(fullPath){
   if(!fullPath || !SEARCH_ROOTS.length) return false;
   const p = String(fullPath).replace(/\/+$/,"");   // drop trailing slash(es)
+  if(isExcludedPath(p)) return false;              // user opted this subtree out of cloud search
   return SEARCH_ROOTS.some(({folder, exclude}) => {
     if(!folder) return false;
     const root = String(folder).replace(/\/+$/,"");
@@ -1400,6 +1437,12 @@ function isSearchedPath(fullPath){
     if(exclude && (p + "/").includes(exclude)) return false;
     return true;
   });
+}
+// Scope class for a path: " searched" (green) / " notsearched" (red), plus " excluded"
+// (a lock badge) when the user opted it out — excluded always implies not-searchable/red.
+function scopeCls(fullPath){
+  if(isExcludedPath(fullPath)) return " notsearched excluded";
+  return isSearchedPath(fullPath) ? " searched" : " notsearched";
 }
 
 // Resolve which workspace the UI drives ("the library") from the engine's mode.
@@ -1418,11 +1461,9 @@ async function resolveLibrarySlug(){
       WS_NAME = APP_MODE === "cloud" ? "AMAdocs Cloud Library" : WS_NAME;
     }
     // A library watches a SET of roots; flatten every root so the highlighter treats a
-    // path as in-scope when it sits under ANY indexed root, not just the first.
-    SEARCH_ROOTS = (d.synced || []).flatMap(s =>
-      (s.roots && s.roots.length ? s.roots : [s.folder])
-        .filter(Boolean)
-        .map(folder => ({ folder, exclude: s.exclude || "" })));
+    // path as in-scope when it sits under ANY indexed root, not just the first. Also pick
+    // up the user's cloud opt-out SET so excluded subtrees read red + carry a lock badge.
+    applySearchScope(d.synced);
   }catch(_){ /* keep local defaults if the engine can't report mode */ }
 }
 
@@ -1642,6 +1683,16 @@ async function analyseFile(entryPath){
     method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:entryPath})});
   let d={}; try{ d=await r.json(); }catch(_){}
   return {ok:r.ok && !!d.ok, ...d};
+}
+// Cloud opt-out toggle: add/remove a folder or file from the library's exclusion SET.
+// exclude=true keeps it OUT of cloud indexing (and drops its already-indexed docs from the
+// local index); false puts it back (re-indexed). Server reconciles synchronously; returns
+// the new excludes[]. Scope/cost control, not a privacy guarantee.
+async function cloudExclude(entryPath, exclude=true){
+  const r=await fetch(`${API}/workspace/${WS_SLUG}/cloud-exclude`,{
+    method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({path:entryPath, exclude})});
+  let d={}; try{ d=await r.json(); }catch(_){}
+  return {ok:r.ok, ...d};
 }
 // Re-summarise: regenerate the granite summary for already-indexed files that are missing one
 // (or all, onlyMissing=false). Server stamps them "changed" then kicks a bounded sync; the
@@ -2627,6 +2678,18 @@ function openCtx(e, entryPath) {
   analyseLabel.textContent = ctxIsDir ? 'Index this folder'
                            : (isIndexed ? 'Re-analyse now' : 'Analyse now');
   $("#ctxAnalyseSection").style.borderBottomWidth = '1px';
+  // Cloud opt-out toggle — only meaningful for real on-disk paths (not the static demo
+  // rows). Label + icon flip with the current state: excluded → offer "Include", else
+  // "Exclude". Hidden for demo entries so the menu stays honest.
+  const excludeSection = $("#ctxExcludeSection");
+  if(isAbsPath){
+    excludeSection.style.display = '';
+    const off = isExcludedPath(entryPath);
+    $("#ctxExcludeLabel").textContent = off ? 'Include in cloud indexing' : 'Exclude from cloud indexing';
+    $("#ctxExcludeIcon").textContent  = off ? '🔓' : '🔒';
+  } else {
+    excludeSection.style.display = 'none';
+  }
   const vw = window.innerWidth, vh = window.innerHeight;
   ctxMenu.classList.remove('hidden');
   const mw = ctxMenu.offsetWidth, mh = ctxMenu.offsetHeight;
@@ -2804,7 +2867,7 @@ function makeTreeNode(ent, full, depth, labelOverride){
   const isDir = ent.isDir;
   const row = document.createElement("div");
   row.className = "tree-row";
-  row.classList.add(isSearchedPath(full) ? "searched" : "notsearched"); // green = searchable, red = not (folders + files)
+  scopeCls(full).trim().split(" ").forEach(c => c && row.classList.add(c)); // green/red + lock if opted-out
   row.style.paddingLeft = treeIndent(depth);
   row.dataset.path = full;
   row.dataset.depth = depth;
@@ -2968,7 +3031,7 @@ function renderFolderList(entries, dir){
   tb.innerHTML = entries.map(e => {
     const full = entryFull(e, dir);
     if(e.isDir){
-      return `<tr class="fl-row${isSearchedPath(full)?" searched":" notsearched"}" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
+      return `<tr class="fl-row${scopeCls(full)}" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
         <td></td><td><span class="tree-dir" style="font-size:0.71rem">DIR</span></td>
         <td class="nm fl-name tree-dir">${esc(e.name)}/</td>
         <td class="fl-size"></td><td class="fl-date">${fmtDate(e.mtime)}</td><td></td></tr>`;
@@ -2976,7 +3039,7 @@ function renderFolderList(entries, dir){
     const [lab,cls] = badgeFor(e.name);
     const ai = aiStateFor(full, e.name);
     const nmCls = ai.chipCls === "ai-pending" ? " pending" : "";
-    return `<tr class="fl-row${isSearchedPath(full)?" searched":" notsearched"}" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
+    return `<tr class="fl-row${scopeCls(full)}" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
       <td><span class="${ai.dotOn?"fl-on":"fl-off"}">${ai.dotOn?"●":"○"}</span></td><td><span class="badge ${cls}">${esc(lab)}</span></td>
       <td class="nm fl-name${nmCls}">${esc(e.name)}</td>
       <td class="fl-size">${esc(fmtBytes(e.size))}</td><td class="fl-date">${fmtDate(e.mtime)}</td>
@@ -2991,7 +3054,7 @@ function renderFolderGrid(entries, dir){
   g.innerHTML = entries.map(e => {
     const full = entryFull(e, dir);
     if(e.isDir){
-      return `<div class="fc${isSearchedPath(full)?" searched":" notsearched"}" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
+      return `<div class="fc${scopeCls(full)}" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
         <div class="fc-head"><div class="fc-badge-wrap"><span class="badge b-md fc-badge">DIR</span>
           <span class="fc-name tree-dir">${esc(e.name)}/</span></div></div>
         <div class="fc-divider"></div><div class="fc-summary empty">Folder</div>
@@ -3003,7 +3066,7 @@ function renderFolderGrid(entries, dir){
     if(ai.indexed){ sumCls = ai.summary ? "" : "empty"; sumTxt = esc(ai.summary || "Indexed — summary pending."); }
     else { sumCls = "empty"; sumTxt = "Not yet indexed."; }
     const nmCls = ai.chipCls === "ai-pending" ? " pending" : "";
-    return `<div class="fc${isSearchedPath(full)?" searched":" notsearched"}" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
+    return `<div class="fc${scopeCls(full)}" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
       <div class="fc-head"><div class="fc-badge-wrap"><span class="badge ${cls} fc-badge">${esc(lab)}</span>
         <span class="fc-name${nmCls}">${esc(e.name)}</span></div><span class="fc-dot ${ai.dotOn?"fl-on":"fl-off"}">${ai.dotOn?"●":"○"}</span></div>
       ${canCover ? `<div class="fc-thumb" data-cover="${escAttr(full)}" data-name="${escAttr(e.name)}" data-size="${e.size||0}"></div>` : ""}
@@ -3144,11 +3207,9 @@ async function refreshSearchRoots(){
     if(!r.ok) return;
     const d = (await r.json()).data || {};
     // A library watches a SET of roots; flatten every root so the highlighter treats a
-    // path as in-scope when it sits under ANY indexed root, not just the first.
-    SEARCH_ROOTS = (d.synced || []).flatMap(s =>
-      (s.roots && s.roots.length ? s.roots : [s.folder])
-        .filter(Boolean)
-        .map(folder => ({ folder, exclude: s.exclude || "" })));
+    // path as in-scope when it sits under ANY indexed root, not just the first. Also
+    // refresh the cloud opt-out SET so a just-excluded folder repaints red + lock.
+    applySearchScope(d.synced);
   }catch(_){ /* keep current roots */ }
 }
 async function refreshAiState(){
@@ -3159,11 +3220,13 @@ async function refreshAiState(){
     if(ind && ind.classList && ind.classList.contains("chev")){        // folder row → refresh searchable highlight
       const on = isSearchedPath(row.dataset.path);
       row.classList.toggle("searched", on); row.classList.toggle("notsearched", !on);
+      row.classList.toggle("excluded", isExcludedPath(row.dataset.path)); // lock badge if opted-out
       return;
     }
     if(!ind || !ind.classList || !(ind.classList.contains("don") || ind.classList.contains("doff"))) return; // files only
     const on = isSearchedPath(row.dataset.path);                          // keep file rows green/red in step
     row.classList.toggle("searched", on); row.classList.toggle("notsearched", !on);
+    row.classList.toggle("excluded", isExcludedPath(row.dataset.path));
     const ai = aiStateFor(row.dataset.path, baseName(row.dataset.path));
     ind.className = ai.dotOn ? "don" : "doff";
     ind.textContent = ai.dotOn ? "●" : "○";
@@ -3436,6 +3499,21 @@ $("#ctxReveal").addEventListener("click", ()=>{
   if(!ctxEntryPath){ toast("No file selected."); return; }
   if(desktop && desktop.revealInFolder) desktop.revealInFolder(ctxEntryPath);
   else toast("File manager bridge not available in browser dev mode.");
+});
+
+// Cloud opt-out toggle. Excluding drops the subtree from cloud indexing AND purges its
+// already-indexed docs from the local search index; including re-indexes it. Server
+// reconciles; we repaint scope colours + lock badges from fresh status.
+$("#ctxExclude").addEventListener("click", async ()=>{
+  closeCtx();
+  if(!ctxEntryPath){ toast("No item selected."); return; }
+  const path = ctxEntryPath;
+  const excluding = !isExcludedPath(path);
+  toast(excluding ? "Excluding from cloud indexing…" : "Re-including in cloud indexing…");
+  const r = await cloudExclude(path, excluding);
+  if(!r.ok){ toast(r.error || "Couldn’t update cloud indexing."); return; }
+  await refreshAiState();   // repaint tree + folder view: red/lock on, or green back
+  toast(excluding ? "Excluded — removed from the local index." : "Re-included — re-indexing…");
 });
 
 
