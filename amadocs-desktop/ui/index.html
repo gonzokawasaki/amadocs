@@ -1338,6 +1338,12 @@
       <span class="ctx-icon">✦</span>
       <span class="ctx-label" id="ctxAnalyseLabel">Index &amp; summarise</span>
     </div>
+    <!-- Folder-only: RE-POINT the library onto this folder alone (drops every other root).
+         The fix for an over-broad root like /home/user; "Index this folder" above only ADDS. -->
+    <div class="ctx-item" id="ctxRepoint" style="display:none">
+      <span class="ctx-icon">⌖</span>
+      <span class="ctx-label">Index only this folder</span>
+    </div>
   </div>
   <!-- Cloud opt-out: keep this folder/file OUT of cloud indexing (or put it back). Toggles
        the library's exclusion SET; excluding also drops its already-indexed docs locally. -->
@@ -1660,10 +1666,10 @@ function isModelMissingError(err){
 /* ---- gnome-sync (ride-on-GNOME bulk indexing) ----
    Bounded + stoppable by design (THE #1 RULE). dryRun previews the plan with no
    side effects. Stage C wires the folder "Sync" flow + progress stream. */
-async function gnomeSync(folder, {dryRun=false, reconcile=false}={}){
+async function gnomeSync(folder, {dryRun=false, reconcile=false, replace=false}={}){
   const r=await fetch(`${API}/workspace/${WS_SLUG}/gnome-sync`,{
     method:"POST",headers:{'Content-Type':'application/json'},
-    body:JSON.stringify({folder,dryRun,reconcile})});
+    body:JSON.stringify({folder,dryRun,reconcile,replace})});
   let d={}; try{ d=await r.json(); }catch(_){}
   return {status:r.status, ok:r.ok, data:d};
 }
@@ -2709,6 +2715,8 @@ function openCtx(e, entryPath) {
   analyseItem.classList.add('primary');
   analyseLabel.textContent = ctxIsDir ? 'Index this folder'
                            : (isIndexed ? 'Re-analyse now' : 'Analyse now');
+  // "Index only this folder" (re-point) is folder-only — a file can't be a library root.
+  $("#ctxRepoint").style.display = ctxIsDir ? '' : 'none';
   $("#ctxAnalyseSection").style.borderBottomWidth = '1px';
   // Cloud opt-out toggle — only meaningful for real on-disk paths (not the static demo
   // rows). Label + icon flip with the current state: excluded → offer "Include", else
@@ -3272,35 +3280,43 @@ async function onSyncFolder(){
   if(!view.folderPath){ toast("Open a folder to index it."); return; }
   return runFolderIndex(view.folderPath, $("#btnSync"));
 }
-// Bounded, stoppable folder index for an arbitrary folder path (folder-header ⟳ index
-// AND right-click → Index this folder both land here). btn is optional (ctx-menu has none).
-async function runFolderIndex(folder, btn){
+// Bounded, stoppable folder index for an arbitrary folder path. Three entry points land
+// here: the folder-header ⟳ index and right-click "Index this folder" (both UNION — add to
+// the library), and right-click "Index only this folder" ({replace:true} — RE-POINT the
+// library onto this folder, dropping every other root). btn is optional (ctx-menu has none).
+async function runFolderIndex(folder, btn, {replace=false}={}){
   if(!desktop || !folder){ toast("Run the desktop app to index folders."); return; }
   if(syncing) return;
   if(btn){ btn.textContent = "⟳ checking…"; btn.classList.add("busy"); }
-  const plan = await gnomeSync(folder, {dryRun:true});
+  const plan = await gnomeSync(folder, {dryRun:true, replace});
   if(!plan.ok){
     if(btn){ btn.textContent = "⟳ index"; btn.classList.remove("busy"); }
     toast(plan.status===0 ? "Engine unreachable." : `Couldn’t plan the index: ${plan.data.error||plan.status}`);
     return;
   }
   const queued = plan.data.queued || 0;
-  if(queued === 0){
+  const del = plan.data.deleted || 0;
+  // On a pure re-point, the new folder may already be fully indexed (queued 0) yet still
+  // need the OLD roots purged (del > 0) — so don't early-out on queued===0 when replacing.
+  if(queued === 0 && !(replace && del > 0)){
     if(btn){ btn.textContent = "⟳ index"; btn.classList.remove("busy"); }
     toast(plan.data.indexed ? "Every catalogued file here is already indexed." : "GNOME hasn’t catalogued any files in this folder yet.");
     await refreshAiState();
     return;
   }
-  // SAFETY (THE #1 RULE): this index tracks ONE folder at a time, so indexing a NEW
-  // folder REPLACES the old corpus — the dryRun shows that as a large `deleted`. Don't
-  // let a stray click silently wipe the existing index (this is exactly how the
-  // Pictures-folder incident lost the corpus). Confirm when the deletes are substantial.
-  const del = plan.data.deleted || 0;
+  // SAFETY (THE #1 RULE): a re-point drops files outside the new folder — the dryRun shows
+  // them as `deleted`. "Index this folder" (union) shouldn't delete anything; a replace
+  // deliberately does. Either way, never let a substantial purge happen without a confirm
+  // (this is exactly how the Pictures-folder incident lost the corpus).
   if(del >= 5){
     const ok = window.confirm(
-      `Indexing “${baseName(folder)}” will REMOVE ${del} already-indexed file(s) that aren’t in this folder.\n\n`+
-      `This index follows ONE folder at a time, so your previously-indexed folder will stop being searchable until you re-index it.\n\n`+
-      `Switch the index to this folder?`
+      replace
+        ? `Re-point the library onto “${baseName(folder)}”?\n\n`+
+          `This will REMOVE ${del} already-indexed file(s) outside this folder from cloud search. `+
+          `Only “${baseName(folder)}” (and anything you add later) will stay indexed.`
+        : `Indexing “${baseName(folder)}” will REMOVE ${del} already-indexed file(s) that aren’t in this folder.\n\n`+
+          `Your previously-indexed folder will stop being searchable until you re-index it.\n\n`+
+          `Switch the index to this folder?`
     );
     if(!ok){
       if(btn){ btn.textContent = "⟳ index"; btn.classList.remove("busy"); }
@@ -3309,13 +3325,21 @@ async function runFolderIndex(folder, btn){
     }
   }
   syncing = true;
-  if(btn) btn.textContent = `⟳ indexing ${queued}…`;
-  const run = await gnomeSync(folder, {});
+  if(btn) btn.textContent = queued ? `⟳ indexing ${queued}…` : "⟳ re-pointing…";
+  const run = await gnomeSync(folder, {replace});
   syncing = false;
   if(btn){ btn.textContent = "⟳ index"; btn.classList.remove("busy"); }
   if(!run.ok && run.status !== 202){ toast(`Sync failed: ${run.data.error||run.status}`); return; }
   const rem = run.data.remaining || 0;
-  toast(`Indexing ${run.data.queued} file(s)${rem?` · ${rem} more after`:""}. Chips fill in as it completes.`);
+  const ran = run.data.queued || 0;
+  const purged = run.data.deleted || 0;
+  toast(
+    ran
+      ? `Indexing ${ran} file(s)${rem?` · ${rem} more after`:""}. Chips fill in as it completes.`
+      : (replace && purged
+          ? `Re-pointed onto “${baseName(folder)}” — ${purged} file(s) dropped from search.`
+          : "Nothing new to index.")
+  );
   // Embedding runs async over the SSE channel (Stage D renders live progress);
   // pull current state now and once more shortly to catch fast completions.
   await refreshAiState();
@@ -3524,6 +3548,16 @@ $("#ctxAnalyse").addEventListener("click", async ()=>{
   // Workspace doc list can lag the embed by a beat — a second pass guarantees the chip flip.
   await refreshAiState();
   setTimeout(refreshAiState, 4000);
+});
+
+// Re-point the library onto the right-clicked folder alone (drops every other watched root).
+// Same guarded flow as "Index this folder", but with replace:true so runSync swaps the root
+// set instead of unioning — the confirm guard inside spells out what gets dropped.
+$("#ctxRepoint").addEventListener("click", async ()=>{
+  closeCtx();
+  if(!ctxEntryPath){ toast("No folder selected."); return; }
+  if(!ctxIsDir){ toast("Pick a folder to re-point onto."); return; }
+  await runFolderIndex(ctxEntryPath, null, {replace:true});
 });
 
 $("#ctxReveal").addEventListener("click", ()=>{

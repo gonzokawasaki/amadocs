@@ -694,6 +694,7 @@ function workspaceEndpoints(app) {
           limit = 0,
           dryRun = false,
           reconcile = false,
+          replace = false, // re-point the library onto `folder` alone (vs the default union)
         } = reqBody(request);
 
         // AMAdocs: the whole durable PLAN/EXECUTE/finalize-on-confirm orchestration now
@@ -707,6 +708,7 @@ function workspaceEndpoints(app) {
           limit,
           dryRun,
           reconcile,
+          replace,
           userId: response.locals?.user?.id ?? null,
         });
         return response.status(status).json(body);

@@ -782,18 +782,31 @@ async function runSync(opts = {}) {
   if (!currWorkspace)
     return { status: 400, body: { error: "Unknown workspace." } };
 
-  // A library watches a SET of roots, not a single folder. "Index this folder" ADDS the
-  // requested folder to that set (union with whatever was already indexed) — it must NOT
-  // replace the one root, or the next sync would diff the new tree against the old state,
-  // see every file of the previously-indexed root as "deleted", and purge it (the
-  // folder-eviction bug). Legacy state stored a single `folder`; migrate it here.
+  // A library watches a SET of roots, not a single folder. Two ways to change that set:
+  //  • default (union) — "Index this folder" ADDS the requested folder to whatever is
+  //    already indexed; it must NOT replace the one root, or the next sync would diff the
+  //    new tree against the old state, see every file of the previously-indexed root as
+  //    "deleted", and purge it (the folder-eviction bug).
+  //  • replace (opts.replace) — the caller is RE-POINTING the library onto `folder` alone
+  //    (e.g. off an over-broad /home/user onto a real doc folder). The previous roots' files
+  //    then correctly fall out of `current` and the delta purges them — that IS the intended
+  //    effect (the UI confirms the removal first). Legacy state stored a single `folder`;
+  //    stateRoots migrates it here.
   const prevState = loadState(slug);
-  const roots = normalizeRoots([
-    ...stateRoots(prevState),
-    ...(folder ? [folder] : []),
-  ]);
+  const roots = normalizeRoots(
+    opts.replace
+      ? folder
+        ? [folder]
+        : []
+      : [...stateRoots(prevState), ...(folder ? [folder] : [])]
+  );
   if (roots.length === 0)
-    return { status: 400, body: { error: "Missing 'folder'." } };
+    return {
+      status: 400,
+      body: {
+        error: opts.replace ? "Missing 'folder' to re-point onto." : "Missing 'folder'.",
+      },
+    };
 
   // The cloud opt-out SET is state-driven — the /cloud-exclude endpoint mutates it, then
   // reconciles through here. Read it from the persisted state so exclusions survive every
