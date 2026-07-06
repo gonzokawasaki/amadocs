@@ -890,6 +890,7 @@
     .ms-key--bad { border-color:var(--amber); }
     .ms-hint { font-size:0.68rem; color:var(--text-faint); margin:-0.5rem 0 0.9rem; line-height:1.5; }
     .ms-mono, .ms-hint code { font-family:ui-monospace,Menlo,Consolas,monospace; }
+    .ms-keymsg:not(:empty) { font-size:0.72rem; line-height:1.5; color:var(--amber); margin:0 0 0.6rem; }
     .ms-acts { display:flex; justify-content:flex-end; gap:0.5rem; padding:0.4rem 1.15rem 1.1rem; }
     .ms-btn {
       font:inherit; font-size:0.78rem; font-weight:600; cursor:pointer;
@@ -2078,7 +2079,7 @@ function renderConsentBanner(d, prov){
       <div class="home-consent__text">Enabling cloud indexing sends the
         <strong>text and images</strong> of files in your library to <strong>${esc(prov)}</strong> so they can be
         summarised and searched. Nothing is uploaded until you turn this on.</div>
-      <button class="home-consent__btn" onclick="toggleSuspendIngest(false)">Enable cloud indexing</button>
+      <button class="home-consent__btn" onclick="enableCloudIndexing()">Enable cloud indexing</button>
     </div>
   </div>`;
 }
@@ -2386,6 +2387,90 @@ async function toggleSuspendIngest(on){
       : "Cloud indexing resumed — catching up in the background.");
     showStatusDoc(); // re-render the dashboard so the toggle reflects the new state
   }catch(e){ toast("Couldn't change suspend state."); }
+}
+// AMAdocs P5: the consent banner's "Enable cloud indexing" click. Cloud indexing is
+// paid work over an OpenRouter key, so before recording consent we make sure a WORKING,
+// funded key is on file:
+//   • no key on file  → prompt for one (openKeyModalForEnable), which validates it +
+//     its credit, saves it, and relaunches so the engine boots WITH the key. Consent is
+//     then given by clicking Enable again on the keyed dashboard.
+//   • key on file      → re-check it (revoked/exhausted?) then enable. A dead/empty key
+//     is warned about but the user may still proceed (topping up is out of band).
+// Outside the desktop bridge (browser dev stack) there's no key seam — just enable.
+async function enableCloudIndexing(){
+  if(!desktop || !desktop.getMode){ return toggleSuspendIngest(false); }
+  let hasKey=false;
+  try{ const m=await desktop.getMode(); hasKey=!!(m&&m.hasKey); }catch(_){}
+  if(!hasKey){ openKeyModalForEnable(); return; }
+  // Key present — verify it still works and has credit before turning on paid indexing.
+  if(desktop.validateKey){
+    let v=null; try{ v=await desktop.validateKey(); }catch(_){}
+    if(v && v.ok && v.valid===false){ toast("Your saved OpenRouter key was rejected — enter a new one."); openKeyModalForEnable(); return; }
+    if(v && v.ok && v.valid && v.limitRemaining!=null && v.limitRemaining<=0){
+      const go = window.confirm(
+        "Your OpenRouter key has no remaining credit, so cloud indexing will fail until "+
+        "you add credit at openrouter.ai.\n\nEnable cloud indexing anyway?");
+      if(!go) return;
+    }
+  }
+  toggleSuspendIngest(false);
+}
+// P5: prompt for an OpenRouter key when none is on file, validate it (and its credit)
+// against OpenRouter, then switch into cloud WITH the key — switchMode saves it and
+// relaunches so the engine child boots with the key in its environment (a live keyless
+// engine can't pick up a key mid-run). Reuses the .ms-card mode-switch modal chrome.
+async function openKeyModalForEnable(){
+  if(!desktop || !desktop.switchMode || !desktop.validateKey){ toast("Run the desktop app to set your key."); return; }
+  const back = document.createElement("div");
+  back.className = "ms-back";
+  back.innerHTML = `<div class="ms-card" role="dialog" aria-modal="true" aria-label="Add your OpenRouter key">
+      <div class="ms-title">🔑 Add your OpenRouter key</div>
+      <div class="ms-body">
+        <p>Cloud indexing sends the <strong>text and images</strong> of your files to
+           <strong>OpenRouter</strong> to summarise and search them. That needs an API key
+           billed to your OpenRouter account.</p>
+        <label class="ms-lbl">OpenRouter API key
+          <input type="password" id="msKey" class="ms-key" placeholder="sk-or-…" autocomplete="off" spellcheck="false">
+        </label>
+        <div class="ms-hint">Stored on this computer only (<code>~/.config/amadocs/openrouter.key</code>, mode 600).
+          Get one at <span class="ms-mono">openrouter.ai/keys</span>.</div>
+        <div class="ms-keymsg" id="msKeyMsg"></div>
+      </div>
+      <div class="ms-acts">
+        <button class="ms-btn ms-cancel">Cancel</button>
+        <button class="ms-btn ms-go">Check &amp; enable</button>
+      </div>
+    </div>`;
+  document.body.appendChild(back);
+  const close = ()=>back.remove();
+  back.addEventListener("mousedown",(e)=>{ if(e.target===back) close(); });
+  back.querySelector(".ms-cancel").onclick = close;
+  const keyEl = back.querySelector("#msKey");
+  const msgEl = back.querySelector("#msKeyMsg");
+  keyEl.focus();
+  keyEl.addEventListener("input", ()=>keyEl.classList.remove("ms-key--bad"));
+  const resetBtn = (btn)=>{ btn.disabled=false; btn.textContent="Check & enable"; };
+  back.querySelector(".ms-go").onclick = async (e)=>{
+    const btn = e.currentTarget;
+    const key = (keyEl.value||"").trim();
+    if(!key){ keyEl.classList.add("ms-key--bad"); keyEl.focus(); return; }
+    btn.disabled=true; btn.textContent="Checking…"; msgEl.textContent="";
+    // Validate + read credit before committing to this key.
+    let v=null; try{ v=await desktop.validateKey(key); }catch(_){}
+    if(!v || !v.ok){ resetBtn(btn); msgEl.textContent=(v && v.error) || "Couldn't reach OpenRouter to check the key."; return; }
+    if(v.valid===false){ resetBtn(btn); keyEl.classList.add("ms-key--bad"); msgEl.textContent=v.error || "That key was rejected by OpenRouter. Check it and try again."; return; }
+    if(v.limitRemaining!=null && v.limitRemaining<=0){
+      // Valid but out of credit — save it anyway (so they don't re-paste) but flag it.
+      msgEl.innerHTML = "⚠ Key accepted, but it has <strong>no remaining credit</strong>. Add credit at openrouter.ai — indexing will start working once you do.";
+    }
+    btn.textContent="Enabling…";
+    // switchMode: writes the key + relaunches so the ENGINE boots with it. Consent isn't
+    // recorded here — after relaunch the keyed dashboard shows the banner again and a
+    // second Enable click (now hasKey=true) records consent and starts indexing.
+    const res = await desktop.switchMode("cloud", key);
+    if(!res || !res.ok){ resetBtn(btn); msgEl.textContent=(res && res.error) || "Couldn't save the key."; return; }
+    showRestartCurtain(true);
+  };
 }
 async function renderDocxInto(container, blob, docpath){
   try{

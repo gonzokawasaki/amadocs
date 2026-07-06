@@ -44,6 +44,11 @@ contextBridge.exposeInMainWorld("amadocs", {
   switchMode: (mode, key) => ipcRenderer.invoke("switch-mode", { mode, key }),
   saveKey: (key) => ipcRenderer.invoke("save-key", key),
 
+  // Validate an OpenRouter key + read its credit (GET /api/v1/key) before enabling
+  // cloud indexing. Pass a pasted key to pre-check it, or omit to re-check the on-file
+  // key. Resolves to {ok, valid, usage, limit, limitRemaining, limitReset} | {ok:false,error}.
+  validateKey: (key) => ipcRenderer.invoke("validate-key", key),
+
   // Resolve the real filesystem path of a dropped/chosen File.
   // webUtils.getPathForFile is the sandbox-safe replacement for the old File.path.
   pathForFile: (file) => {

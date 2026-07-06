@@ -339,12 +339,16 @@ async function bootEngine() {
     if (k) process.env.OPENROUTER_API_KEY = k;
   }
   if (isCloud && !process.env.OPENROUTER_API_KEY) {
-    throw new Error(
-      "Cloud mode needs an OpenRouter API key.\n\n" +
-        "AMAdocs is in Cloud mode, which sends AI work (embeddings, summaries,\n" +
-        "chat, image analysis) to OpenRouter, but no key is set. Get a key at\n" +
-        "https://openrouter.ai/keys, then switch to Cloud from the dashboard and\n" +
-        "paste it — or relaunch with OPENROUTER_API_KEY=<your key>."
+    // Keyless boot is SAFE now: cloud upload is OFF by default behind the consent
+    // gate, so nothing is sent to OpenRouter until the user clicks "Enable cloud
+    // indexing" — and that button prompts for a key (validate-key IPC + the
+    // enableCloudIndexing() key modal in the renderer). So don't hard-fail here or a
+    // fresh, keyless machine could never reach the dashboard to enter its key. Just
+    // warn; any cloud call before a key is set will surface its own error.
+    console.warn(
+      "[main] Cloud mode with no OpenRouter API key yet — booting anyway. " +
+        "Cloud indexing stays off until a key is entered from the dashboard " +
+        "(Enable cloud indexing), or relaunch with OPENROUTER_API_KEY=<your key>."
     );
   }
   // If a dev stack is already running, reuse it.
@@ -504,6 +508,49 @@ ipcMain.handle("save-key", (_e, key) => {
     return { ok: true };
   } catch (e) {
     return { ok: false, error: e.message };
+  }
+});
+
+// P5: validate an OpenRouter key AND read its credit before we commit to it.
+// Called by the renderer's "Enable cloud indexing" flow — with a pasted key on the
+// no-key path (pre-save check), or with no argument to re-check the on-file key. Hits
+// the SAME endpoint the engine uses for the usage panel (GET /api/v1/key), so a 200
+// proves the key works and the body carries spend/limit. Returns:
+//   {ok:true, valid:true,  usage, limit, limitRemaining, limitReset}  — key works
+//   {ok:true, valid:false, error}                                     — key rejected (401/403)
+//   {ok:false, error}                                                 — no key / network / other
+ipcMain.handle("validate-key", async (_e, key) => {
+  const k = String(key || "").trim() || readKey();
+  if (!k) return { ok: false, error: "No key to check." };
+  try {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(), 6000);
+    let r;
+    try {
+      r = await fetch("https://openrouter.ai/api/v1/key", {
+        headers: { Authorization: `Bearer ${k}` },
+        signal: ctrl.signal,
+      });
+    } finally {
+      clearTimeout(t);
+    }
+    if (r.status === 401 || r.status === 403)
+      return { ok: true, valid: false, error: "OpenRouter rejected this key." };
+    if (!r.ok) return { ok: false, error: `OpenRouter responded ${r.status}.` };
+    const j = await r.json().catch(() => ({}));
+    const d = (j && j.data) || {};
+    return {
+      ok: true,
+      valid: true,
+      usage: typeof d.usage === "number" ? d.usage : null,
+      limit: typeof d.limit === "number" ? d.limit : null,
+      limitRemaining:
+        typeof d.limit_remaining === "number" ? d.limit_remaining : null,
+      limitReset: d.limit_reset || null,
+    };
+  } catch (e) {
+    const msg = e && e.name === "AbortError" ? "Timed out reaching OpenRouter." : (e && e.message) || "Couldn't reach OpenRouter.";
+    return { ok: false, error: msg };
   }
 });
 
