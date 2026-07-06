@@ -726,7 +726,7 @@
     .home-consent__title { font-size:0.86rem; font-weight:700; color:var(--text); }
     .home-consent__text { font-size:0.74rem; color:var(--text-muted); line-height:1.5; }
     .home-consent__text strong { color:var(--text); font-weight:600; }
-    .home-consent__btn { align-self:flex-start; font-size:0.79rem; font-weight:600; padding:0.44rem 0.9rem; border-radius:var(--radius); border:1px solid var(--amber); background:var(--amber); color:#1a1400; cursor:pointer; }
+    .home-consent__btn { align-self:flex-start; font-size:0.79rem; font-weight:700; padding:0.44rem 0.9rem; border-radius:var(--radius); border:1px solid var(--search-hl-bar); background:var(--search-hl-bar); color:#0a1f0d; cursor:pointer; }
     .home-consent__btn:hover { filter:brightness(1.08); }
 
     /* ── RIGHT: AI REPL ───────────────────────────────────────────────── */
@@ -2075,7 +2075,7 @@ function renderConsentBanner(d, prov){
     <span class="home-consent__icon">🔒</span>
     <div class="home-consent__body">
       <div class="home-consent__title">Cloud indexing is off</div>
-      <div class="home-consent__text">Your files stay on this computer. Enabling cloud indexing sends the
+      <div class="home-consent__text">Enabling cloud indexing sends the
         <strong>text and images</strong> of files in your library to <strong>${esc(prov)}</strong> so they can be
         summarised and searched. Nothing is uploaded until you turn this on.</div>
       <button class="home-consent__btn" onclick="toggleSuspendIngest(false)">Enable cloud indexing</button>
