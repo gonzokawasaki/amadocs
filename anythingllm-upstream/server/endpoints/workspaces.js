@@ -193,9 +193,14 @@ async function buildAmadocsStatus() {
       summaries.total += ss.total;
       summaries.summarised += ss.summarised;
       summaries.queued += ss.queued;
+      // A library watches a SET of roots (see GnomeBridge.runSync). Emit them all so the
+      // dashboard lists every indexed folder and the tree/list/grid highlight in-scope
+      // paths under any root — not just the first. `folder` stays for legacy readers.
+      const roots = Gnome.stateRoots(st);
       synced.push({
         slug,
-        folder: st.folder || "?",
+        folder: roots[0] || "?",
+        roots,
         exclude: st.exclude ?? "/novels/", // opt-out substring — UI dims excluded subtrees
         lastSync: st.lastSync,
         files: st.files ? Object.keys(st.files).length : 0,

@@ -605,6 +605,23 @@ function computeDelta(stateFiles, current) {
   return { news, changed, maybeChanged, deleted };
 }
 
+// Keep only the first listing of each url when a sync unions MULTIPLE watched roots —
+// two overlapping roots (a parent and a child both registered) would otherwise list the
+// same file twice, doubling its delta entry. Order-preserving.
+function dedupByUrl(arr) {
+  const seen = new Set();
+  return arr.filter((x) => (seen.has(x.url) ? false : (seen.add(x.url), true)));
+}
+
+// Normalise a state's watched roots to an array, migrating the legacy single-`folder`
+// shape. A library watches a SET of roots; older state predates `roots` and carried one
+// `folder` — treat that as a one-element set.
+function stateRoots(state) {
+  if (Array.isArray(state?.roots)) return state.roots;
+  if (state?.folder) return [state.folder];
+  return [];
+}
+
 // List the slugs that currently have a persisted sync state — i.e. folders that have
 // been indexed at least once. The cadence scheduler enumerates these to know what to
 // resume/keep fresh on relaunch (each state file carries its own folder + exclude).
@@ -691,7 +708,18 @@ async function runSync(opts = {}) {
   const currWorkspace = await Workspace.get({ slug });
   if (!currWorkspace)
     return { status: 400, body: { error: "Unknown workspace." } };
-  if (!folder) return { status: 400, body: { error: "Missing 'folder'." } };
+
+  // A library watches a SET of roots, not a single folder. "Index this folder" ADDS the
+  // requested folder to that set (union with whatever was already indexed) — it must NOT
+  // replace the one root, or the next sync would diff the new tree against the old state,
+  // see every file of the previously-indexed root as "deleted", and purge it (the
+  // folder-eviction bug). Legacy state stored a single `folder`; migrate it here.
+  const prevState = loadState(slug);
+  const roots = Array.from(
+    new Set([...stateRoots(prevState), ...(folder ? [folder] : [])])
+  );
+  if (roots.length === 0)
+    return { status: 400, body: { error: "Missing 'folder'." } };
 
   // Only poke the OS indexer when the caller explicitly asks (reconcile) — never
   // restart a system service silently. On a non-GNOME box inotify doesn't fire, so
@@ -710,11 +738,15 @@ async function runSync(opts = {}) {
   // blind-spot office/PDF files GNOME dropped (re-extract via the collector backstop).
   // Tag each with its source so EXECUTE dispatches to the right materializer; the
   // delta/state machinery below is source-agnostic (keys on url + mtime + docpath).
-  const textFiles = queryFileList({ folder, exclude });
-  const textUrls = new Set(textFiles.map((t) => t.url));
-  const blindSpots = queryBlindSpots({ folder, exclude }).filter(
-    (b) => !textUrls.has(b.url)
+  // Listings are unioned across EVERY watched root, so indexing a new root never drops a
+  // previously-indexed one. dedupByUrl guards against overlapping roots listing a file twice.
+  const textFiles = dedupByUrl(
+    roots.flatMap((f) => queryFileList({ folder: f, exclude }))
   );
+  const textUrls = new Set(textFiles.map((t) => t.url));
+  const blindSpots = dedupByUrl(
+    roots.flatMap((f) => queryBlindSpots({ folder: f, exclude }))
+  ).filter((b) => !textUrls.has(b.url));
   // Images join the SAME bulk sync (one unified ingestion) via the collector's asImage
   // OCR/vision path — the exact materializer the right-click backstop uses. Opt-out with
   // GNOME_IMAGE_INGEST_DISABLED. De-dup against text + blind-spot urls (an image never
@@ -722,7 +754,9 @@ async function runSync(opts = {}) {
   const seenUrls = new Set([...textUrls, ...blindSpots.map((b) => b.url)]);
   const images = process.env.GNOME_IMAGE_INGEST_DISABLED
     ? []
-    : queryImages({ folder, exclude }).filter((i) => !seenUrls.has(i.url));
+    : dedupByUrl(roots.flatMap((f) => queryImages({ folder: f, exclude }))).filter(
+        (i) => !seenUrls.has(i.url)
+      );
   const sourceByUrl = new Map([
     ...textFiles.map((f) => [f.url, "gnome"]),
     ...blindSpots.map((f) => [f.url, "collector"]),
@@ -733,7 +767,6 @@ async function runSync(opts = {}) {
     ...blindSpots.map((f) => ({ url: f.url, mtime: f.mtime, size: f.size })),
     ...images.map((f) => ({ url: f.url, mtime: f.mtime, size: f.size })),
   ];
-  const prevState = loadState(slug);
 
   // ---- PLAN (no side effects, so dryRun is truly read-only) ----
   let mode;
@@ -884,7 +917,8 @@ async function runSync(opts = {}) {
 
     const persist = () =>
       saveState(slug, {
-        folder,
+        folder: roots[0], // legacy single-root field (cadence guard + old status readers)
+        roots,
         exclude,
         slug,
         lastSync: new Date().toISOString(),
@@ -1122,8 +1156,7 @@ async function backstopFile(slug, fsPath, { userId = null } = {}) {
   const state = loadState(slug);
   if (
     state &&
-    state.folder &&
-    fsPath.startsWith(state.folder + "/") &&
+    stateRoots(state).some((r) => fsPath.startsWith(r.replace(/\/+$/, "") + "/")) &&
     BACKSTOP_EXTS.includes(ext)
   ) {
     let mtime = "";
@@ -1302,7 +1335,7 @@ function indexedDocCount(slug) {
 module.exports = {
   available, ensureIndexer, queryFileList, queryBlindSpots, queryImages, fetchMeta, fetchText,
   buildDoc, writeDoc, materialize, materializeViaCollector, pathToFileUrl,
-  loadState, saveState, computeDelta, docSubfolder,
+  loadState, saveState, computeDelta, stateRoots, docSubfolder,
   listSyncedSlugs, activeLibrarySlug, cadenceSlugs,
   runSync, backstopFile, resummarize, summaryStats, indexedDocCount,
   getPaceMs, setPaceMs, isIngestSuspended, setIngestSuspended, upsertSummaryVectors,
