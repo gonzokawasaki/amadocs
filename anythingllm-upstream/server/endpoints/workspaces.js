@@ -723,22 +723,22 @@ function workspaceEndpoints(app) {
         // Reconcile now so the change takes effect immediately: excluding drops the subtree
         // from the listing → its docs are marked deleted → vectors/summaries purged; including
         // makes them reappear as new → re-indexed. Same bounded/serial path as the cadence.
+        // The reconcile drops the excluded subtree's vectors + summary cards AND scrubs its
+        // doc JSON atomically inside runSync's delete phase (never orphaned). If the engine
+        // is mid-index it returns busy — the exclusion is already persisted, so the next
+        // sync (cadence or a retry) applies it. Nothing to scrub here.
         const { status, body } = await Gnome.runSync({
           slug,
           limit: 0,
           dryRun: false,
+          // Excluding = deletes only (cheap, no cloud spend on unrelated pending files).
+          // Including = a full reconcile so the re-added subtree actually gets re-indexed.
+          deletesOnly: !!exclude,
           userId: response.locals?.user?.id ?? null,
         });
-
-        // The reconcile above dropped the excluded subtree's vectors + summary cards; now
-        // scrub its on-disk doc JSON too (holds the cloud-generated summary text) so nothing
-        // about an opted-out folder lingers locally. Only on exclude — including re-indexes.
-        let purgedJson = 0;
-        if (exclude) purgedJson = Gnome.purgeExcludedDocJson(slug, [fsPath]);
-
         return response
           .status(status)
-          .json({ ...body, excludes: set.excludes, purgedJson });
+          .json({ ...body, excludes: set.excludes });
       } catch (e) {
         console.error("[cloud-exclude] error:", e);
         response.status(500).json({ ok: false, error: e.message });

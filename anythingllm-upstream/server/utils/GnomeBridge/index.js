@@ -738,6 +738,9 @@ async function runSync(opts = {}) {
     reconcile = false,
     userId = null,
     fromScheduler = false,
+    deletesOnly = false, // apply removals (e.g. a cloud opt-out) WITHOUT draining the
+    // embed backlog — excluding a folder must be cheap and must not kick off a paid
+    // cloud re-index of unrelated pending files (the cadence drains those on its own).
   } = opts;
 
   const { Workspace } = require("../../models/workspace");
@@ -857,10 +860,19 @@ async function runSync(opts = {}) {
   // that changed again is already in toDelete/toEmbed and gets re-materialized fresh.
   const curUrls = new Set(current.map((c) => c.url));
   const planned = new Set(toEmbed.map((e) => e.url));
-  const toResume = [];
+  let toResume = [];
   for (const [url, e] of Object.entries(nextFiles)) {
     if (e && e.pendingEmbed && e.docpath && curUrls.has(url) && !planned.has(url))
       toResume.push({ url, mtime: e.mtime, docpath: e.docpath, size: e.size, contentHash: e.contentHash });
+  }
+
+  // deletesOnly (cloud opt-out): keep the removals we just computed but skip ALL embedding —
+  // the excluded subtree's docs still get deleted below, while unrelated pending files are
+  // left for the cadence. Their state entries are untouched, so nothing is lost (they re-plan
+  // next sync). This keeps "exclude a folder" a cheap, local operation with no cloud spend.
+  if (deletesOnly) {
+    toEmbed = [];
+    toResume = [];
   }
 
   // ---- BOUND the per-call work (THE #1 RULE) ----
@@ -910,10 +922,10 @@ async function runSync(opts = {}) {
   try {
     // ---- EXECUTE (async, durable, finalize-on-confirm) ----
     if (toDelete.length > 0) {
-      // Capture sourcePaths BEFORE the docs are removed, then drop their summary cards too.
-      const goneSourcePaths = toDelete
-        .map((dp) => readDocMeta(dp)?.sourcePath)
-        .filter(Boolean);
+      // Capture (docpath, sourcePath) BEFORE the docs are removed — sourcePath drops their
+      // summary cards; docpath lets the opt-out scrub below unlink the JSON afterwards.
+      const gone = toDelete.map((dp) => ({ dp, src: readDocMeta(dp)?.sourcePath || "" }));
+      const goneSourcePaths = gone.map((g) => g.src).filter(Boolean);
       // Instrumented + bounded: the 2026-06-24 incident wedged HERE (a LanceDB delete
       // froze, holding inFlight forever). Markers pin which call stalls; withTimeout
       // converts a freeze into a logged error so the drain makes forward progress.
@@ -948,6 +960,29 @@ async function runSync(opts = {}) {
         console.error(
           `[gnome-delete] deleteSummaryVectors FAILED: ${err.message}`
         );
+      }
+      // Cloud opt-out scrub — LAST, after the vector + summary-card deletes have read
+      // sourcePath from these same JSONs. For docs deleted because their subtree is now
+      // excluded, remove the on-disk doc JSON too (the local cache holding the cloud-
+      // generated summary + extracted text). Gated to excluded subtrees so a genuine file
+      // deletion keeps its sidecar. Runs in whichever pass does the delete (endpoint OR
+      // cadence), so vector purge and JSON scrub are always atomic — never orphaned.
+      if (excludes.length > 0) {
+        const norm = excludes.map((p) => String(p).replace(/\/+$/, ""));
+        let scrubbed = 0;
+        for (const g of gone) {
+          if (
+            g.src &&
+            norm.some((pre) => g.src === pre || g.src.startsWith(pre + "/"))
+          ) {
+            try {
+              fs.unlinkSync(path.join(documentsPath, g.dp));
+              scrubbed++;
+            } catch (_) {}
+          }
+        }
+        if (scrubbed)
+          console.error(`[gnome-delete] scrubbed ${scrubbed} excluded doc JSON`);
       }
     }
 
@@ -1251,31 +1286,6 @@ function readDocMeta(docpath) {
   }
 }
 
-// Scrub the on-disk doc JSON for an excluded subtree — the local cache that still holds the
-// cloud-generated summary + extracted text after runSync's reconcile has already dropped the
-// vectors and summary cards. Must run AFTER that reconcile (which reads sourcePath from these
-// same JSONs to delete their summary vectors). Matches a doc when its sourcePath equals or
-// sits under any excluded prefix. Returns how many JSON files were removed.
-function purgeExcludedDocJson(slug, prefixes = []) {
-  const norm = (prefixes || [])
-    .map((p) => String(p).replace(/\/+$/, ""))
-    .filter(Boolean);
-  if (norm.length === 0) return 0;
-  const dir = path.join(documentsPath, docSubfolder(slug));
-  let names;
-  try { names = fs.readdirSync(dir); } catch (_) { return 0; }
-  let removed = 0;
-  for (const name of names) {
-    if (!name.endsWith(".json")) continue;
-    const src = readDocMeta(`${docSubfolder(slug)}/${name}`)?.sourcePath || "";
-    if (!src) continue;
-    if (norm.some((pre) => src === pre || src.startsWith(pre + "/"))) {
-      try { fs.unlinkSync(path.join(dir, name)); removed++; } catch (_) {}
-    }
-  }
-  return removed;
-}
-
 // AMAdocs (summary-search): keep the per-document summary-vector table ("<slug>__summaries")
 // in lockstep with the chunk embeds/deletes on the gnome-sync path so breadth (folder/drive)
 // chat searches a current set of cards. Embeds-only (NativeEmbedder) and best-effort — a
@@ -1407,8 +1417,7 @@ function indexedDocCount(slug) {
 module.exports = {
   available, ensureIndexer, queryFileList, queryBlindSpots, queryImages, fetchMeta, fetchText,
   buildDoc, writeDoc, materialize, materializeViaCollector, pathToFileUrl,
-  loadState, saveState, computeDelta, stateRoots, stateExcludes, setCloudExclusion,
-  purgeExcludedDocJson, docSubfolder,
+  loadState, saveState, computeDelta, stateRoots, stateExcludes, setCloudExclusion, docSubfolder,
   listSyncedSlugs, activeLibrarySlug, cadenceSlugs,
   runSync, backstopFile, resummarize, summaryStats, indexedDocCount,
   getPaceMs, setPaceMs, isIngestSuspended, setIngestSuspended, upsertSummaryVectors,
