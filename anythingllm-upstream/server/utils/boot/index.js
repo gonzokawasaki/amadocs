@@ -12,12 +12,17 @@ const { TelegramBotService } = require("../telegramBot");
 // the OS indexer is unreachable). See utils/GnomeBridge/cadence.
 const GnomeCadence = require("../GnomeBridge/cadence");
 
-// AMAdocs: honor a persisted "suspend background indexing" choice across relaunch so the
-// cadence boot-resume doesn't silently resume paid cloud (or hot local) ingest that the
-// user paused while reorganising files. Seeds the in-memory latch BEFORE cadence starts.
+// AMAdocs: UPLOAD IS OFF BY DEFAULT. Seed the in-memory ingest latch BEFORE cadence starts so
+// no file is ever sent to OpenRouter until the user has explicitly enabled cloud indexing. Two
+// independent reasons to stay paused at boot:
+//   1. no cloud-upload CONSENT yet — a fresh machine has never authorised upload, so we must
+//      NOT auto-ingest on the very first launch (the consent gate);
+//   2. the user has SUSPENDED indexing (temporary pause while reorganising files).
+// Either one keeps the cadence loop latched off until the user acts in the dashboard.
 function seedIngestSuspend() {
   try {
-    if (require("../GnomeBridge").isIngestSuspended())
+    const Gnome = require("../GnomeBridge");
+    if (!Gnome.hasCloudIngestConsent() || Gnome.isIngestSuspended())
       require("../EmbeddingWorkerManager").setIngestPaused(true);
   } catch (_) {
     /* non-GNOME box or bridge unavailable — nothing to seed */

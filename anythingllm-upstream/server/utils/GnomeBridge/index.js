@@ -109,6 +109,20 @@ function setIngestSuspended(on) {
   return !!on;
 }
 
+// AMAdocs: cloud-upload CONSENT — the one-time authorization gate that is distinct from the
+// temporary suspend/pause above. Uploading a library's file text/images to OpenRouter is a
+// privacy-relevant action, so it must be OFF BY DEFAULT: on a fresh machine the setting is
+// absent and this returns false, which the boot seed uses to launch with ingest paused until
+// the user explicitly enables cloud indexing. Suspend is "pause for now"; consent is "yes, it
+// is OK to upload my files at all" — both must be satisfied for the cadence latch to run.
+function hasCloudIngestConsent() {
+  return readSettings().cloudIngestConsent === true;
+}
+function setCloudIngestConsent(on) {
+  writeSettings({ cloudIngestConsent: !!on });
+  return !!on;
+}
+
 function sparql(query) {
   const tmp = path.join(os.tmpdir(), `tsp-${crypto.randomBytes(4).toString("hex")}.rq`);
   fs.writeFileSync(tmp, query);
@@ -626,11 +640,28 @@ function dedupByUrl(arr) {
   return arr.filter((x) => (seen.has(x.url) ? false : (seen.add(x.url), true)));
 }
 
+// Collapse a watched-root SET to its minimal form: strip trailing slashes, dedupe, and
+// drop any root that lives INSIDE another watched root. A parent subsumes its descendants
+// (e.g. /home/user subsumes /home/user/Pictures), so keeping both just runs the same
+// SPARQL query several times and lists one subtree as several "folders" on the dashboard.
+// dedupByUrl already keeps the file delta correct when roots overlap; this keeps the root
+// set itself honest. Order-preserving among the survivors.
+function normalizeRoots(roots) {
+  const norm = Array.from(
+    new Set((roots || []).map((r) => String(r).replace(/\/+$/, "")).filter(Boolean))
+  );
+  return norm.filter(
+    (r) => !norm.some((other) => other !== r && r.startsWith(other + "/"))
+  );
+}
+
 // Normalise a state's watched roots to an array, migrating the legacy single-`folder`
 // shape. A library watches a SET of roots; older state predates `roots` and carried one
-// `folder` — treat that as a one-element set.
+// `folder` — treat that as a one-element set. Roots are collapsed (descendants dropped) so
+// every reader — the union below, the dashboard, the in-scope highlighter — sees the same
+// minimal set even if older state persisted an overlapping one.
 function stateRoots(state) {
-  if (Array.isArray(state?.roots)) return state.roots;
+  if (Array.isArray(state?.roots)) return normalizeRoots(state.roots);
   if (state?.folder) return [state.folder];
   return [];
 }
@@ -757,9 +788,10 @@ async function runSync(opts = {}) {
   // see every file of the previously-indexed root as "deleted", and purge it (the
   // folder-eviction bug). Legacy state stored a single `folder`; migrate it here.
   const prevState = loadState(slug);
-  const roots = Array.from(
-    new Set([...stateRoots(prevState), ...(folder ? [folder] : [])])
-  );
+  const roots = normalizeRoots([
+    ...stateRoots(prevState),
+    ...(folder ? [folder] : []),
+  ]);
   if (roots.length === 0)
     return { status: 400, body: { error: "Missing 'folder'." } };
 
@@ -1420,5 +1452,6 @@ module.exports = {
   loadState, saveState, computeDelta, stateRoots, stateExcludes, setCloudExclusion, docSubfolder,
   listSyncedSlugs, activeLibrarySlug, cadenceSlugs,
   runSync, backstopFile, resummarize, summaryStats, indexedDocCount,
-  getPaceMs, setPaceMs, isIngestSuspended, setIngestSuspended, upsertSummaryVectors,
+  getPaceMs, setPaceMs, isIngestSuspended, setIngestSuspended,
+  hasCloudIngestConsent, setCloudIngestConsent, upsertSummaryVectors,
 };

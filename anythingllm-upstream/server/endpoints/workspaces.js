@@ -280,6 +280,14 @@ async function buildAmadocsStatus() {
   } catch (_) {
     /* default to "running" if the bridge can't report it */
   }
+  // AMAdocs: has the user authorised cloud upload at all? OFF by default — drives the dashboard
+  // "cloud indexing is off" banner and guarantees a fresh machine uploads nothing unprompted.
+  let cloudIngestConsent = false;
+  try {
+    cloudIngestConsent = Gnome.hasCloudIngestConsent();
+  } catch (_) {
+    /* treat as not-consented if the bridge can't report it */
+  }
 
   // Library headline = the real searchable corpus (GNOME-indexed files). Fall back to the
   // workspace_documents count only when nothing is synced (drag-drop-upload-only setup), so a
@@ -305,6 +313,7 @@ async function buildAmadocsStatus() {
     synced,
     pace: { summaryCooldownMs: paceMs },
     ingestSuspended, // user paused background indexing (survives relaunch)
+    cloudIngestConsent, // has the user authorised cloud upload at all? (off by default)
     cloud, // null in local mode or if the usage lookup failed
   };
 
@@ -321,8 +330,13 @@ async function buildAmadocsStatus() {
   lines.push("");
   if (synced.length) {
     lines.push(`Synced folders:`);
-    for (const s of synced)
-      lines.push(`- \`${s.folder}\` → **${s.files}** files · ${s.slug} · last sync ${fmtDate(s.lastSync)}`);
+    for (const s of synced) {
+      // A library watches a SET of roots — list them all, not just the legacy first one.
+      const rootsList = (s.roots && s.roots.length ? s.roots : [s.folder])
+        .map((r) => `\`${r}\``)
+        .join(", ");
+      lines.push(`- ${rootsList} → **${s.files}** files · ${s.slug} · last sync ${fmtDate(s.lastSync)}`);
+    }
   } else {
     lines.push(`No folders synced yet. Use **⟳ index** on a folder, or right-click → analyse a file.`);
   }
@@ -2496,7 +2510,13 @@ function workspaceEndpoints(app) {
         const Embed = require("../utils/EmbeddingWorkerManager");
         Gnome.setIngestSuspended(on); // persist the durable intent
         if (on) Embed.stopAll(); // latch ingestPaused + drop in-flight workers
-        else Embed.setIngestPaused(false); // clear the latch; cadence catches up next tick
+        else {
+          // Resuming = the user is enabling background cloud indexing. This is the ONLY path
+          // that clears the boot latch, so record cloud-upload CONSENT here — the "Enable cloud
+          // indexing" dashboard banner (shown until consent is given) posts through here.
+          Gnome.setCloudIngestConsent(true);
+          Embed.setIngestPaused(false); // clear the latch; cadence catches up next tick
+        }
         response.status(200).json({ ok: true, ingestSuspended: on });
       } catch (e) {
         console.error("[amadocs-suspend-ingest] error:", e);
