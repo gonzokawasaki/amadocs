@@ -34,9 +34,14 @@
       --accent-bg:        #122a18;
       --accent-text:      #bdf2c6;
       --accent-sel-text:  #e6ffec;
-      /* "Cloud-searched" folder highlighter — folders within a registered sync root. */
-      --search-hl:        rgba(232,194,80,0.24);
-      --search-hl-bar:    #e8c250;
+      /* Searchability highlighter — GREEN = in cloud search, RED = not searchable,
+         YELLOW = current selection (folder tree). */
+      --search-hl:        rgba(110,216,121,0.20);
+      --search-hl-bar:    #6ed879;
+      --sr-no:            rgba(240,102,79,0.17);
+      --sr-no-bar:        #f0664f;
+      --sr-sel:           rgba(242,210,75,0.26);
+      --sr-sel-bar:       #f2d24b;
       --blue:             #7cc0f5;
       --amber:            #ecc25c;
       --red:              #f0664f;
@@ -75,8 +80,12 @@
       --accent-bg:        #e1f3e5;
       --accent-text:      #12491d;
       --accent-sel-text:  #0d3c16;
-      --search-hl:        rgba(214,158,20,0.38);
-      --search-hl-bar:    #b9860f;
+      --search-hl:        rgba(31,110,44,0.24);
+      --search-hl-bar:    #2e8b40;
+      --sr-no:            rgba(158,40,18,0.20);
+      --sr-no-bar:        #c0392b;
+      --sr-sel:           rgba(184,134,11,0.30);
+      --sr-sel-bar:       #b8860b;
       --blue:             #115d8e;
       --amber:            #654c0a;
       --red:              #9e2812;
@@ -240,17 +249,24 @@
       transition: background .08s;
     }
     .tree-row:hover:not(.sel) { background: var(--bg-hover); }
-    .tree-row.sel { background: var(--bg-sel); color: var(--accent-sel-text); }
-    .tree-row.sel .tree-dir { color: var(--accent-sel-text); }
-    /* Cloud-searched folders: highlighter fill + a left bar that survives hover/selection.
-       (`:not(.sel)` on the fill lets the selection colour win while the bar stays put.) */
-    .tree-row.searched { box-shadow: inset 2px 0 0 var(--search-hl-bar); }
-    .tree-row.searched:not(.sel) { background: var(--search-hl); }
-    .fl-row.searched { box-shadow: inset 2px 0 0 var(--search-hl-bar); }
-    .fl-row.searched:not(.sel) { background: var(--search-hl); }
-    .fc.searched { background: var(--search-hl); box-shadow: inset 0 0 0 1px var(--search-hl-bar); }
+    /* Searchability outline (folder tree): GREEN = searchable (in cloud search),
+       RED = not searchable (excluded / outside a sync root), YELLOW = current selection.
+       Each state draws a full 1px inset ring (an outline that doesn't shift layout) PLUS a
+       faint hue-matched fill — the fill disambiguates the hue where a green edge abuts a red
+       one (thin adjacent rings alone blend to a muddy yellow). Selection is declared LAST so,
+       at equal specificity, its yellow fill + ring win over the green/red one. */
+    .tree-row.searched    { background: var(--search-hl); box-shadow: inset 0 0 0 1px var(--search-hl-bar); }
+    .tree-row.notsearched { background: var(--sr-no);      box-shadow: inset 0 0 0 1px var(--sr-no-bar); }
+    .tree-row.sel         { background: var(--sr-sel);     box-shadow: inset 0 0 0 1.5px var(--sr-sel-bar); }
+    /* Middle list/grid: searchability as a clean OUTLINE — green = in cloud search,
+       red = not (outside every synced root / excluded). No fill, so it reads as an outline. */
+    .fl-row.searched    { box-shadow: inset 0 0 0 1px var(--search-hl-bar); }
+    .fl-row.notsearched { box-shadow: inset 0 0 0 1px var(--sr-no-bar); }
+    .fc.searched    { border-color: var(--search-hl-bar); }
+    .fc.notsearched { border-color: var(--sr-no-bar); }
     .foot-hl-swatch { display:inline-block; width:0.71rem; height:0.71rem; border-radius:var(--radius-xs);
-      background: var(--search-hl); box-shadow: inset 2px 0 0 var(--search-hl-bar); vertical-align:-1px; }
+      background: var(--search-hl-bar); vertical-align:-1px; }
+    .foot-hl-swatch--no { background: var(--sr-no-bar); }
 
     .chev     { font-size:0.71rem; min-width:0.93rem; color:var(--accent); flex:none; }
     .chev.off { color: var(--text-xfaint); }
@@ -259,6 +275,12 @@
     .tree-dir   { color: var(--blue); }
     .tree-dim   { color: var(--text-muted); }
     .tree-ghost { color: var(--text-faint); }
+    /* Let the filename/label span absorb the leftover width and truncate with an
+       ellipsis instead of overflowing the panel to the right (indicator icons keep
+       flex:none, so only the text shrinks). */
+    .tree-row > .tree-dir,
+    .tree-row > .tree-dim,
+    .tree-row > .tree-ghost { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
     .tree-sec {
       margin: 0.71rem 0 0.21rem 0.43rem;
       font-size:0.71rem; letter-spacing:.1em; text-transform:uppercase; color:var(--text-xfaint);
@@ -539,6 +561,15 @@
     .vsheet-page { width:36.4rem; max-width:calc(100% - 2rem); flex:none; background:var(--page-bg);
       box-shadow:0 0.57rem 2.14rem -0.57rem rgba(0,0,0,0.45); padding:2.43rem 2.71rem; color:var(--page-p);
       font-family:'IBM Plex Sans',-apple-system,BlinkMacSystemFont,sans-serif; font-size:0.82rem; line-height:1.8; }
+    /* The Dashboard/homepage reuses the .vsheet-page shell but is app UI, NOT a rendered
+       document — so it must follow the active theme rather than stay paper-white like real
+       previews. Remapping the --page-* tokens here flips every child that references them
+       (titles, tags, rules) in one place; the rest of the dashboard already uses theme tokens. */
+    .vsheet-page--app {
+      background: var(--bg); color: var(--text);
+      --page-bg: var(--bg); --page-h: var(--text); --page-p: var(--text-muted);
+      --page-faint: var(--text-faint); --page-rule: var(--border);
+    }
     .vsheet-page h1,.vsheet-page h2,.vsheet-page h3 { color:var(--page-h); line-height:1.3; margin:1rem 0 0.43rem; }
     .vsheet-page p { margin:0 0 0.71rem; white-space:pre-wrap; word-wrap:break-word; }
     .vimg { max-width:100%; height:auto; display:block; margin:0 auto; border-radius:2px; }
@@ -966,7 +997,8 @@
       <div class="left__foot">
         <span><span style="color:var(--accent)">●</span> indexed</span>
         <span><span style="color:var(--text-faint)">○</span> pending</span>
-        <span title="Folders inside a synced root — their files feed cloud search"><span class="foot-hl-swatch"></span> in cloud search</span>
+        <span title="Inside a synced root — feeds cloud search"><span class="foot-hl-swatch"></span> searchable</span>
+        <span title="Excluded or outside a sync root — not in cloud search"><span class="foot-hl-swatch foot-hl-swatch--no"></span> not searchable</span>
       </div>
     </div>
 
@@ -1385,7 +1417,12 @@ async function resolveLibrarySlug(){
       WS_SLUG = d.librarySlug;
       WS_NAME = APP_MODE === "cloud" ? "AMAdocs Cloud Library" : WS_NAME;
     }
-    SEARCH_ROOTS = (d.synced || []).map(s => ({ folder: s.folder, exclude: s.exclude || "" }));
+    // A library watches a SET of roots; flatten every root so the highlighter treats a
+    // path as in-scope when it sits under ANY indexed root, not just the first.
+    SEARCH_ROOTS = (d.synced || []).flatMap(s =>
+      (s.roots && s.roots.length ? s.roots : [s.folder])
+        .filter(Boolean)
+        .map(folder => ({ folder, exclude: s.exclude || "" })));
   }catch(_){ /* keep local defaults if the engine can't report mode */ }
 }
 
@@ -1987,10 +2024,14 @@ function homeCardsHtml(d){
 function homeSyncedHtml(synced){
   synced = synced || [];
   return synced.length
-    ? `<ul class="home-synced">` + synced.map(s =>
-        `<li><span class="home-synced__path">${esc(s.folder||"?")}</span>
-          <span class="home-synced__meta">${s.files||0} file${s.files===1?"":"s"} · last sync ${fmtUtc(s.lastSync)}</span></li>`
-      ).join("") + `</ul>`
+    ? `<ul class="home-synced">` + synced.map(s => {
+        // A library watches a SET of roots — list each on its own line; the file count is
+        // the library-wide total, shown once.
+        const roots = (s.roots && s.roots.length ? s.roots : [s.folder || "?"]);
+        const paths = roots.map(r => `<span class="home-synced__path">${esc(r)}</span>`).join("");
+        return `<li>${paths}
+          <span class="home-synced__meta">${s.files||0} file${s.files===1?"":"s"} · last sync ${fmtUtc(s.lastSync)}</span></li>`;
+      }).join("") + `</ul>`
     : `<div class="home-empty">No folders indexed yet. Use <strong>＋ Index a folder</strong> below, or open a folder and hit <strong>⟳ index</strong>.</div>`;
 }
 const HOME_ACTIONS = `<div class="home-sec"><h3 class="home-h">Quick actions</h3>
@@ -2198,7 +2239,7 @@ async function showStatusDoc(){
     const r=await fetch(`${API}/amadocs-status`);
     if(!r.ok) throw 0;
     const d=await r.json();
-    da.innerHTML=`<div class="vsheet-page">${renderHomeHtml(d.data||{})}</div>`;
+    da.innerHTML=`<div class="vsheet-page vsheet-page--app">${renderHomeHtml(d.data||{})}</div>`;
     da.scrollTop=0;
   }catch(e){
     da.innerHTML=`<div class="vnote" style="margin:2rem">AMAdocs homepage unavailable — is the engine running?</div>`;
@@ -2543,6 +2584,7 @@ function showSearchResults(cards, query){
 /* ---- CONTEXT MENU ---- */
 const ctxMenu = $("#ctxMenu");
 let ctxEntryPath = null;   // full filesystem path of the right-clicked entry (Stage D)
+let ctxIsDir = false;      // true when that entry is a folder → route to the folder index
 // file metadata for each static demo entry (replaced with live data in Stage C)
 const fileData = {
   'Annual-Infrastructure-Review-2025.pdf': { meta: 'PDF · 1.4 MB', isImage: false },
@@ -2560,18 +2602,30 @@ function openCtx(e, entryPath) {
   const isAbsPath = String(entryPath).startsWith('/');
   const filename = isAbsPath ? baseName(entryPath) : entryPath;
   ctxEntryPath = isAbsPath ? entryPath : null;
-  const ai = isAbsPath ? aiStateFor(entryPath, filename) : null;
-  const data = fileData[filename] || { meta: ai ? `${badgeFor(filename)[0]} · ${fmtBytes(entryIndex.get(entryPath)?.size)}` : '', isImage: isImageName(filename) };
-  $("#ctxFilename").textContent = filename;
+  // Is the right-clicked entry a directory? The single-file analyse endpoint rejects a
+  // folder ("not a file"), so folders must route to the whole-folder index instead. The
+  // row that fired the event tells us: middle list/grid rows carry data-dir="1", tree
+  // folder rows own a .chev twisty; entryIndex is the fallback for the open folder.
+  const row = (e.currentTarget && e.currentTarget.nodeType === 1) ? e.currentTarget : null;
+  ctxIsDir = !!(
+    (row && (row.dataset.dir === '1' || row.querySelector(':scope > .chev'))) ||
+    (isAbsPath && entryIndex.get(entryPath)?.isDir)
+  );
+  const ai = (isAbsPath && !ctxIsDir) ? aiStateFor(entryPath, filename) : null;
+  const data = ctxIsDir ? { meta: 'Folder', isImage:false }
+             : (fileData[filename] || { meta: ai ? `${badgeFor(filename)[0]} · ${fmtBytes(entryIndex.get(entryPath)?.size)}` : '', isImage: isImageName(filename) });
+  $("#ctxFilename").textContent = ctxIsDir ? filename + '/' : filename;
   $("#ctxFilemeta").textContent = data.meta;
   const analyseItem  = $("#ctxAnalyse");
   const analyseLabel = $("#ctxAnalyseLabel");
   // ONE harmonised action: indexes (if needed) then summarises. Images are no longer a
   // special case — they auto-ingest like everything else — so the label is uniform: an
   // on-demand "do it now" ahead of the background cadence. A re-run reads as a refresh.
+  // A folder instead indexes every catalogued file it contains (bounded + stoppable).
   const isIndexed = !!(ai && ai.indexed);
   analyseItem.classList.add('primary');
-  analyseLabel.textContent = isIndexed ? 'Re-analyse now' : 'Analyse now';
+  analyseLabel.textContent = ctxIsDir ? 'Index this folder'
+                           : (isIndexed ? 'Re-analyse now' : 'Analyse now');
   $("#ctxAnalyseSection").style.borderBottomWidth = '1px';
   const vw = window.innerWidth, vh = window.innerHeight;
   ctxMenu.classList.remove('hidden');
@@ -2750,7 +2804,7 @@ function makeTreeNode(ent, full, depth, labelOverride){
   const isDir = ent.isDir;
   const row = document.createElement("div");
   row.className = "tree-row";
-  if(isSearchedPath(full)) row.classList.add("searched");   // cloud-searched scope highlight (folders + files)
+  row.classList.add(isSearchedPath(full) ? "searched" : "notsearched"); // green = searchable, red = not (folders + files)
   row.style.paddingLeft = treeIndent(depth);
   row.dataset.path = full;
   row.dataset.depth = depth;
@@ -2914,7 +2968,7 @@ function renderFolderList(entries, dir){
   tb.innerHTML = entries.map(e => {
     const full = entryFull(e, dir);
     if(e.isDir){
-      return `<tr class="fl-row${isSearchedPath(full)?" searched":""}" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
+      return `<tr class="fl-row${isSearchedPath(full)?" searched":" notsearched"}" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
         <td></td><td><span class="tree-dir" style="font-size:0.71rem">DIR</span></td>
         <td class="nm fl-name tree-dir">${esc(e.name)}/</td>
         <td class="fl-size"></td><td class="fl-date">${fmtDate(e.mtime)}</td><td></td></tr>`;
@@ -2922,7 +2976,7 @@ function renderFolderList(entries, dir){
     const [lab,cls] = badgeFor(e.name);
     const ai = aiStateFor(full, e.name);
     const nmCls = ai.chipCls === "ai-pending" ? " pending" : "";
-    return `<tr class="fl-row${isSearchedPath(full)?" searched":""}" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
+    return `<tr class="fl-row${isSearchedPath(full)?" searched":" notsearched"}" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
       <td><span class="${ai.dotOn?"fl-on":"fl-off"}">${ai.dotOn?"●":"○"}</span></td><td><span class="badge ${cls}">${esc(lab)}</span></td>
       <td class="nm fl-name${nmCls}">${esc(e.name)}</td>
       <td class="fl-size">${esc(fmtBytes(e.size))}</td><td class="fl-date">${fmtDate(e.mtime)}</td>
@@ -2937,7 +2991,7 @@ function renderFolderGrid(entries, dir){
   g.innerHTML = entries.map(e => {
     const full = entryFull(e, dir);
     if(e.isDir){
-      return `<div class="fc${isSearchedPath(full)?" searched":""}" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
+      return `<div class="fc${isSearchedPath(full)?" searched":" notsearched"}" data-dir="1" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
         <div class="fc-head"><div class="fc-badge-wrap"><span class="badge b-md fc-badge">DIR</span>
           <span class="fc-name tree-dir">${esc(e.name)}/</span></div></div>
         <div class="fc-divider"></div><div class="fc-summary empty">Folder</div>
@@ -2949,7 +3003,7 @@ function renderFolderGrid(entries, dir){
     if(ai.indexed){ sumCls = ai.summary ? "" : "empty"; sumTxt = esc(ai.summary || "Indexed — summary pending."); }
     else { sumCls = "empty"; sumTxt = "Not yet indexed."; }
     const nmCls = ai.chipCls === "ai-pending" ? " pending" : "";
-    return `<div class="fc${isSearchedPath(full)?" searched":""}" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
+    return `<div class="fc${isSearchedPath(full)?" searched":" notsearched"}" data-path="${escAttr(full)}" data-name="${escAttr(e.name)}">
       <div class="fc-head"><div class="fc-badge-wrap"><span class="badge ${cls} fc-badge">${esc(lab)}</span>
         <span class="fc-name${nmCls}">${esc(e.name)}</span></div><span class="fc-dot ${ai.dotOn?"fl-on":"fl-off"}">${ai.dotOn?"●":"○"}</span></div>
       ${canCover ? `<div class="fc-thumb" data-cover="${escAttr(full)}" data-name="${escAttr(e.name)}" data-size="${e.size||0}"></div>` : ""}
@@ -3089,7 +3143,12 @@ async function refreshSearchRoots(){
     const r = await fetch(`${API}/amadocs-status`);
     if(!r.ok) return;
     const d = (await r.json()).data || {};
-    SEARCH_ROOTS = (d.synced || []).map(s => ({ folder: s.folder, exclude: s.exclude || "" }));
+    // A library watches a SET of roots; flatten every root so the highlighter treats a
+    // path as in-scope when it sits under ANY indexed root, not just the first.
+    SEARCH_ROOTS = (d.synced || []).flatMap(s =>
+      (s.roots && s.roots.length ? s.roots : [s.folder])
+        .filter(Boolean)
+        .map(folder => ({ folder, exclude: s.exclude || "" })));
   }catch(_){ /* keep current roots */ }
 }
 async function refreshAiState(){
@@ -3097,12 +3156,14 @@ async function refreshAiState(){
   if(view.folderPath && !view.filePath) await selectFolder(view.folderPath, view.folderName);
   document.querySelectorAll("#tree .tree-row[data-path]").forEach(row => {
     const ind = row.firstChild;
-    if(ind && ind.classList && ind.classList.contains("chev")){        // folder row → refresh searched highlight
-      row.classList.toggle("searched", isSearchedPath(row.dataset.path));
+    if(ind && ind.classList && ind.classList.contains("chev")){        // folder row → refresh searchable highlight
+      const on = isSearchedPath(row.dataset.path);
+      row.classList.toggle("searched", on); row.classList.toggle("notsearched", !on);
       return;
     }
     if(!ind || !ind.classList || !(ind.classList.contains("don") || ind.classList.contains("doff"))) return; // files only
-    row.classList.toggle("searched", isSearchedPath(row.dataset.path));   // keep file rows in-scope highlighted
+    const on = isSearchedPath(row.dataset.path);                          // keep file rows green/red in step
+    row.classList.toggle("searched", on); row.classList.toggle("notsearched", !on);
     const ai = aiStateFor(row.dataset.path, baseName(row.dataset.path));
     ind.className = ai.dotOn ? "don" : "doff";
     ind.textContent = ai.dotOn ? "●" : "○";
@@ -3113,10 +3174,14 @@ async function refreshAiState(){
 // "⟳ index" — bounded, stoppable folder indexing (THE #1 RULE). dryRun previews the
 // plan, then a real run kicks off async embedding; chips refresh as docs confirm.
 async function onSyncFolder(){
-  const btn = $("#btnSync");
-  if(!desktop || !view.folderPath){ toast("Run the desktop app to index folders."); return; }
+  if(!view.folderPath){ toast("Open a folder to index it."); return; }
+  return runFolderIndex(view.folderPath, $("#btnSync"));
+}
+// Bounded, stoppable folder index for an arbitrary folder path (folder-header ⟳ index
+// AND right-click → Index this folder both land here). btn is optional (ctx-menu has none).
+async function runFolderIndex(folder, btn){
+  if(!desktop || !folder){ toast("Run the desktop app to index folders."); return; }
   if(syncing) return;
-  const folder = view.folderPath;
   if(btn){ btn.textContent = "⟳ checking…"; btn.classList.add("busy"); }
   const plan = await gnomeSync(folder, {dryRun:true});
   if(!plan.ok){
@@ -3325,6 +3390,9 @@ $("#ctxAnalyse").addEventListener("click", async ()=>{
   closeCtx();
   if(!ctxEntryPath){ toast("No file selected."); return; }
   const path = ctxEntryPath;
+  // A folder can't go through the single-file endpoint (it returns "not a file") —
+  // index every catalogued file it contains instead, via the same guarded flow as ⟳ index.
+  if(ctxIsDir){ await runFolderIndex(path, null); return; }
   let dp = docIndex.get(path)?.docpath || null;
 
   // 1) INDEX — backstop (OCR/vision) for un-indexed files; deep re-embed for indexed ones.
