@@ -201,7 +201,8 @@ async function buildAmadocsStatus() {
         slug,
         folder: roots[0] || "?",
         roots,
-        exclude: st.exclude ?? "/novels/", // opt-out substring — UI dims excluded subtrees
+        exclude: st.exclude || "", // legacy single-substring opt-out (no longer defaulted)
+        excludes: Gnome.stateExcludes(st), // the user's cloud opt-out SET — UI badges these
         lastSync: st.lastSync,
         files: st.files ? Object.keys(st.files).length : 0,
         summarised: ss.summarised,
@@ -666,7 +667,8 @@ function workspaceEndpoints(app) {
   // folder (embeds every file LocalSearch has text for, up to optional `limit`);
   // LATER calls delta-sync (re-embed only new/changed via nfo:fileLastModified, drop
   // deleted). Productionized form of tooling/tinysparql-{bridge,sync}.js. See
-  // utils/GnomeBridge. Body: { folder, exclude?="/novels/", limit?=0, dryRun?=false }.
+  // utils/GnomeBridge. Body: { folder, limit?=0, dryRun?=false }. The cloud opt-out set is
+  // NOT passed here — it lives in the sync state and runSync reads it every pass.
   app.post(
     "/workspace/:slug/gnome-sync",
     [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
@@ -675,7 +677,6 @@ function workspaceEndpoints(app) {
         const { slug = null } = request.params;
         const {
           folder = null,
-          exclude = "/novels/",
           limit = 0,
           dryRun = false,
           reconcile = false,
@@ -689,7 +690,6 @@ function workspaceEndpoints(app) {
         const { status, body } = await Gnome.runSync({
           slug,
           folder,
-          exclude,
           limit,
           dryRun,
           reconcile,
@@ -699,6 +699,42 @@ function workspaceEndpoints(app) {
       } catch (e) {
         console.error("[gnome-sync] error:", e);
         response.status(500).json({ error: e.message });
+      }
+    }
+  );
+
+  // AMAdocs: cloud opt-out — add/remove a folder (or file) from the library's exclusion SET
+  // so the background cadence stops uploading it to the cloud AI. `exclude:true` opts it out
+  // (and a reconcile purges its already-indexed docs from the local search index — the cloud
+  // copy is out of our hands regardless); `exclude:false` opts it back in (re-indexed).
+  // This is scope/cost control, not a privacy guarantee. Body: { path, exclude?=true }.
+  app.post(
+    "/workspace/:slug/cloud-exclude",
+    [validatedRequest, flexUserRoleValid([ROLES.admin, ROLES.manager])],
+    async (request, response) => {
+      try {
+        const { slug = null } = request.params;
+        const { path: fsPath = null, exclude = true } = reqBody(request);
+        const Gnome = require("../utils/GnomeBridge");
+
+        const set = Gnome.setCloudExclusion(slug, fsPath, !!exclude);
+        if (!set.ok) return response.status(400).json(set);
+
+        // Reconcile now so the change takes effect immediately: excluding drops the subtree
+        // from the listing → its docs are marked deleted → vectors/summaries purged; including
+        // makes them reappear as new → re-indexed. Same bounded/serial path as the cadence.
+        const { status, body } = await Gnome.runSync({
+          slug,
+          limit: 0,
+          dryRun: false,
+          userId: response.locals?.user?.id ?? null,
+        });
+        return response
+          .status(status)
+          .json({ ...body, excludes: set.excludes });
+      } catch (e) {
+        console.error("[cloud-exclude] error:", e);
+        response.status(500).json({ ok: false, error: e.message });
       }
     }
   );
@@ -750,8 +786,7 @@ function workspaceEndpoints(app) {
         const state = Gnome.loadState(slug);
         const { status, body } = await Gnome.runSync({
           slug,
-          folder: state.folder,
-          exclude: state.exclude ?? "/novels/",
+          folder: state.folder, // opt-out SET (excludes) read from state inside runSync
           limit: 0,
           dryRun: false,
           userId: response.locals?.user?.id ?? null,

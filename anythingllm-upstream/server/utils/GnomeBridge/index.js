@@ -137,10 +137,23 @@ function sanitize(name) {
   return name.replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 120);
 }
 
-function excludeClause(exclude) {
-  return exclude
-    ? `FILTER(!CONTAINS(STR(?u), "${String(exclude).replace(/"/g, '\\"')}"))`
-    : "";
+// Build the SPARQL FILTER that keeps opted-out paths out of every listing. The user's
+// cloud opt-out is a SET of absolute folder/file paths (`excludes`); each keeps its own
+// path AND everything under it out of cloud indexing (STRSTARTS on its file:// url plus
+// the "/" boundary so "/a/b" never also swallows a sibling "/a/bc"). A URL survives only
+// if it dodges EVERY excluded prefix. `exclude` is the legacy single-substring form (no
+// longer defaulted to anything — the caller supplies it only if a library still carries
+// one); kept so old sync states keep behaving until they're migrated into `excludes`.
+function excludeClause({ exclude, excludes } = {}) {
+  const esc = (s) => String(s).replace(/"/g, '\\"');
+  const clauses = [];
+  if (exclude) clauses.push(`!CONTAINS(STR(?u), "${esc(exclude)}")`);
+  for (const p of excludes || []) {
+    if (!p) continue;
+    const base = pathToFileUrl(String(p).replace(/\/+$/, ""));
+    clauses.push(`!(STRSTARTS(STR(?u), "${esc(base)}/") || STR(?u) = "${esc(base)}")`);
+  }
+  return clauses.length ? `FILTER(${clauses.join(" && ")})` : "";
 }
 
 // Is the LocalSearch daemon reachable? (so the endpoint can give a clean error
@@ -221,7 +234,7 @@ async function ensureIndexer({ restart = false } = {}) {
 // which would otherwise double every row. nfo:fileSize rides along (same GROUP BY/MAX
 // guard) — it's the cheap GNOME-native second signal the delta uses before any hashing.
 // Returns [{ url, mtime, size }] (size = bytes, or null if GNOME has none).
-function queryFileList({ folder, exclude }) {
+function queryFileList({ folder, exclude, excludes }) {
   const q = `
 SELECT (CONCAT(STR(?u), "${US}", COALESCE(MAX(STR(?m)), ""), "${US}", COALESCE(MAX(STR(?sz)), "")) AS ?row)
 WHERE {
@@ -231,7 +244,7 @@ WHERE {
   OPTIONAL { ?do nfo:fileSize ?sz }
   FILTER(STRSTARTS(STR(?u), "file://${folder}/"))
   FILTER(STR(?t) != "")
-  ${excludeClause(exclude)}
+  ${excludeClause({ exclude, excludes })}
 }
 GROUP BY ?u
 ORDER BY ?u`;
@@ -274,7 +287,7 @@ const IMAGE_EXTS = [
 // NOT EXISTS fire on empty text too, so the collector backstop picks these up.
 // Same GROUP BY ?u + MAX(?m) double-row guard, with nfo:fileSize riding along like
 // queryFileList. Returns [{ url, mtime, mime, size }].
-function queryBlindSpots({ folder, exclude }) {
+function queryBlindSpots({ folder, exclude, excludes }) {
   const extFilter = BACKSTOP_EXTS
     .map((e) => `STRENDS(LCASE(STR(?u)), "${e}")`)
     .join(" || ");
@@ -289,7 +302,7 @@ WHERE {
   FILTER(STRSTARTS(STR(?u), "file://${folder}/"))
   FILTER NOT EXISTS { ?ie nie:plainTextContent ?anytext . FILTER(STR(?anytext) != "") }
   FILTER(${extFilter})
-  ${excludeClause(exclude)}
+  ${excludeClause({ exclude, excludes })}
 }
 GROUP BY ?u ?mime
 ORDER BY ?u`;
@@ -309,7 +322,7 @@ ORDER BY ?u`;
 // automatically. No plainTextContent gate (images legitimately have none). Rides the
 // same excludeClause as the others, so a cloud-opt-out folder is skipped here too.
 // Returns [{ url, mtime, mime, size }], matching queryBlindSpots.
-function queryImages({ folder, exclude }) {
+function queryImages({ folder, exclude, excludes }) {
   const extFilter = IMAGE_EXTS
     .map((e) => `STRENDS(LCASE(STR(?u)), "${e}")`)
     .join(" || ");
@@ -323,7 +336,7 @@ WHERE {
   OPTIONAL { ?do nfo:fileSize ?sz }
   FILTER(STRSTARTS(STR(?u), "file://${folder}/"))
   FILTER(${extFilter})
-  ${excludeClause(exclude)}
+  ${excludeClause({ exclude, excludes })}
 }
 GROUP BY ?u ?mime
 ORDER BY ?u`;
@@ -622,6 +635,32 @@ function stateRoots(state) {
   return [];
 }
 
+// The library's cloud opt-out SET — absolute folder/file paths the user has chosen to keep
+// out of cloud indexing. Normalised to an array (state written before the opt-out shipped
+// has none). This is scope control, not a privacy guarantee: it governs what the NEXT
+// cadence tick uploads, and (with a reconcile) drops already-indexed excluded docs from the
+// local search index.
+function stateExcludes(state) {
+  return Array.isArray(state?.excludes) ? state.excludes : [];
+}
+
+// Add or remove a path from a library's cloud opt-out SET, then persist. Pure state
+// mutation — the caller runs a reconcile sync afterwards to actually apply it (excluded
+// files vanish from the listing → the delta marks them deleted → their vectors/summaries
+// are purged; re-including makes them reappear as new → re-indexed).
+function setCloudExclusion(slug, fsPath, exclude = true) {
+  const state = loadState(slug);
+  if (!state) return { ok: false, error: "No sync state for this library." };
+  const norm = String(fsPath || "").replace(/\/+$/, "");
+  if (!norm) return { ok: false, error: "Missing path." };
+  const set = new Set(stateExcludes(state));
+  if (exclude) set.add(norm);
+  else set.delete(norm);
+  state.excludes = Array.from(set);
+  saveState(slug, state);
+  return { ok: true, excludes: state.excludes };
+}
+
 // List the slugs that currently have a persisted sync state — i.e. folders that have
 // been indexed at least once. The cadence scheduler enumerates these to know what to
 // resume/keep fresh on relaunch (each state file carries its own folder + exclude).
@@ -693,7 +732,7 @@ async function runSync(opts = {}) {
   const {
     slug = null,
     folder = null,
-    exclude = "/novels/",
+    exclude = "", // legacy single-substring opt-out; superseded by the `excludes` SET below
     limit = 0,
     dryRun = false,
     reconcile = false,
@@ -721,6 +760,13 @@ async function runSync(opts = {}) {
   if (roots.length === 0)
     return { status: 400, body: { error: "Missing 'folder'." } };
 
+  // The cloud opt-out SET is state-driven — the /cloud-exclude endpoint mutates it, then
+  // reconciles through here. Read it from the persisted state so exclusions survive every
+  // cadence tick; a caller may also pass extra prefixes to add in this run.
+  const excludes = Array.from(
+    new Set([...stateExcludes(prevState), ...(opts.excludes || [])])
+  );
+
   // Only poke the OS indexer when the caller explicitly asks (reconcile) — never
   // restart a system service silently. On a non-GNOME box inotify doesn't fire, so
   // this is what wakes LocalSearch + forces a re-crawl so the delta sees changes.
@@ -741,11 +787,11 @@ async function runSync(opts = {}) {
   // Listings are unioned across EVERY watched root, so indexing a new root never drops a
   // previously-indexed one. dedupByUrl guards against overlapping roots listing a file twice.
   const textFiles = dedupByUrl(
-    roots.flatMap((f) => queryFileList({ folder: f, exclude }))
+    roots.flatMap((f) => queryFileList({ folder: f, exclude, excludes }))
   );
   const textUrls = new Set(textFiles.map((t) => t.url));
   const blindSpots = dedupByUrl(
-    roots.flatMap((f) => queryBlindSpots({ folder: f, exclude }))
+    roots.flatMap((f) => queryBlindSpots({ folder: f, exclude, excludes }))
   ).filter((b) => !textUrls.has(b.url));
   // Images join the SAME bulk sync (one unified ingestion) via the collector's asImage
   // OCR/vision path — the exact materializer the right-click backstop uses. Opt-out with
@@ -754,7 +800,7 @@ async function runSync(opts = {}) {
   const seenUrls = new Set([...textUrls, ...blindSpots.map((b) => b.url)]);
   const images = process.env.GNOME_IMAGE_INGEST_DISABLED
     ? []
-    : dedupByUrl(roots.flatMap((f) => queryImages({ folder: f, exclude }))).filter(
+    : dedupByUrl(roots.flatMap((f) => queryImages({ folder: f, exclude, excludes }))).filter(
         (i) => !seenUrls.has(i.url)
       );
   const sourceByUrl = new Map([
@@ -920,6 +966,7 @@ async function runSync(opts = {}) {
         folder: roots[0], // legacy single-root field (cadence guard + old status readers)
         roots,
         exclude,
+        excludes, // user's cloud opt-out SET — honoured on every cadence tick
         slug,
         lastSync: new Date().toISOString(),
         files: nextFiles,
@@ -1335,7 +1382,7 @@ function indexedDocCount(slug) {
 module.exports = {
   available, ensureIndexer, queryFileList, queryBlindSpots, queryImages, fetchMeta, fetchText,
   buildDoc, writeDoc, materialize, materializeViaCollector, pathToFileUrl,
-  loadState, saveState, computeDelta, stateRoots, docSubfolder,
+  loadState, saveState, computeDelta, stateRoots, stateExcludes, setCloudExclusion, docSubfolder,
   listSyncedSlugs, activeLibrarySlug, cadenceSlugs,
   runSync, backstopFile, resummarize, summaryStats, indexedDocCount,
   getPaceMs, setPaceMs, isIngestSuspended, setIngestSuspended, upsertSummaryVectors,

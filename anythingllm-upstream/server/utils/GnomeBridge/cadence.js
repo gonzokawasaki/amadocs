@@ -89,7 +89,9 @@ async function tick() {
         res = await Gnome.runSync({
           slug,
           folder: state.folder,
-          exclude: state.exclude ?? "/novels/",
+          // No `exclude` passed: the legacy /novels/ substring is retired, and the user's
+          // opt-out SET (excludes) is read from state inside runSync. Any stale legacy
+          // `exclude` on disk self-clears to "" on the next persist.
           limit: 0,
           dryRun: false,
           reconcile: false, // never silently restart the OS indexer
