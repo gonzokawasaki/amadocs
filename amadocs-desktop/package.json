@@ -37,7 +37,21 @@
           "**/*",
           "!storage/**",
           "!.env*",
-          "!**/*.log"
+          "!**/*.log",
+          "!node_modules/chromadb-js-bindings-linux-x64-gnu/**",
+          "!node_modules/chromadb-default-embed/**",
+          "!node_modules/onnxruntime-node/**",
+          "!node_modules/onnxruntime-web/**",
+          "!node_modules/@xenova/**",
+          "!node_modules/flow-bin/**",
+          "!node_modules/hermes-eslint/**",
+          "!node_modules/flow-remove-types/**",
+          "!node_modules/eslint/**",
+          "!node_modules/eslint-*/**",
+          "!node_modules/@eslint/**",
+          "!node_modules/prettier/**",
+          "!node_modules/nodemon/**",
+          "!node_modules/@inquirer/**"
         ]
       },
       {
@@ -48,7 +62,15 @@
           "!storage/**",
           "!hotdir/**",
           "!.env*",
-          "!**/*.log"
+          "!**/*.log",
+          "!node_modules/onnxruntime-node/**",
+          "!node_modules/onnxruntime-web/**",
+          "!node_modules/@xenova/**",
+          "!node_modules/eslint/**",
+          "!node_modules/eslint-*/**",
+          "!node_modules/@eslint/**",
+          "!node_modules/prettier/**",
+          "!node_modules/nodemon/**"
         ]
       },
       {
