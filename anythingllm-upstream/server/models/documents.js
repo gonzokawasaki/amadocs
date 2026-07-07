@@ -176,9 +176,13 @@ const Document = {
       );
 
       if (!vectorized) {
+        // Surface the actual embedder failure (429 rate-limit / 5xx / bad key) instead
+        // of a bare title — in cloud mode this is the only place a remote-embedder
+        // outage becomes visible; the doc stays out of the vector table either way.
         console.error(
           "Failed to vectorize",
-          metadata?.title || newDoc.filename
+          metadata?.title || newDoc.filename,
+          error ? `— ${error}` : ""
         );
         failedToEmbed.push(metadata?.title || newDoc.filename);
         errors.add(error);

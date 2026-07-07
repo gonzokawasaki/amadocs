@@ -207,6 +207,16 @@ const DELETE_TIMEOUT_MS = (() => {
   return Number.isFinite(v) && v >= 0 ? v : 120000;
 })();
 
+// Batch size for the removeDocuments delete phase. removeDocuments does ONE LanceDB
+// delete per doc, serially, so a large re-point (the 2026-07-06 Documents re-point
+// purged 305 docs) overruns a single DELETE_TIMEOUT_MS wrapper and the whole batch
+// aborts. Chunking bounds EACH batch independently: a stalled chunk is capped but the
+// rest still drain, and every completed chunk is durable. 0/negative → no chunking.
+const DELETE_CHUNK_SIZE = (() => {
+  const v = Number(process.env.GNOME_DELETE_CHUNK_SIZE);
+  return Number.isFinite(v) && v > 0 ? Math.floor(v) : 50;
+})();
+
 // Ensure the OS indexer is running (and, on `restart`, has re-crawled). On a
 // non-GNOME desktop LocalSearch is installed but dormant, and even when running its
 // inotify monitors don't fire outside a real GNOME session — so picking up new/
@@ -978,18 +988,28 @@ async function runSync(opts = {}) {
       console.error(
         `[gnome-delete] removeDocuments START — ${toDelete.length} docs, ${goneSourcePaths.length} summary cards`
       );
-      try {
-        await withTimeout(
-          Document.removeDocuments(currWorkspace, toDelete, userId),
-          DELETE_TIMEOUT_MS,
-          "removeDocuments"
-        );
-        console.error(
-          `[gnome-delete] removeDocuments DONE in ${Date.now() - t0}ms`
-        );
-      } catch (err) {
-        console.error(`[gnome-delete] removeDocuments FAILED: ${err.message}`);
+      // Chunk the deletes so one slow/wedged batch can't abort the whole purge (see
+      // DELETE_CHUNK_SIZE). Each chunk is bounded by DELETE_TIMEOUT_MS on its own; a
+      // failed chunk is logged and the remaining chunks still run.
+      let removedOk = 0;
+      for (let i = 0; i < toDelete.length; i += DELETE_CHUNK_SIZE) {
+        const chunk = toDelete.slice(i, i + DELETE_CHUNK_SIZE);
+        try {
+          await withTimeout(
+            Document.removeDocuments(currWorkspace, chunk, userId),
+            DELETE_TIMEOUT_MS,
+            `removeDocuments[${i}-${i + chunk.length}]`
+          );
+          removedOk += chunk.length;
+        } catch (err) {
+          console.error(
+            `[gnome-delete] removeDocuments chunk ${i}-${i + chunk.length} FAILED: ${err.message}`
+          );
+        }
       }
+      console.error(
+        `[gnome-delete] removeDocuments DONE ${removedOk}/${toDelete.length} in ${Date.now() - t0}ms`
+      );
       const t1 = Date.now();
       console.error(`[gnome-delete] deleteSummaryVectors START`);
       try {
@@ -1098,11 +1118,24 @@ async function runSync(opts = {}) {
         // pendingEmbed so the next sync's resume path retries it — otherwise a
         // remote-embedder outage (cloud profile) silently "completes" the drain
         // with an empty vector table.
-        const { embedded = [] } = await Document.addDocuments(
-          currWorkspace,
-          docpaths,
-          userId
-        );
+        const {
+          embedded = [],
+          failedToEmbed = [],
+          errors = [],
+        } = await Document.addDocuments(currWorkspace, docpaths, userId);
+        // Surface a partial/total embed failure so a remote-embedder outage (429
+        // rate-limit / 5xx) is VISIBLE instead of silently leaving docs pendingEmbed
+        // and the drain "completing" with an empty table. The failed docs are not
+        // confirmed below, so they retry on the next sync.
+        if (failedToEmbed.length > 0) {
+          const shown = failedToEmbed.slice(0, 5).join(", ");
+          console.error(
+            `[gnome-embed] ${failedToEmbed.length}/${docpaths.length} doc(s) FAILED to embed` +
+              (errors.length ? ` — ${errors.join("; ")}` : "") +
+              ` (kept pendingEmbed for retry): ${shown}` +
+              (failedToEmbed.length > 5 ? ` …+${failedToEmbed.length - 5} more` : "")
+          );
+        }
         const ok = new Set(embedded);
         for (const dp of docpaths) {
           if (!ok.has(dp)) continue;
