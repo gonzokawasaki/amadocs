@@ -1,6 +1,6 @@
 # AMAdocs
 
-**A GNOME-based private, local AI file browser — ask your documents anything.**
+**A GNOME-based, Openrouter AI file browser for your hard drive — ask your documents anything.**
 
 > Naming note: AMAdocs was briefly rebranded **Coracle** in mid-2026, then reverted —
 > the name collided with existing projects, and *AMAdocs* says what the app is.
