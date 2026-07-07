@@ -53,7 +53,11 @@
       },
       {
         "from": "../anythingllm-upstream/server/storage/models",
-        "to": "storage-seed/models"
+        "to": "storage-seed/models",
+        "filter": [
+          "**/*",
+          "!Xenova/**"
+        ]
       },
       {
         "from": "vendor/anythingllm.db",
