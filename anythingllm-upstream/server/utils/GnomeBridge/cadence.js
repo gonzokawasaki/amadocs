@@ -25,16 +25,24 @@ const Embed = require("../EmbeddingWorkerManager");
 
 // Off switch + cadence knobs (env, all optional).
 //   GNOME_CADENCE_DISABLED=1   → scheduler never starts (dev / opt-out).
-//   GNOME_CADENCE_MS           → periodic tick interval (default 5 min; min 60s).
+//   GNOME_CADENCE_MS           → steady-state tick interval (default 2 min; min 60s).
 //                                A tick is a cheap TinySPARQL-vs-state diff (no model
 //                                inference); in the cloud-only build embed/summary/vision
 //                                run remotely, so there is no local-GPU reason to space
-//                                ticks out — 5 min keeps new/changed/deleted files (incl.
-//                                auto-ingested images) picked up promptly.
+//                                ticks out, and a no-change tick costs nothing (embeds
+//                                fire only when a file actually changed). This is the ONE
+//                                knob for "how live it feels" — shorten it if new/changed
+//                                files aren't picked up fast enough. We poll rather than
+//                                subscribe to TinySPARQL change signals on purpose: a save
+//                                / checkout / folder-copy fires a BURST of D-Bus signals,
+//                                and coalescing that burst safely is exactly the fiddly bit
+//                                a fixed poll sidesteps. See AMAdocs-CADENCE-NOTES.md.
 //   GNOME_CADENCE_RESUME_MS    → delay before the first (resume) tick after boot
 //                                (default 8s — let the server settle first).
 //   GNOME_CADENCE_FOLLOWUP_MS  → short follow-up delay when a tick left work behind
 //                                (default 45s — drain overflow without hammering).
+//   GNOME_CADENCE_BACKOFF_MAX_MS → cap for the exponential backoff applied after
+//                                consecutive tick failures (default 30 min).
 const DISABLED = ["1", "true", "yes"].includes(
   String(process.env.GNOME_CADENCE_DISABLED || "").toLowerCase()
 );
@@ -42,14 +50,19 @@ const clampMs = (v, def, min) => {
   const n = Number(v);
   return Number.isFinite(n) && n >= min ? n : def;
 };
-const PERIOD_MS = clampMs(process.env.GNOME_CADENCE_MS, 5 * 60_000, 60_000);
+const PERIOD_MS = clampMs(process.env.GNOME_CADENCE_MS, 2 * 60_000, 60_000);
 const RESUME_MS = clampMs(process.env.GNOME_CADENCE_RESUME_MS, 8_000, 1_000);
 const FOLLOWUP_MS = clampMs(process.env.GNOME_CADENCE_FOLLOWUP_MS, 45_000, 5_000);
+const BACKOFF_MAX_MS = clampMs(
+  process.env.GNOME_CADENCE_BACKOFF_MAX_MS,
+  30 * 60_000,
+  FOLLOWUP_MS
+);
 
 let started = false;
 let ticking = false; // re-entrancy guard — only one tick in flight at a time
-let intervalHandle = null;
-let followupHandle = null;
+let timer = null; // the single self-rescheduling timer (adaptive loop)
+let failCount = 0; // consecutive tick failures → exponential backoff, reset on success
 
 function log(...args) {
   console.log("\x1b[35m[gnome-cadence]\x1b[0m", ...args);
@@ -125,25 +138,44 @@ async function tick() {
   return workRemains;
 }
 
-// Run a tick and, if it left work behind (overflow to drain or a worker still busy),
-// schedule a single short follow-up. The periodic interval is the steady-state driver;
-// the follow-up just makes "resume on relaunch" / large-batch drains progress promptly
-// instead of waiting a whole period between bounded chunks.
-async function runAndChase() {
+// (Re)arm the single cadence timer. Always unref'd so it never keeps the process
+// alive at shutdown.
+function schedule(delay) {
+  if (timer) clearTimeout(timer);
+  timer = setTimeout(loop, delay);
+  if (timer.unref) timer.unref();
+}
+
+// The self-rescheduling adaptive loop — the ONLY driver. One tick, then decide the next
+// delay from the outcome (replaces the old setInterval + separate follow-up chain, which
+// left two uncoordinated timers both calling the tick during a drain):
+//   • work remains (overflow to drain / a worker still busy) → chase in FOLLOWUP_MS,
+//   • tick threw (unexpected) → exponential backoff, capped, so a persistent fault stops
+//     retrying-every-period-and-logging-forever; reset to normal on the first success,
+//   • otherwise → wait a full PERIOD_MS (steady state).
+async function loop() {
+  timer = null;
   let remains = false;
+  let failed = false;
   try {
     remains = await tick();
+    failCount = 0; // success clears any backoff
   } catch (e) {
-    log(`tick failed: ${e.message}`);
+    failed = true;
+    failCount++;
+    log(`tick failed (${failCount} in a row): ${e.message}`);
   }
-  if (followupHandle) {
-    clearTimeout(followupHandle);
-    followupHandle = null;
+  if (!started) return; // stop() was called while the tick was in flight
+
+  let delay;
+  if (failed) {
+    delay = Math.min(PERIOD_MS * 2 ** (failCount - 1), BACKOFF_MAX_MS);
+  } else if (remains) {
+    delay = FOLLOWUP_MS;
+  } else {
+    delay = PERIOD_MS;
   }
-  if (remains) {
-    followupHandle = setTimeout(runAndChase, FOLLOWUP_MS);
-    if (followupHandle.unref) followupHandle.unref();
-  }
+  schedule(delay);
 }
 
 // Start the scheduler. Idempotent. Called once from server boot (utils/boot).
@@ -154,27 +186,24 @@ function start() {
     return;
   }
   started = true;
+  failCount = 0;
 
-  // Resume pass shortly after boot (don't block the listen callback).
-  const resumeHandle = setTimeout(runAndChase, RESUME_MS);
-  if (resumeHandle.unref) resumeHandle.unref();
-
-  // Steady-state periodic tick.
-  intervalHandle = setInterval(runAndChase, PERIOD_MS);
-  if (intervalHandle.unref) intervalHandle.unref();
+  // Resume pass shortly after boot (don't block the listen callback); the loop
+  // reschedules itself from there.
+  schedule(RESUME_MS);
 
   log(
     `started — resume in ${Math.round(RESUME_MS / 1000)}s, tick every ${Math.round(
       PERIOD_MS / 60_000
-    )}m`
+    )}m (adaptive)`
   );
 }
 
 function stop() {
-  if (intervalHandle) clearInterval(intervalHandle);
-  if (followupHandle) clearTimeout(followupHandle);
-  intervalHandle = followupHandle = null;
+  if (timer) clearTimeout(timer);
+  timer = null;
   started = false;
+  failCount = 0;
 }
 
-module.exports = { start, stop, tick, runAndChase };
+module.exports = { start, stop, tick };
