@@ -70,16 +70,14 @@ $0.0006 per document, and indexing is ~15–30× faster than a local GPU.
 
 ## Download
 
-Linux x86_64 AppImage from [**Releases**](https://github.com/gonzokawasaki/amadocs/releases/latest)
-(the v0.1.0 artifact predates the rename back to AMAdocs, hence the filename):
+Linux x86_64 AppImage from [**Releases**](https://github.com/gonzokawasaki/amadocs/releases/latest):
 
 ```bash
-chmod +x Coracle-0.1.0-x86_64.AppImage
-./Coracle-0.1.0-x86_64.AppImage
+chmod +x AMAdocs-0.1.0-x86_64.AppImage
+./AMAdocs-0.1.0-x86_64.AppImage
 ```
 
-App state lives under `~/.config/Coracle/` for the v0.1.0 build (`~/.config/AMAdocs/` from
-the next release).
+App state lives under `~/.config/AMAdocs/`.
 
 ## Requirements
 
